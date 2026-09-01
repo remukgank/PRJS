@@ -16,6 +16,7 @@ const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirs
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./samehadaku');
 const { isFiledonUrl, resolveFiledonFile } = require('./filedon');
+const { isGdriveUrl, resolveGdriveFile } = require('./gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
 const { getShareInfo, downloadShare, sanitize } = require('./ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./reelfren');
@@ -2330,6 +2331,81 @@ async function sendPaidMediaVideo(chatId, media, opts = {}) {
   });
 }
 
+/**
+ * Google Drive — resolve url publik → download → kirim ke Telegram/dll.
+ * File dari kuronime/samehadaku (tnsrantssdk12-end dll) → caption + library.
+ */
+async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
+  let outPath = null;
+  let rp = null;
+  try {
+    const gd = await resolveGdriveFile(url);
+    const fileName = gd.name;
+    const sourcePattern = extractSourcePattern(fileName);
+    let title = customTitle;
+    if (!title && sourcePattern) {
+      const matched = await findMediaByPattern(sourcePattern).catch(() => null);
+      if (matched) title = matched.nama;
+    }
+    const part = extractPartFromFilename(fileName);
+    const cap = title || cleanCaption(fileName);
+    const capWithEp = title ? `${cap} — Episode ${part}` : `${cap}`;
+    const cacheInfo = { urlHash: hashUrl(url), source: 'gdrive', fileName };
+    rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    rp.updateEpisode(capWithEp, 'download');
+    outPath = tempPath(fileName);
+    await downloadWithAria2c(gd.url, outPath, (log) => {
+      if (log.includes('progress:')) rp.updateEpisode(capWithEp, 'download', log.split('progress: ')[1]);
+      else if (log.startsWith('DL:')) rp.updateEpisode(capWithEp, 'download', log);
+    }, { 'Referer': 'https://drive.google.com/', 'Cookie': 'RU=1' }, gd.size);
+    const finalSize = fileSizeMb(outPath);
+    logger.info({ chatId, file: fileName, sizeMb: finalSize.toFixed(1) }, 'Google Drive download selesai');
+    rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
+    const info = await getVideoInfo(outPath).catch(() => ({}));
+    const fext = path.extname(outPath).toLowerCase();
+    let finalCap = cap;
+    if (title) {
+      finalCap = [
+        `➧ Judul :- ${title}`,
+        `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`,
+        `➧ Provider :- ${extractProvider(fileName)}`,
+      ].join('\n');
+    }
+    let sendResult = null;
+    if (VIDEO_EXTS.has(fext)) {
+      sendResult = await sendVideo(chatId, outPath, {
+        caption: finalCap,
+        supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
+    } else if (AUDIO_EXTS.has(fext)) {
+      await sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
+    } else {
+      await sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
+    }
+    if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+      const slug = `anime:${sanitizeSlug(title)}`;
+      const existing = await getPartFileId(slug, extractPartFromFilename(fileName));
+      if (!existing) {
+        await upsertMedia(slug, title, 0, url, sourcePattern);
+        await savePartFileId(slug, part, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fileName, finalCap);
+      }
+    }
+    rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
+    rp.done();
+  } catch (err) {
+    logger.error({ chatId, url: url.slice(0, 90), err: err.message }, 'Google Drive gagal');
+    if (rp) {
+      rp.updateEpisode(capWithEp || cap || 'file', 'fail', err.message.slice(0, 50));
+      rp.done().catch(() => {});
+    }
+  } finally {
+    cleanupFiles(outPath);
+  }
+}
+
 async function showGofileFileInfo(chatId, url, userId) {
   try {
     const file = await resolveGofileFirstFile(url);
@@ -4084,6 +4160,21 @@ bot.on('message', async (msg) => {
     }
   }
 
+  // Google Drive — admin only
+  if (isGdriveUrl(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info Google Drive...').catch(() => null);
+    try {
+      const url = text.trim();
+      return handleGdriveUrl(chatId, url);
+    } catch (err) {
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return handleGdriveUrl(chatId, text.trim());
+    }
+  }
+
   // ReelFren multi-provider aggregator — admin only
   const rfParams = parseReelFrenUrl(text);
   if (rfParams) {
@@ -4095,7 +4186,7 @@ bot.on('message', async (msg) => {
 
   const params = parseDramaUrl(text);
   if (!params || !params.id) {
-    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
   }
 
   // Dramafren scraper — admin only
