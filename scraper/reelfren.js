@@ -139,27 +139,47 @@ async function getReelFrenVideo(provider, fullId, ep, lang = 'id', server = 1, o
   });
   const apiUrl = `${API_BASE}/api/video?${params}`;
 
+  const MAX_AXIOS_RETRY = (opts.maxAxiosRetry ?? 3); // transient 502/503/429 → backoff
   let data;
-  try {
-    // Try direct axios first (API is not behind Cloudflare challenge)
-    const resp = await axios.get(apiUrl, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
-        'Origin': 'https://reelfren.dramafren.org',
-      },
-      timeout: 20000,
-    });
-    data = resp.data;
-  } catch (err) {
-    // Fallback: try via FlareSolverr (some providers may need it)
+  let directErr = null;
+  for (let attempt = 1; attempt <= MAX_AXIOS_RETRY; attempt++) {
+    try {
+      // Try direct axios first (API is not behind Cloudflare challenge)
+      const resp = await axios.get(apiUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+          'Origin': 'https://reelfren.dramafren.org',
+        },
+        timeout: 20000,
+        validateStatus: (s) => s < 500, // 502/503 jangan throw, handle retry di loop
+      });
+      if (resp.status >= 500) {
+        directErr = new Error(`HTTP ${resp.status}`);
+      } else {
+        data = resp.data;
+        break;
+      }
+    } catch (err) {
+      const isRetryable = /502|503|429|timeout|ECONN|ETIMEDOUT|ECONNRESET/i.test(err.message) || ['ECONNRESET','ETIMEDOUT','ECONNABORTED'].includes(err.code);
+      if (!isRetryable || attempt >= MAX_AXIOS_RETRY) {
+        directErr = err;
+        break;
+      }
+      logger.warn({ provider, fullId, ep, attempt, server, err: err.message }, `ReelFren API retry ${attempt}/${MAX_AXIOS_RETRY}`);
+      await new Promise(r => setTimeout(r, 1200 * attempt)); // backoff 1.2s, 2.4s, 3.6s
+    }
+  }
+
+  if (!data) {
+    // Retry habis & masih 5xx → fallback terakhir via FlareSolverr (transient CF)
     try {
       const html = await flareGet(apiUrl, opts.session, 20000);
       const jsonMatch = html.match(/<pre>([\s\S]*?)<\/pre>/);
       if (jsonMatch) data = JSON.parse(jsonMatch[1]);
       else if (html.trim().startsWith('{')) data = JSON.parse(html);
     } catch (err2) {
-      logger.warn({ provider, fullId, ep, err: err.message, err2: err2.message }, 'ReelFren API request failed');
+      logger.warn({ provider, fullId, ep, err: directErr?.message, err2: err2.message }, 'ReelFren API request failed');
       return { videoUrl: null, title: null, episode: ep, totalEpisodes: 0, locked: false, server };
     }
   }
