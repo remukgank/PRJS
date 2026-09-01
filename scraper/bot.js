@@ -4324,7 +4324,10 @@ bot.on('callback_query', async (query) => {
       if (/krakenfiles\.com/i.test(fileUrl)) {
         return bot.editMessageText(`⚠️ Server Krakenfiles belum didukung (gofile/pixeldrain/filedon saja).`, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }]] } }).catch(() => {});
       }
-      const titleArg = sameInfo ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}` : null;
+      const sameTitleArg = sameInfo
+        ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
+        : null;
+      const titleArg = sameTitleArg;
       if (isGofileUrl(fileUrl)) {
         try { return await handleGofileUrl(chatId, fileUrl, titleArg); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ Gofile gagal: ${e.message.slice(0, 80)}\n\nCoba server lain:`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }]] } }).catch(()=>{}); }
@@ -4362,11 +4365,12 @@ bot.on('callback_query', async (query) => {
             if (VIDEO_EXTS.has(ext2)) sendResult2 = await sendVideo(chatId, outPath2, { caption: finalCap2, supports_streaming: true, ...(info2.duration && { duration: info2.duration }), ...(info2.width && { width: info2.width }), ...(info2.height && { height: info2.height }) }, { urlHash: hashUrl(fd.url), source: 'filedon', fileName: fd.name });
             else sendResult2 = await sendDocument(chatId, outPath2, { caption: finalCap2 }, { urlHash: hashUrl(fd.url), source: 'filedon', fileName: fd.name });
             if (sendResult2?.video?.file_id && (await getSetting('libsimpan')) === 'on' && sami2) {
-              const slug = `anime:${sanitizeSlug(sami2.title)}`;
+              const fullTitle = `${sami2.title}${sami2.season ? ` S${sami2.season}` : ''}${sami2.part ? ` P${sami2.part}` : ''}`;
+              const slug = `anime:${sanitizeSlug(fullTitle)}`;
               const existing = await getPartFileId(slug, sami2.episode);
               if (!existing) {
-                const sourcePattern = sami2.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-                await upsertMedia(slug, sami2.title, 0, `https://v2.samehadaku.how/anime/${sami2.slug}/`, sourcePattern);
+                const sourcePattern = fullTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                await upsertMedia(slug, fullTitle, 0, `https://v2.samehadaku.how/anime/${sami2.slug}/`, sourcePattern);
                 await savePartFileId(slug, sami2.episode, sendResult2.video.file_id, Math.round(finalSize2 * 1024 * 1024), fd.name, finalCap2);
               }
             }
