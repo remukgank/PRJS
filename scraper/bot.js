@@ -4256,8 +4256,12 @@ bot.on('message', async (msg) => {
             : `➧ Episode :- Episode ${gdsPrompt.episode}`)
         : `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`;
       const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`;
+      // Title + suffix season/part: "Tensei Shitara Slime Datta Ken S2 P2" (anti-bentrok media fomo)
+      const promptTitle = detectedTitle && gdsPrompt?.season
+        ? `${detectedTitle} S${gdsPrompt.season}${gdsPrompt.part ? ` P${gdsPrompt.part}` : ''}`
+        : detectedTitle;
       const promptText = detectedTitle
-        ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n${epLinePrompt}\n${providerLinePrompt}\n\nPilih judul untuk caption:`
+        ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${promptTitle}</b>\n${epLinePrompt}\n${providerLinePrompt}\n\nPilih judul untuk caption:`
         : `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
       if (statusMsg) {
         return bot.editMessageText(promptText, {
@@ -4630,7 +4634,17 @@ bot.on('callback_query', async (query) => {
     } catch {}
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
-    if (isGdriveUrl(url)) return handleGdriveUrl(chatId, url, detectedTitle || undefined);
+    if (isGdriveUrl(url)) {
+      // Title + suffix season/part: "Tensei ... S2 P2" biar media fomo tidak bentrok
+      let gdTitle = detectedTitle;
+      if (gdTitle) {
+        try {
+          const gdsCb = parseSamehadakuFilename((await resolveGdriveFile(url).catch(() => null))?.name || '');
+          if (gdsCb?.season) gdTitle = `${gdTitle} S${gdsCb.season}${gdsCb.part ? ` P${gdsCb.part}` : ''}`;
+        } catch {}
+      }
+      return handleGdriveUrl(chatId, url, gdTitle || undefined);
+    }
     if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
   }
 
