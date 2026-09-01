@@ -1,0 +1,191 @@
+modules = ["nodejs-24", "python-base-3.13"]
+
+[env]
+PATH = "/home/runner/.local/bin:/home/runner/workspace/9router/.next/standalone/node_modules/.bin:/home/runner/workspace/.hermes/hermes-agent/venv/bin"
+HERMES_HOME = "/home/runner/workspace/.hermes"
+HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT = "120"
+HERMES_TELEGRAM_INIT_TIMEOUT = "15"
+HERMES_TELEGRAM_DISABLE_FALLBACK_IPS = "true"
+LANG = "C.UTF-8"
+LANGUAGE = "id_ID"
+LC_ALL = "C.UTF-8"
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["bash", "scripts/hermes-postbuild.sh"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "FlareSolverr"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Local API"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Bot"
+
+[[workflows.workflow]]
+name = "FlareSolverr"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scraper/start-flaresolverr.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Telegram Local API"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "source /run/replit/env/latest && bash scraper/start-local-api.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Telegram Bot"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "source /run/replit/env/latest && node scraper/bot.js"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "9router"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "./start.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Hermes Agent"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace/.hermes && source hermes-agent/venv/bin/activate && hermes gateway restart"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Gila DL"
+mode = "parallel"
+author = 56201601
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python3 vdy_to_vidara.py --resume"
+
+[[workflows.workflow]]
+name = "Vidara Uploader"
+mode = "sequential"
+author = 56201601
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "source /run/replit/env/latest && node /home/runner/workspace/scraper/vidara-uploader.js"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "HokiDrama"
+mode = "sequential"
+author = 56201601
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace/hokidrama && PORT=3000 npx next start -p 3000"
+waitForPort = 3000
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow]]
+name = "Batch DL"
+mode = "parallel"
+author = 56201601
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node scraper/batch-download.js -j 30"
+
+[[workflows.workflow]]
+name = "PRJS"
+mode = "parallel"
+author = 49986742
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "9router"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "FlareSolverr"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Local API"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Batch DL"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[nix]
+channel = "stable-25_05"
+
+[[ports]]
+localPort = 3000
+externalPort = 3001
+
+[[ports]]
+localPort = 9091
+externalPort = 9000
+
+[[ports]]
+localPort = 9222
+externalPort = 3000
+exposeLocalhost = true
+
+[[ports]]
+localPort = 20128
+externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+RF_GROUP_ENABLED = "true"

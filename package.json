@@ -1,0 +1,19 @@
+{
+  "name": "dramafren-scraper",
+  "version": "2.1.0",
+  "description": "Video URL scraper + Telegram bot for dramafren.org",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js",
+    "test:all": "node test-all-subdomains.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "ecc-universal": "^2.1.0",
+    "node-telegram-bot-api": "^1.2.0",
+    "pg": "^8.22.0",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
+    "qrcode": "^1.5.4"
+  }
+}

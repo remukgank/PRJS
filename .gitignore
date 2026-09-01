@@ -1,0 +1,77 @@
+# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+
+# compiled output
+dist
+tmp
+out-tsc
+*.tsbuildinfo
+.expo
+.expo-shared
+
+# dependencies
+node_modules
+
+# logs
+logs/
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
+.DS_Store
+Thumbs.db
+
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md
+
+# data
+.9router/
+telegram-bot-api/
+attached_assets/
+downloads/mimo_data/
+downloads/
+scraper/downloads/
+transfer_data/results/
+.hermes/
+
+fomo-drama/
+VDL/
+data/
+
+# solver (nix store paths + vendored deps)
+.solver/
+
+# opencode config (berisi apiKey lokal, jangan commit)
+/opencode.json
+
+# opencode database (session/riwayat, sensitif — jangan commit)
+.opencode/opencode.db
+.opencode/opencode.db-shm
+.opencode/opencode.db-wal
+
+# next.js build artifacts
+hokidrama/.next/
+hokidrama/next.config*

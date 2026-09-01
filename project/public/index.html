@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DramaBox API</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎬 DramaBox</h1>
+      <p class="subtitle">API Explorer</p>
+    </header>
+
+    <div class="card" id="info-card">
+      <h2>Status Server</h2>
+      <div id="server-info">Memuat...</div>
+    </div>
+
+    <div class="card">
+      <h2>Quote Random</h2>
+      <button onclick="getRandom()">Dapatkan Quote</button>
+      <div id="random-result" class="result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Cek Cuaca</h2>
+      <button onclick="getWeather()">Cek Sekarang</button>
+      <div id="weather-result" class="result"></div>
+    </div>
+
+    <footer>
+      <p>Dibuat dengan ❤️ oleh opencode</p>
+    </footer>
+  </div>
+
+  <script>
+    async function fetchJSON(url) {
+      try {
+        const res = await fetch(url);
+        return await res.json();
+      } catch (err) {
+        return { error: err.message };
+      }
+    }
+
+    async function loadInfo() {
+      const data = await fetchJSON('/api/info');
+      const el = document.getElementById('server-info');
+      if (data.error) {
+        el.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+      } else {
+        el.innerHTML = `
+          <p><strong>Status:</strong> <span class="ok">${data.status}</span></p>
+          <p><strong>Uptime:</strong> ${Math.floor(data.uptime)} detik</p>
+          <p><strong>Waktu:</strong> ${new Date(data.timestamp).toLocaleString('id-ID')}</p>
+        `;
+      }
+    }
+
+    async function getRandom() {
+      const data = await fetchJSON('/api/random');
+      const el = document.getElementById('random-result');
+      if (data.error) {
+        el.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+      } else {
+        el.innerHTML = `<p class="quote">"${data.quote}"</p><p class="number">Angka keberuntungan: ${data.number}</p>`;
+      }
+    }
+
+    async function getWeather() {
+      const data = await fetchJSON('/api/cuaca');
+      const el = document.getElementById('weather-result');
+      if (data.error) {
+        el.innerHTML = `<span class="error">Error: ${data.error}</span>`;
+      } else {
+        el.innerHTML = `
+          <p>📍 ${data.kota}</p>
+          <p>🌡️ ${data.suhu}</p>
+          <p>☁️ ${data.kondisi}</p>
+          <p>💧 ${data.kelembaban}</p>
+        `;
+      }
+    }
+
+    loadInfo();
+  </script>
+</body>
+</html>

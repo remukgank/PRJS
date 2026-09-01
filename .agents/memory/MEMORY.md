@@ -1,0 +1,1 @@
+- [Replit locale](replit-locale.md) — gunakan locale UTF-8 yang tersedia; locale Indonesia tidak terpasang di image workspace.
