@@ -2332,6 +2332,39 @@ async function sendPaidMediaVideo(chatId, media, opts = {}) {
 }
 
 /**
+ * Parse Google Drive filename gaya Samehadaku:
+ *   TSSDK-S2-P2-1-FULLHD-SAMEHADAKU.VIP.mp4 → { short:"tssdk", season:2, part:2, episode:1, provider:"samehadaku" }
+ *   TSSDK-S2-1-FULLHD-...                      → { short:"tssdk", season:2, part:null, episode:1 }
+ *   TSSDK-1-FULLHD-...                         → { short:"tssdk", season:null, part:null, episode:1 }
+ */
+function parseSamehadakuFilename(fileName) {
+  const base = String(fileName || '').trim();
+  // Detect provider samehadaku
+  if (!/samehadaku/i.test(base)) return null;
+  let ep = null, season = null, part = null;
+  let m = base.match(/-S(\d+)-P(\d+)-(\d+)-/i);
+  if (m) {
+    season = Number(m[1]); part = Number(m[2]); ep = Number(m[3]);
+  } else {
+    m = base.match(/-S(\d+)-(\d+)-/i);
+    if (m) { season = Number(m[1]); ep = Number(m[2]); }
+    else {
+      m = base.match(/^([A-Z0-9]+)-(\d+)-/i);
+      if (m) ep = Number(m[2]);
+    }
+  }
+  if (ep == null) return null;
+  const shortRaw = (base.match(/^([A-Za-z0-9]+)-/) || [])[1] || '';
+  return {
+    short: shortRaw.toLowerCase(),
+    season,
+    part,
+    episode: ep,
+    provider: 'samehadaku',
+  };
+}
+
+/**
  * Google Drive — resolve url publik → download → kirim ke Telegram/dll.
  * File dari kuronime/samehadaku (tnsrantssdk12-end dll) → caption + library.
  */
@@ -2342,14 +2375,26 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     const gd = await resolveGdriveFile(url);
     const fileName = gd.name;
     const sourcePattern = extractSourcePattern(fileName);
+    // Prioritas: filename gaya Samehadaku (TSSDK-S2-P2-1...) → season/part/episode + provider samehadaku
+    const gdSame = parseSamehadakuFilename(fileName);
     let title = customTitle;
     if (!title && sourcePattern) {
       const matched = await findMediaByPattern(sourcePattern).catch(() => null);
       if (matched) title = matched.nama;
     }
+    if (!title && gdSame?.short) {
+      // short "tssdk" → pattern "kuronime-tssdk" / "samehadaku-tssdk" di DB
+      for (const prov of ['kuronime', 'samehadaku']) {
+        const m = await findMediaByPattern(`${prov}-${gdSame.short}`).catch(() => null);
+        if (m) { title = m.nama; break; }
+      }
+    }
     const part = extractPartFromFilename(fileName);
+    const seasonEpLabel = gdSame
+      ? (gdSame.season ? (gdSame.part ? `${gdSame.season} Part ${gdSame.part} Episode ${gdSame.episode}` : `${gdSame.season} Episode ${gdSame.episode}`) : `Episode ${gdSame.episode}`)
+      : `Episode ${part}`;
     const cap = title || cleanCaption(fileName);
-    const capWithEp = title ? `${cap} — Episode ${part}` : `${cap}`;
+    const capWithEp = title ? `${cap} — ${seasonEpLabel}` : `${cap}`;
     const cacheInfo = { urlHash: hashUrl(url), source: 'gdrive', fileName };
     rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
@@ -2364,7 +2409,15 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     const info = await getVideoInfo(outPath).catch(() => ({}));
     const fext = path.extname(outPath).toLowerCase();
     let finalCap = cap;
-    if (title) {
+    if (gdSame) {
+      finalCap = [
+        `➧ Judul :- ${title || cap}`,
+        gdSame.season
+          ? `➧ Season :- ${gdSame.season}${gdSame.part ? ` Part ${gdSame.part}` : ''} Episode ${gdSame.episode}`
+          : `➧ Episode :- Episode ${gdSame.episode}`,
+        `➧ Provider :- samehadaku`,
+      ].join('\n');
+    } else if (title) {
       finalCap = [
         `➧ Judul :- ${title}`,
         `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`,
