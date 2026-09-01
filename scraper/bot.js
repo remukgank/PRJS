@@ -1627,10 +1627,11 @@ function extractSourcePattern(fileName) {
   const base = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
   // Google Drive Samehadaku: <SHORT>-FULLHD-SAMEHADAKU... → pakai <SHORT> langsung
   if (/SAMEHADAKU/i.test(base)) {
-    const sm = base.match(/^([A-Za-z0-9]{3,20})-(?:FULLHD|HD|S\d|P\d|M)\b/i);
+    const sm = base.match(/^([A-Za-z0-9]{3,20})-(?:FULLHD|HD|S\d|P\d|M|\d+)-/i);
     if (sm && sm[1].length >= 3) return sm[1];
-    const sm2 = base.match(/^([A-Za-z0-9]{3,20})-(\d+)/i);
-    if (sm2) return sm2[1];
+    const sm3 = base.match(/^([A-Za-z0-9]{3,20})-\d+[a-z]?-/i);
+    if (sm3 && sm3[1].length >= 3) return sm3[1];
+    return null;
   }
   // Normalize season+episode suffix: tssdks401 → tssdk, ssounfrrens201 → ssounfrren, ymintsgai21 → ymintsgai
   // Handle "-end" suffix (episode terakhir kuronime): tnsrantssdk12-end → tnsrantssdk
