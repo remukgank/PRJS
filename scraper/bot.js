@@ -4220,7 +4220,7 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // Google Drive — admin only
+  // Google Drive — admin only (flow prompt judul seperti gofile/pixeldrain)
   if (isGdriveUrl(text)) {
     if (!isAdmin(msg.from.id)) {
       return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
@@ -4228,10 +4228,41 @@ bot.on('message', async (msg) => {
     const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info Google Drive...').catch(() => null);
     try {
       const url = text.trim();
-      return handleGdriveUrl(chatId, url);
+      const gd = await resolveGdriveFile(url);
+      const fileName = gd.name;
+      let detectedTitle = null;
+      try {
+        const pattern = extractSourcePattern(fileName);
+        if (pattern) {
+          const matched = await findMediaByPattern(pattern);
+          if (matched) detectedTitle = matched.nama;
+        }
+        if (!detectedTitle) {
+          const gds = parseSamehadakuFilename(fileName);
+          if (gds?.short) {
+            for (const prov of ['kuronime', 'samehadaku']) {
+              const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
+              if (m) { detectedTitle = m.nama; break; }
+            }
+          }
+        }
+      } catch {}
+      const promptText = detectedTitle
+        ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- Episode ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+        : `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
+      if (statusMsg) {
+        return bot.editMessageText(promptText, {
+          chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+          reply_markup: titlePromptKeyboard(fileName, url, detectedTitle),
+        }).catch(() => bot.sendMessage(chatId, promptText, { parse_mode: 'HTML', reply_markup: titlePromptKeyboard(fileName, url, detectedTitle) }));
+      }
+      return bot.sendMessage(chatId, promptText, {
+        parse_mode: 'HTML',
+        reply_markup: titlePromptKeyboard(fileName, url, detectedTitle),
+      });
     } catch (err) {
       if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
-      return handleGdriveUrl(chatId, text.trim());
+      return bot.sendMessage(chatId, `⚠️ Google Drive gagal: ${err.message.slice(0, 150)}`, { parse_mode: 'HTML' });
     }
   }
 
@@ -4559,7 +4590,7 @@ bot.on('callback_query', async (query) => {
     const isCustom = data.startsWith('dl_title_custom:');
 
     if (isCustom) {
-      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : 'pixeldrain' });
+      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : 'pixeldrain' });
       await bot.editMessageText('✏️ Ketik judul untuk caption video:', { chat_id: chatId, message_id: msgId }).catch(() => {});
       return;
     }
@@ -4567,17 +4598,30 @@ bot.on('callback_query', async (query) => {
     // Teruskan judul terdeteksi dari prompt agar tidak hilang
     let detectedTitle = null;
     try {
-      const fileName = isGofileUrl(url) ? filenameFromGofileUrl(url) : (await getPixeldrainInfo(url).catch(() => null))?.name;
+      let fileName = null;
+      if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
+      else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
+      else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
       if (fileName) {
         const pat = extractSourcePattern(fileName);
         if (pat) {
           const m = await findMediaByPattern(pat);
           if (m) detectedTitle = m.nama;
         }
+        if (!detectedTitle) {
+          const gds = parseSamehadakuFilename(fileName);
+          if (gds?.short) {
+            for (const prov of ['kuronime', 'samehadaku']) {
+              const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
+              if (m) { detectedTitle = m.nama; break; }
+            }
+          }
+        }
       }
     } catch {}
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
+    if (isGdriveUrl(url)) return handleGdriveUrl(chatId, url, detectedTitle || undefined);
     if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
   }
 
