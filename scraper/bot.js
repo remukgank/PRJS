@@ -2441,10 +2441,12 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
         `➧ Provider :- samehadaku`,
       ].join('\n');
     } else if (title) {
+      // Google Drive Samehadaku (Movie, tanpa -S/-P): provider samehadaku, bukan extractProvider (yang ambil tssdkmgnokh)
+      const gdProv = /SAMEHADAKU/i.test(fileName) ? 'samehadaku' : extractProvider(fileName);
       finalCap = [
         `➧ Judul :- ${title}`,
         `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`,
-        `➧ Provider :- ${extractProvider(fileName)}`,
+        `➧ Provider :- ${gdProv}`,
       ].join('\n');
     }
     let sendResult = null;
@@ -4272,7 +4274,7 @@ bot.on('message', async (msg) => {
             ? `➧ Season :- ${gdsPrompt.season}${gdsPrompt.part ? ` Part ${gdsPrompt.part}` : ''} Episode ${gdsPrompt.episode}`
             : `➧ Episode :- Episode ${gdsPrompt.episode}`)
         : `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`;
-      const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`;
+      const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : (/SAMEHADAKU/i.test(fileName) ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`);
       // Title + suffix season/part: "Tensei Shitara Slime Datta Ken S2 P2" (anti-bentrok media fomo)
       // Anti-dobel: kalau detectedTitle sudah mengandung S<n> — jangan tambah ulang; S<n> ada tapi P belum → lengkapi
       let promptTitle = detectedTitle;
