@@ -1618,9 +1618,14 @@ function extractSourcePattern(fileName) {
   // "1080p-0nizdxx-kuronime-ymintsgai06.mp4" → "kuronime-ymintsgai"
   // "1080p-nIVJp5U-kuronime-blcktrch04.mp4" → "kuronime-blcktrch"
   // "1080p-bBeCgqA-kuronime-tssdks401.mp4" → "kuronime-tssdk" (strip s+ep)
+  // "1080p-?-kuronime-tnsrantssdk12-end.mp4" → "kuronime-tnsrantssdk" (strip episode + -end)
   const base = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
   // Normalize season+episode suffix: tssdks401 → tssdk, ssounfrrens201 → ssounfrren, ymintsgai21 → ymintsgai
-  const normalized = base.replace(/([a-z]{3,})s\d\d{1,2}$/i, '$1').replace(/([a-z]{3,})\d{2,3}$/i, '$1');
+  // Handle "-end" suffix (episode terakhir kuronime): tnsrantssdk12-end → tnsrantssdk
+  let normalized = base;
+  normalized = normalized.replace(/-end$/i, '');               // strip -end
+  normalized = normalized.replace(/([a-z]{3,})s\d\d{1,2}$/i, '$1');
+  normalized = normalized.replace(/([a-z]{3,})\d{2,3}$/i, '$1');
   const noEp = normalized.replace(/-$/, '');
   const parts = noEp.split('-');
   const filtered = parts.filter((p, i) => {
@@ -1628,6 +1633,7 @@ function extractSourcePattern(fileName) {
     if (i >= 1 && /^[a-zA-Z0-9]{5,8}$/.test(p) && /[a-z]/.test(p) && /[A-Z]/.test(p)) return false; // random hash mixed case (bBeCgqA)
     if (i >= 1 && /^[a-z0-9]{5,8}$/.test(p) && /\d/.test(p) && /[a-z]/.test(p)) return false; // random hash lowercase+digit (0nizdxx)
     if (i >= 1 && /^[A-Z0-9]{5,8}$/.test(p) && /\d/.test(p)) return false; // random hash UPPER+digit (N39X3YF, 8DQOJmA)
+    if (i >= 1 && /^[A-Z]{5,8}$/.test(p)) return false; // random hash UPPER-only (XXXXXXXX, KABULK9)
     return true;
   });
   const pattern = filtered.join('-');
