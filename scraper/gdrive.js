@@ -3,8 +3,9 @@
  * Support:
  *   - https://drive.usercontent.google.com/download?id={id}&export=download
  *   - https://drive.google.com/file/d/{id}/view?usp=sharing
- * Flow: GET download?id={id}&export=download&confirm=t&authuser=0 dengan Cookie RU=1
- *       → langsung streaming mp4/mkv (skips virus-scan warning utk file publik besar).
+ * Flow: HEAD download?id={id}&export=download&confirm=t&authuser=0 dengan Cookie RU=1
+ *       → ambil nama (content-disposition) + ukuran (content-length) TANPA unduh file.
+ *       URL dikembalikan untuk download streaming via aria2c (hindari OOM buffer memori).
  * Akses publik (bukan folder pribadi yang butuh share per-user).
  */
 
@@ -41,58 +42,66 @@ function filenameFromDisposition(cd, fallback) {
   return m ? m[1].replace(/^"|"$/g, '') : fallback;
 }
 
-/**
- * Resolve Google Drive file.
- * @returns {Promise<{ url: string, name: string, size: number }>}
- */
-async function resolveGdriveFile(url) {
-  const id = extractGdriveId(url);
-  if (!id) throw new Error('URL Google Drive tidak valid');
-
-  const client = axios.create({
-    maxRedirects: 0,
-    validateStatus: () => true,
-    headers: { 'User-Agent': UA, 'Cookie': 'RU=1' },
-  });
-
-  const dlUrl = `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t&authuser=0`;
-  const res = await client.get(dlUrl, {
-    headers: { 'User-Agent': UA, 'Cookie': 'RU=1', Accept: '*/*', Referer: `https://drive.usercontent.google.com/download?id=${id}&export=download&authuser=0` },
-  });
-
-  const ct = res.headers['content-type'] || '';
-  const loc = res.headers['location'] || res.headers['Location'];
-  const cd = res.headers['content-disposition'];
-
-  // Kasus 1: streaming langsung (mp4/mkv webm) — content-type video + content-length
-  if (/video\/|application\/octet-stream|audio\//.test(ct) && (res.headers['content-length'] || res.data)) {
-    if (!/video\/|application\/octet-stream|audio\//.test(ct)) {}
-    const name = filenameFromDisposition(cd, `gdrive_${id}.${extFromCt(ct)}`);
-    const size = Number(res.headers['content-length'] || 0) || (Buffer.isBuffer(res.data) ? res.data.length : 0);
-    return { url: dlUrl, name, size };
-  }
-
-  // Kasus 2: redirect (302) ke file saat resolve proxy — follow manual
-  if (loc && /^https?:/.test(loc)) {
-    const r2 = await client.get(loc, { responseType: 'arraybuffer' });
-    const ct2 = r2.headers['content-type'] || '';
-    const cd2 = r2.headers['content-disposition'];
-    if (/video\/|application\/octet-stream/.test(ct2)) {
-      const name = filenameFromDisposition(cd2, `gdrive_${id}.mp4`);
-      const size = Number(r2.headers['content-length'] || 0) || (Buffer.isBuffer(r2.data) ? r2.data.length : 0);
-      return { url: loc, name, size };
-    }
-  }
-
-  throw new Error('Google Drive: gagal resolve (link mungkin private/non-downloadable)');
-}
-
 function extFromCt(ct) {
   if (/mp4/.test(ct)) return 'mp4';
   if (/mkv/.test(ct)) return 'mkv';
   if (/webm/.test(ct)) return 'webm';
   if (/mp3|mpeg/.test(ct)) return 'mp3';
   return 'bin';
+}
+
+/**
+ * Resolve Google Drive file — HANYA baca header (nama + ukuran), tidak unduh body.
+ * @returns {Promise<{ url: string, name: string, size: number }>}
+ */
+async function resolveGdriveFile(url) {
+  const id = extractGdriveId(url);
+  if (!id) throw new Error('URL Google Drive tidak valid');
+
+  const dlUrl = `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t&authuser=0`;
+
+  // HEAD dulu untuk content-disposition + content-length tanpa download body
+  try {
+    const head = await axios.head(dlUrl, {
+      headers: { 'User-Agent': UA, 'Cookie': 'RU=1', Accept: '*/*' },
+      timeout: 20000,
+      validateStatus: (s) => s < 400,
+    });
+    const ct = head.headers['content-type'] || '';
+    const cd = head.headers['content-disposition'];
+    if (head.headers['content-length'] || cd) {
+      const name = filenameFromDisposition(cd, `gdrive_${id}.${extFromCt(ct)}`);
+      const size = Number(head.headers['content-length'] || 0);
+      return { url: dlUrl, name, size };
+    }
+  } catch {}
+
+  // Fallback: GET stream → baca header, langsung destroy body (tanpa buffer penuh)
+  try {
+    const res = await axios.get(dlUrl, {
+      headers: { 'User-Agent': UA, 'Cookie': 'RU=1', Accept: '*/*' },
+      timeout: 20000,
+      validateStatus: (s) => s < 400,
+      responseType: 'stream',
+      maxRedirects: 0,
+    });
+    const ct = res.headers['content-type'] || '';
+    const cd = res.headers['content-disposition'];
+    // amankan: consume body se-minimal mungkin lalu destroy
+    for (const h of ['content-length', 'content-type', 'content-disposition']) {
+      if (res.headers[h]) break;
+    }
+    if (res.data?.destroy) {
+      try { res.data.destroy(); } catch {}
+    }
+    if (res.headers['content-length'] || cd) {
+      const name = filenameFromDisposition(cd, `gdrive_${id}.${extFromCt(ct)}`);
+      const size = Number(res.headers['content-length'] || 0);
+      return { url: dlUrl, name, size };
+    }
+  } catch {}
+
+  throw new Error('Google Drive: gagal resolve (link mungkin private/non-downloadable)');
 }
 
 module.exports = { isGdriveUrl, extractGdriveId, resolveGdriveFile };
