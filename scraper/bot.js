@@ -4248,8 +4248,16 @@ bot.on('message', async (msg) => {
           }
         }
       } catch {}
+      // Deskripsi baris untuk prompt: Season/Part/Episode + provider dari filename Samehadaku
+      const gdsPrompt = parseSamehadakuFilename(fileName);
+      const epLinePrompt = gdsPrompt
+        ? (gdsPrompt.season
+            ? `➧ Season :- ${gdsPrompt.season}${gdsPrompt.part ? ` Part ${gdsPrompt.part}` : ''} Episode ${gdsPrompt.episode}`
+            : `➧ Episode :- Episode ${gdsPrompt.episode}`)
+        : `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`;
+      const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`;
       const promptText = detectedTitle
-        ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- Episode ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+        ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n${epLinePrompt}\n${providerLinePrompt}\n\nPilih judul untuk caption:`
         : `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
       if (statusMsg) {
         return bot.editMessageText(promptText, {
