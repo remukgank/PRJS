@@ -3761,6 +3761,7 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, `📥 Download dengan judul: <b>${customTitle}</b>`, { parse_mode: 'HTML' });
     if (pending.handler === 'gofile') return handleGofileUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
+    if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
   }
 
   if (text === '/status') {
