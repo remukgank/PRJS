@@ -2343,8 +2343,8 @@ function parseSamehadakuFilename(fileName) {
   if (!/samehadaku/i.test(base)) return null;
   const epFrom = (s) => { const m = String(s || '').match(/^\d+/); return m ? Number(m[0]) : null; };
   let ep = null, season = null, part = null;
-  // episode bisa "5", "5v2", "12v3" → ambil angka murni
-  let m = base.match(/-S(\d+)-P(\d+)-(\d+)(?:v\d+)?-/i);
+  // episode bisa "5", "5v2", "12v3", "12END", "12End" → ambil angka murni (END = episode terakhir, strip akhir)
+  let m = base.match(/-S(\d+)-P(\d+)-(\d+)(?:v\d+|END|End|end)?-/i);
   if (m) {
     season = Number(m[1]); part = Number(m[2]); ep = epFrom(m[3]);
   } else {
