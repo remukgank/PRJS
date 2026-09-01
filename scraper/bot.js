@@ -2393,8 +2393,13 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     const seasonEpLabel = gdSame
       ? (gdSame.season ? (gdSame.part ? `${gdSame.season} Part ${gdSame.part} Episode ${gdSame.episode}` : `${gdSame.season} Episode ${gdSame.episode}`) : `Episode ${gdSame.episode}`)
       : `Episode ${part}`;
-    const cap = title || cleanCaption(fileName);
-    const capWithEp = title ? `${cap} — ${seasonEpLabel}` : `${cap}`;
+    // Title untuk media (fomo anti-bentrok): tambah suffix " S2" / " S2 P2"
+    let titleForMedia = title;
+    if (titleForMedia && gdSame?.season) {
+      titleForMedia = `${titleForMedia} S${gdSame.season}${gdSame.part ? ` P${gdSame.part}` : ''}`;
+    }
+    const cap = titleForMedia || cleanCaption(fileName);
+    const capWithEp = titleForMedia ? `${cap} — ${seasonEpLabel}` : `${cap}`;
     const cacheInfo = { urlHash: hashUrl(url), source: 'gdrive', fileName };
     rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
@@ -2410,8 +2415,9 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     const fext = path.extname(outPath).toLowerCase();
     let finalCap = cap;
     if (gdSame) {
+      const gdTitle = titleForMedia || cap;
       finalCap = [
-        `➧ Judul :- ${title || cap}`,
+        `➧ Judul :- ${gdTitle}`,
         gdSame.season
           ? `➧ Season :- ${gdSame.season}${gdSame.part ? ` Part ${gdSame.part}` : ''} Episode ${gdSame.episode}`
           : `➧ Episode :- Episode ${gdSame.episode}`,
@@ -2438,12 +2444,13 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     } else {
       await sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
     }
-    if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
-      const slug = `anime:${sanitizeSlug(title)}`;
-      const existing = await getPartFileId(slug, extractPartFromFilename(fileName));
+    if (titleForMedia && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+      const slug = `anime:${sanitizeSlug(titleForMedia)}`;
+      const epNum = gdSame?.episode ?? extractPartFromFilename(fileName);
+      const existing = await getPartFileId(slug, epNum);
       if (!existing) {
-        await upsertMedia(slug, title, 0, url, sourcePattern);
-        await savePartFileId(slug, part, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fileName, finalCap);
+        await upsertMedia(slug, titleForMedia, 0, url, sourcePattern);
+        await savePartFileId(slug, epNum, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fileName, finalCap);
       }
     }
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
