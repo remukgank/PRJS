@@ -1623,7 +1623,15 @@ function extractSourcePattern(fileName) {
   // "1080p-nIVJp5U-kuronime-blcktrch04.mp4" → "kuronime-blcktrch"
   // "1080p-bBeCgqA-kuronime-tssdks401.mp4" → "kuronime-tssdk" (strip s+ep)
   // "1080p-?-kuronime-tnsrantssdk12-end.mp4" → "kuronime-tnsrantssdk" (strip episode + -end)
+  // "TsSDKMGnoKh-FULLHD-SAMEHADAKU.CARE.mp4" → "TsSDKMGnoKh" (Google Drive filename Samehadaku)
   const base = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
+  // Google Drive Samehadaku: <SHORT>-FULLHD-SAMEHADAKU... → pakai <SHORT> langsung
+  if (/SAMEHADAKU/i.test(base)) {
+    const sm = base.match(/^([A-Za-z0-9]{3,20})-(?:FULLHD|HD|S\d|P\d|M)\b/i);
+    if (sm && sm[1].length >= 3) return sm[1];
+    const sm2 = base.match(/^([A-Za-z0-9]{3,20})-(\d+)/i);
+    if (sm2) return sm2[1];
+  }
   // Normalize season+episode suffix: tssdks401 → tssdk, ssounfrrens201 → ssounfrren, ymintsgai21 → ymintsgai
   // Handle "-end" suffix (episode terakhir kuronime): tnsrantssdk12-end → tnsrantssdk
   let normalized = base;
