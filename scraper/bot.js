@@ -2341,16 +2341,18 @@ function parseSamehadakuFilename(fileName) {
   const base = String(fileName || '').trim();
   // Detect provider samehadaku
   if (!/samehadaku/i.test(base)) return null;
+  const epFrom = (s) => { const m = String(s || '').match(/^\d+/); return m ? Number(m[0]) : null; };
   let ep = null, season = null, part = null;
-  let m = base.match(/-S(\d+)-P(\d+)-(\d+)-/i);
+  // episode bisa "5", "5v2", "12v3" → ambil angka murni
+  let m = base.match(/-S(\d+)-P(\d+)-(\d+)(?:v\d+)?-/i);
   if (m) {
-    season = Number(m[1]); part = Number(m[2]); ep = Number(m[3]);
+    season = Number(m[1]); part = Number(m[2]); ep = epFrom(m[3]);
   } else {
-    m = base.match(/-S(\d+)-(\d+)-/i);
-    if (m) { season = Number(m[1]); ep = Number(m[2]); }
+    m = base.match(/-S(\d+)-(\d+)(?:v\d+)?-/i);
+    if (m) { season = Number(m[1]); ep = epFrom(m[2]); }
     else {
-      m = base.match(/^([A-Z0-9]+)-(\d+)-/i);
-      if (m) ep = Number(m[2]);
+      m = base.match(/^([A-Z0-9]+)-(\d+)(?:v\d+)?-/i);
+      if (m) ep = epFrom(m[2]);
     }
   }
   if (ep == null) return null;
@@ -4264,9 +4266,17 @@ bot.on('message', async (msg) => {
         : `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`;
       const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`;
       // Title + suffix season/part: "Tensei Shitara Slime Datta Ken S2 P2" (anti-bentrok media fomo)
-      const promptTitle = detectedTitle && gdsPrompt?.season
-        ? `${detectedTitle} S${gdsPrompt.season}${gdsPrompt.part ? ` P${gdsPrompt.part}` : ''}`
-        : detectedTitle;
+      // Anti-dobel: kalau detectedTitle sudah mengandung S<n> — jangan tambah ulang; S<n> ada tapi P belum → lengkapi
+      let promptTitle = detectedTitle;
+      if (promptTitle && gdsPrompt?.season) {
+        const hasS = new RegExp(`\\bS${gdsPrompt.season}\\b`).test(promptTitle);
+        const hasP = gdsPrompt.part ? new RegExp(`\\bP${gdsPrompt.part}\\b`).test(promptTitle) : true;
+        if (!hasS && !hasP) {
+          promptTitle = `${promptTitle} S${gdsPrompt.season}${gdsPrompt.part ? ` P${gdsPrompt.part}` : ''}`;
+        } else if (hasS && !hasP) {
+          promptTitle = `${promptTitle} P${gdsPrompt.part}`;
+        }
+      }
       const promptText = detectedTitle
         ? `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${promptTitle}</b>\n${epLinePrompt}\n${providerLinePrompt}\n\nPilih judul untuk caption:`
         : `📥 <b>Google Drive Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
@@ -4642,12 +4652,17 @@ bot.on('callback_query', async (query) => {
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
     if (isGdriveUrl(url)) {
-      // Title + suffix season/part: "Tensei ... S2 P2" biar media fomo tidak bentrok
+      // Title + suffix season/part: "Tensei ... S2 P2" biar media fomo tidak bentrok (anti-dobel)
       let gdTitle = detectedTitle;
       if (gdTitle) {
         try {
           const gdsCb = parseSamehadakuFilename((await resolveGdriveFile(url).catch(() => null))?.name || '');
-          if (gdsCb?.season) gdTitle = `${gdTitle} S${gdsCb.season}${gdsCb.part ? ` P${gdsCb.part}` : ''}`;
+          if (gdsCb?.season) {
+            const hasS = new RegExp(`\\bS${gdsCb.season}\\b`).test(gdTitle);
+            const hasP = gdsCb.part ? new RegExp(`\\bP${gdsCb.part}\\b`).test(gdTitle) : true;
+            if (!hasS && !hasP) gdTitle = `${gdTitle} S${gdsCb.season}${gdsCb.part ? ` P${gdsCb.part}` : ''}`;
+            else if (hasS && !hasP) gdTitle = `${gdTitle} P${gdsCb.part}`;
+          }
         } catch {}
       }
       return handleGdriveUrl(chatId, url, gdTitle || undefined);
