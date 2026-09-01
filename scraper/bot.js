@@ -1596,7 +1596,10 @@ function parseKuronimeSeasonEpisode(fileName) {
 function extractPartFromFilename(fileName) {
   const kur = parseKuronimeSeasonEpisode(fileName);
   if (kur) return kur.episode;
-  const base = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
+  let raw = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
+  // "tnsrantssdk12-end" → hapus -end biar episode 12 kebaca (bukan 1)
+  raw = raw.replace(/-end$/i, '');
+  const base = raw;
   let m = base.match(/\b[Ee][Pp]\s*(\d{1,3})\b/);
   if (m) return Number(m[1]);
   m = base.match(/\b[Ee]pisode\s*(\d{1,3})\b/);
