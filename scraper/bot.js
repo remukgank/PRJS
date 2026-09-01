@@ -2394,9 +2394,16 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
       ? (gdSame.season ? (gdSame.part ? `${gdSame.season} Part ${gdSame.part} Episode ${gdSame.episode}` : `${gdSame.season} Episode ${gdSame.episode}`) : `Episode ${gdSame.episode}`)
       : `Episode ${part}`;
     // Title untuk media (fomo anti-bentrok): tambah suffix " S2" / " S2 P2"
+    // Anti-dobel: kalau customTitle sudah ada "S2"/"P2" jangan tambah ulang; kalau baru "S2" tapi belum "P2" lengkapi.
     let titleForMedia = title;
     if (titleForMedia && gdSame?.season) {
-      titleForMedia = `${titleForMedia} S${gdSame.season}${gdSame.part ? ` P${gdSame.part}` : ''}`;
+      const hasS = new RegExp(`\\bS${gdSame.season}\\b`).test(titleForMedia);
+      const hasP = gdSame.part ? new RegExp(`\\bP${gdSame.part}\\b`).test(titleForMedia) : true;
+      if (!hasS && !hasP) {
+        titleForMedia = `${titleForMedia} S${gdSame.season}${gdSame.part ? ` P${gdSame.part}` : ''}`;
+      } else if (hasS && !hasP) {
+        titleForMedia = `${titleForMedia} P${gdSame.part}`;
+      }
     }
     const cap = titleForMedia || cleanCaption(fileName);
     const capWithEp = titleForMedia ? `${cap} — ${seasonEpLabel}` : `${cap}`;
