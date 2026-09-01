@@ -33,17 +33,19 @@ function parseSamehadakuEpisode(url) {
   try {
     const u = new URL(url);
     const path = decodeURIComponent(u.pathname);
-    // /tensei-shitara-slime-datta-ken-season-4-episode-1/  or  /...-エピソード-1/  or  /tensei-...-episode-10/
     const m = path.match(/\/([^\/]+?)(?:-episode-|-エピソード-|-episode)(\d+)\/?$/i);
     if (!m) return null;
-    const fullSlug = m[1]; // tensei-shitara-slime-datta-ken-season-4
+    const fullSlug = m[1];
     const ep = parseInt(m[2], 10);
-    const seasonMatch = fullSlug.match(/-season-(\d+)$/i);
+    const seasonMatch = fullSlug.match(/-season-(\d+)(?:-part-\d+)?$/i);
     const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
+    const partMatch = fullSlug.match(/-part-(\d+)$/i);
+    const part = partMatch ? parseInt(partMatch[1], 10) : null;
     let titleSlug = fullSlug;
-    if (seasonMatch) titleSlug = fullSlug.replace(/-season-\d+$/i, '');
+    if (partMatch) titleSlug = titleSlug.replace(/-part-\d+$/i, '');
+    if (seasonMatch) titleSlug = titleSlug.replace(/-season-\d+$/i, '');
     const title = titleSlug.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    return { title, season, episode: ep, provider: 'samehadaku', slug: fullSlug };
+    return { title, season, part, episode: ep, provider: 'samehadaku', slug: fullSlug };
   } catch { return null; }
 }
 
@@ -54,12 +56,15 @@ function parseSamehadakuAnime(url) {
     const m = path.match(/\/anime\/([^\/]+)\/?$/i);
     if (!m) return null;
     const fullSlug = m[1];
-    const seasonMatch = fullSlug.match(/-season-(\d+)$/i);
+    const seasonMatch = fullSlug.match(/-season-(\d+)(?:-part-\d+)?$/i);
     const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
+    const partMatch = fullSlug.match(/-part-(\d+)$/i);
+    const part = partMatch ? parseInt(partMatch[1], 10) : null;
     let titleSlug = fullSlug;
-    if (seasonMatch) titleSlug = fullSlug.replace(/-season-\d+$/i, '');
+    if (partMatch) titleSlug = titleSlug.replace(/-part-\d+$/i, '');
+    if (seasonMatch) titleSlug = titleSlug.replace(/-season-\d+$/i, '');
     const title = titleSlug.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    return { title, season, provider: 'samehadaku', slug: fullSlug };
+    return { title, season, part, provider: 'samehadaku', slug: fullSlug };
   } catch { return null; }
 }
 

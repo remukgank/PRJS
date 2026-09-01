@@ -1883,10 +1883,11 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       if (customTitle) {
         if (isSame && sami) {
           const cleanTitle = sami.title || customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+          const partSuffix = sami.part ? ` Part ${sami.part}` : '';
           if (sami.season) {
             finalCap = [
               `➧ Judul :- ${cleanTitle}`,
-              `➧ Season :- ${sami.season} Episode ${sami.episode}`,
+              `➧ Season :- ${sami.season}${partSuffix} Episode ${sami.episode}`,
               `➧ Provider :- samehadaku`,
             ].join('\n');
           } else {
@@ -2008,10 +2009,11 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     if (customTitle) {
       if (isSame && sami) {
         const cleanTitle = sami.title || customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+        const partSuffix2 = sami.part ? ` Part ${sami.part}` : '';
         if (sami.season) {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
-            `➧ Season :- ${sami.season} Episode ${sami.episode}`,
+            `➧ Season :- ${sami.season}${partSuffix2} Episode ${sami.episode}`,
             `➧ Provider :- samehadaku`,
           ].join('\n');
         } else {
@@ -2211,10 +2213,11 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     if (customTitle) {
       if (isSame && sami) {
         const cleanTitle = sami.title || customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+        const partSuffix3 = sami.part ? ` Part ${sami.part}` : '';
         if (sami.season) {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
-            `➧ Season :- ${sami.season} Episode ${sami.episode}`,
+            `➧ Season :- ${sami.season}${partSuffix3} Episode ${sami.episode}`,
             `➧ Provider :- samehadaku`,
           ].join('\n');
         } else {
@@ -4352,7 +4355,8 @@ bot.on('callback_query', async (query) => {
             const ext2 = path.extname(outPath2).toLowerCase();
             let finalCap2;
             if (sami2) {
-              if (sami2.season)               finalCap2 = `➧ Judul :- ${sami2.title}\n➧ Season :- ${sami2.season} Episode ${sami2.episode}\n➧ Provider :- samehadaku`;
+              const p2 = sami2.part ? ` Part ${sami2.part}` : '';
+              if (sami2.season)               finalCap2 = `➧ Judul :- ${sami2.title}\n➧ Season :- ${sami2.season}${p2} Episode ${sami2.episode}\n➧ Provider :- samehadaku`;
               else finalCap2 = `➧ Judul :- ${sami2.title}\n➧ Episode :- Episode ${sami2.episode}\n➧ Provider :- samehadaku`;
             } else finalCap2 = cap;
             if (VIDEO_EXTS.has(ext2)) sendResult2 = await sendVideo(chatId, outPath2, { caption: finalCap2, supports_streaming: true, ...(info2.duration && { duration: info2.duration }), ...(info2.width && { width: info2.width }), ...(info2.height && { height: info2.height }) }, { urlHash: hashUrl(fd.url), source: 'filedon', fileName: fd.name });
