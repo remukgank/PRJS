@@ -4684,9 +4684,51 @@ bot.on('callback_query', async (query) => {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
           [{ text: `✅ Ya, Download (${server})`, callback_data: `sam_go:${server}:${urlId2}` }],
+          [{ text: '📥 Ep berikutnya', callback_data: `sam_next:${server}:${urlId2}` }],
           [{ text: '⬅️ Ganti server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
+    } catch (err) {
+      return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+  }
+
+  // ─── Samehadaku next episode (dari preview — download server sama utk ep+1) ──
+  if (data.startsWith('sam_next:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const partsN = data.split(':');
+    const serverN = partsN[1];
+    const rawUrlN = partsN.slice(2).join(':');
+    const curEpUrl = resolveUrl(rawUrlN) || decodeURIComponent(rawUrlN);
+    if (!curEpUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa' }).catch(() => {});
+    const curEp = parseInt((curEpUrl.match(/-episode-(\d+)/i) || [])[1] || '0', 10);
+    if (!curEp) return bot.editMessageText('⚠️ Tak dapat tentukan episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    const nextEp = curEp + 1;
+    // URL episode berikutnya dari slug yang sama (tanpa -end)
+    const baseSlug = curEpUrl.replace(/-episode-\d+(?:-?(?:end|END|End))?\/?$/, '');
+    let nextUrl = `${baseSlug}-episode-${nextEp}/`;
+    const si = parseSamehadakuEpisode(nextUrl);
+    // Coba resolve server utk ep berikutnya langsung (fallback ke sam_ep jika tak ada)
+    await bot.editMessageText('📥 Memproses episode berikutnya...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    try {
+      const { servers } = await resolveSamehadakuFullhd(nextUrl);
+      const nfile = servers[serverN];
+      if (!nfile) {
+        // server yg sama tak ada utk ep berikutnya → tampil pilih server
+        samehadakuEpisodeMap.set(hashUrl(nextUrl).slice(0, 8), nextUrl);
+        return bot.editMessageText('⚠️ Server ini tak tersedia utk episode berikutnya. Pilih server lain:', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: Object.entries(servers||{}).map(([k, u]) => [{ text: `⬇️ ${k.charAt(0).toUpperCase()+k.slice(1)}`, callback_data: `sam_dl:${k}:${cacheUrl(nextUrl)}` }]).concat([[{ text: '⬅️ Batal', callback_data: `sam_ep:${cacheUrl(nextUrl)}` }]]) },
+        }).catch(() => {});
+      }
+      if (si) samehadakuEpisodeMap.set(nfile, si);
+      const tArg = si ? `${si.title}${si.season?` S${si.season}`:''}${si.part?` P${si.part}`:''}` : null;
+      if (isGofileUrl(nfile)) return await handleGofileUrl(chatId, nfile, tArg);
+      if (isPixeldrainUrl(nfile)) return await handlePixeldrainUrl(chatId, nfile, tArg);
+      if (isFiledonUrl(nfile)) return await handleFiledonUrl(chatId, nfile);
+      return bot.editMessageText('⚠️ Link server belum didukung.', { chat_id: chatId, message_id: msgId }).catch(() => {});
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
