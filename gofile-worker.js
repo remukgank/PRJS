@@ -99,10 +99,10 @@ export default {
             headers: { "Content-Type": "application/json", ...cors },
           });
         }
-        // Anime page: list episode <a href="...-episode-N/"> (class lstepsiode)
+        // Anime page: list episode <a href="...-episode-N/"> (class lstepsiode) — termasuk -end/-END (episode terakhir)
         const isAnime = /\/anime\//i.test(target);
         if (isAnime) {
-          const epRe = /<a[^>]+href="([^"]+-episode-(\d+)\/?)"[^>]*>([^<]+)<\/a>/gi;
+          const epRe = /<a[^>]+href="([^"]+(?:-episode-|-エピソード-)(\d+)(?:-?(?:end|END|End))?\/?)"[^>]*>([^<]+)<\/a>/gi;
           const episodes = [];
           let m2;
           while ((m2 = epRe.exec(html))) {
