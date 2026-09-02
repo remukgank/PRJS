@@ -4782,15 +4782,17 @@ bot.on('callback_query', async (query) => {
     const sameInfoG = parseSamehadakuEpisode(episodeUrlG);
     await bot.editMessageText('📥 Downloading...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     let fileUrlG = null;
+    let serversAll = null;
     try {
       const { servers } = await resolveSamehadakuFullhd(episodeUrlG);
+      serversAll = servers;
       fileUrlG = servers[server];
       if (!fileUrlG) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       if (sameInfoG) samehadakuEpisodeMap.set(fileUrlG, sameInfoG);
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
-    return downloadSamehadakuFile(chatId, episodeUrlG, servers, sameInfoG);
+    return downloadSamehadakuFile(chatId, episodeUrlG, serversAll, sameInfoG);
   }
 
   // ─── Title prompt callbacks ───────────────────────────────────────────────────
