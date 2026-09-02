@@ -1915,7 +1915,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           } else {
             finalCap = [
               `➧ Judul :- ${cleanTitle}`,
-              `➧ Episode :- Episode ${sami.episode}`,
+              `➧ Episode :- ${sami.episode}`,
               `➧ Provider :- samehadaku`,
             ].join('\n');
           }
@@ -1930,7 +1930,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
           finalCap = [
             `➧ Judul :- ${cleanTitle || customTitle}`,
-            `➧ Episode :- Episode ${goPart}`,
+            `➧ Episode :- ${goPart}`,
             `➧ Provider :- ${extractProvider(fileName)}`,
           ].join('\n');
         }
@@ -2041,7 +2041,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
         } else {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
-            `➧ Episode :- Episode ${sami.episode}`,
+            `➧ Episode :- ${sami.episode}`,
             `➧ Provider :- samehadaku`,
           ].join('\n');
         }
@@ -2049,7 +2049,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
         const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
         finalCap = [
           `➧ Judul :- ${cleanTitle || customTitle}`,
-          `➧ Episode :- Episode ${batchPart}`,
+          `➧ Episode :- ${batchPart}`,
           `➧ Provider :- ${extractProvider(file.name)}`,
         ].join('\n');
       }
@@ -2245,7 +2245,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
         } else {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
-            `➧ Episode :- Episode ${sami.episode}`,
+            `➧ Episode :- ${sami.episode}`,
             `➧ Provider :- samehadaku`,
           ].join('\n');
         }
@@ -2260,7 +2260,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
         const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
         finalCap = [
           `➧ Judul :- ${cleanTitle || customTitle}`,
-          `➧ Episode :- Episode ${part}`,
+          `➧ Episode :- ${part}`,
           `➧ Provider :- ${extractProvider(info.name)}`,
         ].join('\n');
       }
@@ -2360,7 +2360,7 @@ async function handleFiledonUrl(chatId, url) {
     if (titleForCap) {
       const epLineFd = fdSame?.season
         ? `➧ Season :- ${fdSame.season}${fdSame.part ? ` Part ${fdSame.part}` : ''} Episode ${partN}`
-        : `➧ Episode :- Episode ${partN}`;
+        : `➧ Episode :- ${partN}`;
       finalCap = [
         `➧ Judul :- ${titleForCap}`,
         epLineFd,
@@ -2530,7 +2530,7 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
         `➧ Judul :- ${gdTitle}`,
         gdSame.season
           ? `➧ Season :- ${gdSame.season}${gdSame.part ? ` Part ${gdSame.part}` : ''} Episode ${gdSame.episode}`
-          : `➧ Episode :- Episode ${gdSame.episode}`,
+          : `➧ Episode :- ${gdSame.episode}`,
         `➧ Provider :- samehadaku`,
       ].join('\n');
     } else if (title) {
@@ -2538,7 +2538,7 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
       const gdProv = /SAMEHADAKU/i.test(fileName) ? 'samehadaku' : extractProvider(fileName);
       finalCap = [
         `➧ Judul :- ${title}`,
-        `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`,
+        `➧ Episode :- ${extractPartFromFilename(fileName)}`,
         `➧ Provider :- ${gdProv}`,
       ].join('\n');
     }
@@ -4293,7 +4293,7 @@ bot.on('message', async (msg) => {
         }
       } catch {}
       const promptText = detectedTitle
-        ? `📥 <b>GoFile Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- Episode ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+        ? `📥 <b>GoFile Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
         : `📥 <b>GoFile Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
       if (statusMsg) {
         return bot.editMessageText(promptText, {
@@ -4326,7 +4326,7 @@ bot.on('message', async (msg) => {
         }
       } catch {}
       const promptText = detectedTitle
-        ? `📥 <b>Pixeldrain Download</b>\n\nFile: <code>${info.name}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- Episode ${extractPartFromFilename(info.name)}\n➧ Provider :- ${extractProvider(info.name)}\n\nPilih judul untuk caption:`
+        ? `📥 <b>Pixeldrain Download</b>\n\nFile: <code>${info.name}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- ${extractPartFromFilename(info.name)}\n➧ Provider :- ${extractProvider(info.name)}\n\nPilih judul untuk caption:`
         : `📥 <b>Pixeldrain Download</b>\n\nFile: <code>${info.name}</code>\n\nPilih judul untuk caption:`;
       return bot.sendMessage(chatId, promptText, {
         parse_mode: 'HTML',
@@ -4377,8 +4377,8 @@ bot.on('message', async (msg) => {
       const epLinePrompt = gdsPrompt
         ? (gdsPrompt.season
             ? `➧ Season :- ${gdsPrompt.season}${gdsPrompt.part ? ` Part ${gdsPrompt.part}` : ''} Episode ${gdsPrompt.episode}`
-            : `➧ Episode :- Episode ${gdsPrompt.episode}`)
-        : `➧ Episode :- Episode ${extractPartFromFilename(fileName)}`;
+            : `➧ Episode :- ${gdsPrompt.episode}`)
+        : `➧ Episode :- ${extractPartFromFilename(fileName)}`;
       const providerLinePrompt = gdsPrompt ? '➧ Provider :- <b>samehadaku</b>' : (/SAMEHADAKU/i.test(fileName) ? '➧ Provider :- <b>samehadaku</b>' : `➧ Provider :- ${extractProvider(fileName)}`);
       // Title + suffix season/part: "Tensei Shitara Slime Datta Ken S2 P2" (anti-bentrok media fomo)
       // Anti-dobel: kalau detectedTitle sudah mengandung S<n> — jangan tambah ulang; S<n> ada tapi P belum → lengkapi
@@ -4670,7 +4670,7 @@ bot.on('callback_query', async (query) => {
         : null;
       const seasonLine = sameInfo?.season
         ? `➧ Season :- ${sameInfo.season}${sameInfo.part ? ` Part ${sameInfo.part}` : ''} Episode ${sameInfo.episode}`
-        : `➧ Episode :- Episode ${sameInfo?.episode || '?'}`;
+        : `➧ Episode :- ${sameInfo?.episode || '?'}`;
       const preview = `📦 <b>Preview Download</b>\n\n` +
         `➧ Judul :- <b>${titleArg || sameInfo?.title || '?'}</b>\n` +
         `${seasonLine}\n` +
