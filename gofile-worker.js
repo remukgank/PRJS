@@ -130,6 +130,7 @@ export default {
         while ((m = liRe.exec(html))) {
           const q = m[1].trim().replace(/\s+/g, "");
           const inner = m[2];
+          const servers = {};
           const hrefRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
           let h;
           while ((h = hrefRe.exec(inner))) {
