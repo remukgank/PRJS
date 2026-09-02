@@ -2310,6 +2310,77 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
   }
 }
 
+/**
+ * Filedon — resolve url publik → download (R2 presigned) → kirim Telegram.
+ * File Samehadaku (TSS-S3-18) → caption + library; auto-detect via pattern.
+ */
+async function handleFiledonUrl(chatId, url) {
+  let outPath = null;
+  let rp = null;
+  try {
+    const fd = await resolveFiledonFile(url);
+    const fdName = fd.name;
+    let title = null;
+    const pat = extractSourcePattern(fdName);
+    if (pat) {
+      const m = await findMediaByPattern(pat).catch(() => null);
+      if (m) title = m.nama;
+    }
+    const fdSame = parseSamehadakuFilename(fdName);
+    const partN = fdSame?.episode ?? extractPartFromFilename(fdName);
+    const cap = title || cleanCaption(fdName);
+    const capWithEp = title ? `${cap} — Episode ${partN}` : cap;
+    const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
+    rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    rp.updateEpisode(capWithEp, 'download');
+    outPath = tempPath(fdName);
+    await downloadWithAria2c(fd.url, outPath, (log) => {
+      if (log.includes('progress:')) rp.updateEpisode(capWithEp, 'download', log.split('progress: ')[1]);
+      else if (log.startsWith('DL:')) rp.updateEpisode(capWithEp, 'download', log);
+    }, { 'Referer': 'https://filedon.co/' }, fd.size);
+    // remux mkv → mp4 utk preview (Filedon kadang mkv)
+    if (/\.mkv$/i.test(outPath)) outPath = await remuxToMp4(outPath);
+    const finalSize = fileSizeMb(outPath);
+    logger.info({ chatId, file: fdName, sizeMb: finalSize.toFixed(1) }, 'Filedon download selesai');
+    rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
+    const info = await getVideoInfo(outPath).catch(() => ({}));
+    const fext = path.extname(outPath).toLowerCase();
+    let finalCap = cap;
+    if (title) {
+      finalCap = [
+        `➧ Judul :- ${title}`,
+        `➧ Episode :- Episode ${partN}`,
+        `➧ Provider :- samehadaku`,
+      ].join('\n');
+    }
+    let sendResult = null;
+    if (VIDEO_EXTS.has(fext)) {
+      sendResult = await sendVideo(chatId, outPath, {
+        caption: finalCap, supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
+    } else await sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
+    if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+      const slug = `anime:${sanitizeSlug(title)}`;
+      const existing = await getPartFileId(slug, partN);
+      if (!existing) {
+        await upsertMedia(slug, title, 0, url, pat);
+        await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fdName, finalCap);
+      }
+    }
+    rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
+    rp.done();
+  } catch (err) {
+    logger.error({ chatId, url: url.slice(0, 90), err: err.message }, 'Filedon gagal');
+    if (rp) { rp.updateEpisode(capWithEp || cap || 'file', 'fail', err.message.slice(0, 50)); rp.done().catch(() => {}); }
+    await bot.sendMessage(chatId, `⚠️ Filedon gagal: ${err.message.slice(0, 120)}\n\nLink mungkin private/expired.`).catch(() => {});
+  } finally {
+    cleanupFiles(outPath);
+  }
+}
+
 // ─── Show file info (non-admin preview) ────────────────────────────────────────
 
 function formatFileSize(bytes) {
@@ -4252,6 +4323,14 @@ bot.on('message', async (msg) => {
     }
   }
 
+  // Filedon — admin only
+  if (isFiledonUrl(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    return handleFiledonUrl(chatId, text.trim());
+  }
+
   // Google Drive — admin only (flow prompt judul seperti gofile/pixeldrain)
   if (isGdriveUrl(text)) {
     if (!isAdmin(msg.from.id)) {
@@ -4329,7 +4408,7 @@ bot.on('message', async (msg) => {
 
   const params = parseDramaUrl(text);
   if (!params || !params.id) {
-    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
   }
 
   // Dramafren scraper — admin only
