@@ -2320,25 +2320,28 @@ async function handleFiledonUrl(chatId, url) {
   try {
     const fd = await resolveFiledonFile(url);
     const fdName = fd.name;
-    let title = null;
-    const pat = extractSourcePattern(fdName);
-    if (pat) {
-      const m = await findMediaByPattern(pat).catch(() => null);
-      if (m) title = m.nama;
-    }
     const fdSame = parseSamehadakuFilename(fdName);
     const partN = fdSame?.episode ?? extractPartFromFilename(fdName);
-    // Title caption: tambah suffix " S{season}" / " S{n} P{m}" biar konsisten fomo (Tensei ... S3)
-    let titleForCap = title;
-    if (titleForCap && fdSame?.season) {
-      const hasS = new RegExp(`\\bS${fdSame.season}\\b`).test(titleForCap);
-      if (!hasS) {
-        titleForCap = `${titleForCap} S${fdSame.season}`;
-      }
-      if (fdSame.part && !new RegExp(`\\bP${fdSame.part}\\b`).test(titleForCap)) {
-        titleForCap = `${titleForCap} P${fdSame.part}`;
+    let title = null;
+    // Utk file Samehadaku: base title = S1 (kuronime-tssdk / samehadaku short), lalu tambah suffix S{season}.
+    // JANGAN pakai findMediaByPattern('TSS') karena source_pattern TSS dipakai multi-season (collide bug DB).
+    if (fdSame) {
+      // Alias: short file Samehadaku (TSS) → S1 kuronime pattern. TSS→tssdk, dst.
+      const SHORT_ALIAS = { tss: 'tssdk', tssdk: 'tssdk', yntg: 'ymintsgai', ymintsgai: 'ymintsgai' };
+      const baseShort = SHORT_ALIAS[fdSame.short] || fdSame.short;
+      const baseLook = await findMediaByPattern(`kuronime-${baseShort}`).catch(() => null)
+        || await findMediaByPattern(`samehadaku-${baseShort}`).catch(() => null)
+        || await findMediaByPattern(`kuronime-${fdSame.short}`).catch(() => null);
+      title = baseLook ? baseLook.nama : null;
+      if (fdSame.season && title) title = `${title} S${fdSame.season}${fdSame.part ? ` P${fdSame.part}` : ''}`;
+    } else {
+      const pat = extractSourcePattern(fdName);
+      if (pat) {
+        const m = await findMediaByPattern(pat).catch(() => null);
+        if (m) title = m.nama;
       }
     }
+    const titleForCap = title; // title sudah incl S{season} (anti-dobel)
     const cap = titleForCap || cleanCaption(fdName);
     const capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
     const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
