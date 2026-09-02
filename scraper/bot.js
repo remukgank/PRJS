@@ -2332,9 +2332,12 @@ async function handleFiledonUrl(chatId, url) {
     let titleForCap = title;
     if (titleForCap && fdSame?.season) {
       const hasS = new RegExp(`\\bS${fdSame.season}\\b`).test(titleForCap);
-      const hasP = fdSame.part ? new RegExp(`\\bP${fdSame.part}\\b`).test(titleForCap) : true;
-      if (!hasS && !hasP) titleForCap = `${titleForCap} S${fdSame.season}${fdSame.part ? ` P${fdSame.part}` : ''}`;
-      else if (hasS && !hasP) titleForCap = `${titleForCap} P${fdSame.part}`;
+      if (!hasS) {
+        titleForCap = `${titleForCap} S${fdSame.season}`;
+      }
+      if (fdSame.part && !new RegExp(`\\bP${fdSame.part}\\b`).test(titleForCap)) {
+        titleForCap = `${titleForCap} P${fdSame.part}`;
+      }
     }
     const cap = titleForCap || cleanCaption(fdName);
     const capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
