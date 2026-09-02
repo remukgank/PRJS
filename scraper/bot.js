@@ -2399,6 +2399,42 @@ async function handleFiledonUrl(chatId, url) {
   }
 }
 
+// ─── Samehadaku single download helper (dipakai sam_go & sam_next) ──────────
+async function downloadSamehadakuFile(chatId, episodeUrl, servers, sameInfo) {
+  const titleArg = sameInfo
+    ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
+    : null;
+  const backKb = { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${sameInfo ? cacheUrl(episodeUrl) : 'x'}` }]] };
+  const entries = Object.entries(servers || {});
+  // Prioritas: filedon > gofile > pixeldrain > lainnya (yang lain tak didukung tdk dicoba)
+  const priorities = [
+    (k) => k === 'filedon',
+    (k) => k === 'gofile',
+    (k) => k === 'pixeldrain',
+  ];
+  const ordered = priorities.map(fn => entries.find(([k]) => fn(k))).filter(Boolean);
+  const rest = entries.filter(([k]) => !priorities.some(fn => fn(k)) && !ordered.some(([ok]) => ok === k));
+  const attemptOrder = [...ordered, ...rest];
+  if (!attemptOrder.length) { await bot.sendMessage(chatId, '⚠️ Tidak ada server tersedia.', { reply_markup: backKb }).catch(() => {}); return; }
+  for (const [k, url] of attemptOrder) {
+    const capLine = sameInfo?.season
+      ? `➧ Ja...\n➧ Season :- ${sameInfo.season}${sameInfo.part ? ` Part ${sameInfo.part}` : ''} Episode ${sameInfo.episode}\n➧ Provider :- samehadaku\n➧ Server :- ${k}`
+      : `➧ Provider :- samehadaku\n➧ Server :- ${k}`;
+    try {
+      if (isGofileUrl(url)) { await handleGofileUrl(chatId, url, titleArg); return; }
+      if (isPixeldrainUrl(url)) { await handlePixeldrainUrl(chatId, url, titleArg); return; }
+      if (isFiledonUrl(url)) { await handleFiledonUrl(chatId, url); return; }
+      // server tak didukung (acefile/mir/vidhide) → lompat
+      logger.info({ provider: k }, 'sam auto-skip unsupported server');
+      continue;
+    } catch (err) {
+      logger.warn({ server: k, err: err.message }, 'sam server gagal — coba server lain');
+      await bot.sendMessage(chatId, `⚠️ ${k} gagal (${err.message.slice(0, 60)}) — coba server lain...`).catch(() => {});
+    }
+  }
+  await bot.sendMessage(chatId, '⚠️ Semua server untuk episode ini gagal / expired.', { reply_markup: backKb }).catch(() => {});
+}
+
 // ─── Show file info (non-admin preview) ────────────────────────────────────────
 
 function formatFileSize(bytes) {
@@ -4725,11 +4761,7 @@ bot.on('callback_query', async (query) => {
         }).catch(() => {});
       }
       if (si) samehadakuEpisodeMap.set(nfile, si);
-      const tArg = si ? `${si.title}${si.season?` S${si.season}`:''}${si.part?` P${si.part}`:''}` : null;
-      if (isGofileUrl(nfile)) return await handleGofileUrl(chatId, nfile, tArg);
-      if (isPixeldrainUrl(nfile)) return await handlePixeldrainUrl(chatId, nfile, tArg);
-      if (isFiledonUrl(nfile)) return await handleFiledonUrl(chatId, nfile);
-      return bot.editMessageText('⚠️ Link server belum didukung.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      return downloadSamehadakuFile(chatId, nextUrl, servers, si);
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
@@ -4758,23 +4790,7 @@ bot.on('callback_query', async (query) => {
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
-    const sameTitleArg = sameInfoG
-      ? `${sameInfoG.title}${sameInfoG.season ? ` S${sameInfoG.season}` : ''}${sameInfoG.part ? ` P${sameInfoG.part}` : ''}`
-      : null;
-    const titleArg = sameTitleArg;
-    if (isGofileUrl(fileUrlG)) {
-      try { return await handleGofileUrl(chatId, fileUrlG, titleArg); }
-      catch (e) { return bot.sendMessage(chatId, `⚠️ Gofile gagal: ${e.message.slice(0, 80)}\n\nCoba server lain:`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${cacheUrl(episodeUrlG)}` }]] } }).catch(()=>{}); }
-    }
-    if (isPixeldrainUrl(fileUrlG)) {
-      try { return await handlePixeldrainUrl(chatId, fileUrlG, titleArg); }
-      catch (e) { return bot.sendMessage(chatId, `⚠️ Pixeldrain gagal: ${e.message.slice(0, 80)}\n\nCoba server lain:`, { reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${cacheUrl(episodeUrlG)}` }]] } }).catch(()=>{}); }
-    }
-    if (isFiledonUrl(fileUrlG)) {
-      try { return await handleFiledonUrl(chatId, fileUrlG); }
-      catch (e) { return bot.sendMessage(chatId, `⚠️ Filedon gagal: ${e.message.slice(0, 100)}\n\nCoba server lain:`, { reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke pilihan server`, callback_data: `sam_ep:${cacheUrl(episodeUrlG)}` }]] } }).catch(()=>{}); }
-    }
-    return bot.editMessageText('⚠️ Link server belum didukung.', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${cacheUrl(episodeUrlG)}` }]] } }).catch(() => {});
+    return downloadSamehadakuFile(chatId, episodeUrlG, servers, sameInfoG);
   }
 
   // ─── Title prompt callbacks ───────────────────────────────────────────────────
