@@ -2225,7 +2225,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
       if (/takedown|451|legal/i.test(e.message)) {
         rp.updateEpisode(capEp, 'fail', 'takedown DMCA');
         rp.done().catch(() => {});
-        await cleanupFiles(outPath).catch(() => {});
+        cleanupFiles(outPath);
         return bot.sendMessage(chatId, `⚠️ Pixeldrain: file di-takedown DMCA (HTTP 451) — tidak bisa didownload di server ini. \nCoba pilih server lain di pesan daftar episode.`).catch(() => {});
       }
     }
