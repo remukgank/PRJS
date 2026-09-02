@@ -2328,8 +2328,16 @@ async function handleFiledonUrl(chatId, url) {
     }
     const fdSame = parseSamehadakuFilename(fdName);
     const partN = fdSame?.episode ?? extractPartFromFilename(fdName);
-    const cap = title || cleanCaption(fdName);
-    const capWithEp = title ? `${cap} — Episode ${partN}` : cap;
+    // Title caption: tambah suffix " S{season}" / " S{n} P{m}" biar konsisten fomo (Tensei ... S3)
+    let titleForCap = title;
+    if (titleForCap && fdSame?.season) {
+      const hasS = new RegExp(`\\bS${fdSame.season}\\b`).test(titleForCap);
+      const hasP = fdSame.part ? new RegExp(`\\bP${fdSame.part}\\b`).test(titleForCap) : true;
+      if (!hasS && !hasP) titleForCap = `${titleForCap} S${fdSame.season}${fdSame.part ? ` P${fdSame.part}` : ''}`;
+      else if (hasS && !hasP) titleForCap = `${titleForCap} P${fdSame.part}`;
+    }
+    const cap = titleForCap || cleanCaption(fdName);
+    const capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
     const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
     rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
@@ -2346,9 +2354,9 @@ async function handleFiledonUrl(chatId, url) {
     const info = await getVideoInfo(outPath).catch(() => ({}));
     const fext = path.extname(outPath).toLowerCase();
     let finalCap = cap;
-    if (title) {
+    if (titleForCap) {
       finalCap = [
-        `➧ Judul :- ${title}`,
+        `➧ Judul :- ${titleForCap}`,
         `➧ Episode :- Episode ${partN}`,
         `➧ Provider :- samehadaku`,
       ].join('\n');
