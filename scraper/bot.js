@@ -2322,6 +2322,7 @@ async function handleFiledonUrl(chatId, url) {
     const fdName = fd.name;
     const fdSame = parseSamehadakuFilename(fdName);
     const partN = fdSame?.episode ?? extractPartFromFilename(fdName);
+    const patFile = fdSame?.short ? fdSame.short : extractSourcePattern(fdName);
     let title = null;
     // Utk file Samehadaku: base title = S1 (kuronime-tssdk / samehadaku short), lalu tambah suffix S{season}.
     // JANGAN pakai findMediaByPattern('TSS') karena source_pattern TSS dipakai multi-season (collide bug DB).
@@ -2383,7 +2384,7 @@ async function handleFiledonUrl(chatId, url) {
       const slug = `anime:${sanitizeSlug(title)}`;
       const existing = await getPartFileId(slug, partN);
       if (!existing) {
-        await upsertMedia(slug, title, 0, url, pat);
+        await upsertMedia(slug, title, 0, url, patFile);
         await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fdName, finalCap);
       }
     }
