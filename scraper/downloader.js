@@ -223,6 +223,33 @@ function cleanupFiles(...files) {
 }
 
 /**
+ * Remux mkv/webm/mov → mp4 (ffmpeg -c copy -movflags +faststart), tanpa re-encode.
+ * Cepat, lossless, langsung preview/streaming di Telegram.
+ * Return path mp4 hasil; jika gagal/gagal container, kembalikan input asli.
+ */
+async function remuxToMp4(inputPath, onLog = null) {
+  const ext = path.extname(inputPath || '').toLowerCase();
+  if (ext === '.mp4') return inputPath; // sudah mp4 — skip
+  const ob = FFMPEG;
+  const outPath = tempPath(path.basename(inputPath).replace(/\.[^.]+$/, '') + '_remux.mp4');
+  return new Promise((resolve) => {
+    const args = ['-y', '-i', inputPath, '-c', 'copy', '-movflags', '+faststart', outPath];
+    const proc = execFile(ob, args, { maxBuffer: 100 * 1024 * 1024 });
+    proc.on('error', () => resolve(inputPath)); // ffmpeg tak ada → biarkan asli
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(outPath)) {
+        cleanupFiles(inputPath);
+        if (onLog) onLog('remux: mkv→mp4 done');
+        resolve(outPath);
+      } else {
+        cleanupFiles(outPath); // codec tak compatible container → fallback asli
+        resolve(inputPath);
+      }
+    });
+  });
+}
+
+/**
  * Download file via aria2c (untuk GoFile dll).
  * Support multi-connection, resume, dan progress parsing.
  */
@@ -357,4 +384,4 @@ function fileSizeMb(filePath) {
   try { return fs.statSync(filePath).size / 1024 / 1024; } catch { return 0; }
 }
 
-module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, TMP_DIR };
+module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, remuxToMp4, TMP_DIR };

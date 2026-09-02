@@ -10,7 +10,7 @@ try { require('dotenv').config(); } catch {}
 const TelegramBotLib = require('node-telegram-bot-api');
 const TelegramBot = TelegramBotLib.default || TelegramBotLib;
 const { getVideoUrl, getAllEpisodes, destroySession } = require('./index');
-const { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb } = require('./downloader');
+const { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, remuxToMp4 } = require('./downloader');
 const { cleanupStaleSessions } = require('./dramafren');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile } = require('./gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./pixeldrain');
@@ -2431,6 +2431,11 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
     const info = await getVideoInfo(outPath).catch(() => ({}));
     const fext = path.extname(outPath).toLowerCase();
+    // mkv/webm/mov dari Google Drive → remux ke mp4 (lossless, preview/streaming aman)
+    if (fext === '.mkv' || fext === '.webm' || fext === '.mov') {
+      rp.updateEpisode(capWithEp, 'merge', 'remux mkv→mp4...');
+      outPath = await remuxToMp4(outPath, () => rp.updateEpisode(capWithEp, 'merge', 'remux mkv→mp4 done'));
+    }
     let finalCap = cap;
     if (gdSame) {
       const gdTitle = titleForMedia || cap;
