@@ -4505,13 +4505,12 @@ bot.on('callback_query', async (query) => {
       if (!res?.servers) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       const { quality, servers } = res;
       const urlId = cacheUrl(episodeUrl);
-      const keyboard = [
-        ...(servers.gofile ? [[{ text: `⬇️ Gofile (${quality})`, callback_data: `sam_dl:gofile:${urlId}` }]] : []),
-        ...(servers.krakenfiles ? [[{ text: `⬇️ Krakenfiles (${quality})`, callback_data: `sam_dl:krakenfiles:${urlId}` }]] : []),
-        ...(servers.pixeldrain ? [[{ text: `⬇️ Pixeldrain (${quality})`, callback_data: `sam_dl:pixeldrain:${urlId}` }]] : []),
-        ...(servers.filedon ? [[{ text: `⬇️ Filedon (${quality})`, callback_data: `sam_dl:filedon:${urlId}` }]] : []),
-        [{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(episodeUrl.split('/episode-')[0] + '/')}` }],
-      ];
+      const labelOf = (k) => k.charAt(0).toUpperCase() + k.slice(1);
+      const keyboard = Object.entries(servers || {}).map(([k, url]) => [
+        { text: `⬇️ ${labelOf(k)} (${quality})`, callback_data: `sam_dl:${k}:${urlId}` },
+      ]);
+      if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(episodeUrl.split('/episode-')[0] + '/')}` }]);
       return bot.editMessageText(`📺 <b>Samehadaku ${quality}</b>\n\nPilih server untuk download:`, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => bot.sendMessage(chatId, `📺 <b>Samehadaku ${quality}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
@@ -4571,9 +4570,6 @@ bot.on('callback_query', async (query) => {
       fileUrl = servers[server];
       if (!fileUrl) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       if (sameInfo) samehadakuEpisodeMap.set(fileUrl, sameInfo);
-      if (/krakenfiles\.com/i.test(fileUrl)) {
-        return bot.editMessageText(`⚠️ Server Krakenfiles belum didukung (gofile/pixeldrain/filedon saja).`, { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }]] } }).catch(() => {});
-      }
       const sameTitleArg = sameInfo
         ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
         : null;
@@ -4632,7 +4628,7 @@ bot.on('callback_query', async (query) => {
           }
         } catch (e) { return bot.sendMessage(chatId, `⚠️ Filedon gagal: ${e.message.slice(0, 100)}\n\nCoba server lain:`, { reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke pilihan server`, callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }]] } }).catch(()=>{}); }
       }
-      return bot.editMessageText('⚠️ Link server belum didukung.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      return bot.editMessageText('⚠️ Link server belum didukung.', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }]] } }).catch(() => {});
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }

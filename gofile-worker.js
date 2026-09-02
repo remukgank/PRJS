@@ -131,15 +131,18 @@ export default {
           const q = m[1].trim().replace(/\s+/g, "");
           const inner = m[2];
           const hrefRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-          const servers = {};
           let h;
           while ((h = hrefRe.exec(inner))) {
             const href = h[1].trim();
-            const name = h[2].trim().toLowerCase();
-            if (name.includes("gofile")) servers.gofile = href;
-            else if (name.includes("kraken")) servers.krakenfiles = href;
-            else if (name.includes("pixel")) servers.pixeldrain = href;
-            else if (name.includes("filedon") || name.includes("filelions")) servers.filedon = href;
+            const name = (h[2] || '').trim().toLowerCase();
+            // Generic: slug = hostname .split interdip dari href (bukan hardcode nama server)
+            let key = null;
+            try {
+              const host = new URL(href).hostname.replace(/^www\./, '').split('.')[0];
+              if (host) key = host.toLowerCase();
+            } catch {}
+            if (!key && name) key = name.replace(/\s+/g, '');
+            if (key) servers[key] = href;
           }
           if (Object.keys(servers).length) blocks[q] = servers;
         }
