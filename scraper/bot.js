@@ -2248,7 +2248,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     let finalCap = cap;
     if (customTitle) {
       if (isSame && sami) {
-        const cleanTitle = sami.title || customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+        const cleanTitle = (customTitle && !/S\d/i.test(sami.title||'')) ? customTitle : (sami.title || customTitle || '');
         const partSuffix3 = sami.part ? ` Part ${sami.part}` : '';
         if (sami.season) {
           finalCap = [
