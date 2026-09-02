@@ -4138,13 +4138,17 @@ bot.on('message', async (msg) => {
     const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil daftar server Samehadaku...').catch(() => null);
     try {
       const res = await resolveSamehadakuFullhd(text);
-      // Anime page: tampilkan daftar episode — pakai cacheUrl (short id) agar BUTTON_DATA <64 byte
+      // Anime page: daftar episode — pakai hash (stabil) bukan cacheUrl numerik (bisa collide/expired)
       if (res.type === 'anime' && res.episodes?.length) {
         const eps = res.episodes;
         const keyboard = [];
         const chunk = 5;
         for (let i = 0; i < eps.length; i += chunk) {
-          const row = eps.slice(i, i + chunk).map((e) => ({ text: `Ep ${e.ep}`, callback_data: `sam_ep:${cacheUrl(e.url)}` }));
+          const row = eps.slice(i, i + chunk).map((e) => {
+            const epId = hashUrl(e.url).slice(0, 8);
+            samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
+            return { text: `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
+          });
           keyboard.push(row);
         }
         const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
@@ -4487,7 +4491,9 @@ bot.on('callback_query', async (query) => {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
     const rawUrl = data.slice(7);
-    const episodeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    const episodeUrl = samehadakuEpisodeMap.get(rawUrl) && samehadakuEpisodeMap.get(rawUrl).includes('samehadaku')
+      ? samehadakuEpisodeMap.get(rawUrl)
+      : (resolveUrl(rawUrl) || decodeURIComponent(rawUrl));
     logger.info({ rawUrl: rawUrl.slice(0, 20), episodeUrl: episodeUrl?.slice(0, 80) }, 'sam_ep click');
     if (!episodeUrl) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
@@ -4529,7 +4535,11 @@ bot.on('callback_query', async (query) => {
       const keyboard = [];
       const chunk = 5;
       for (let i = 0; i < eps.length; i += chunk) {
-        const row = eps.slice(i, i + chunk).map((e) => ({ text: `Ep ${e.ep}`, callback_data: `sam_ep:${cacheUrl(e.url)}` }));
+        const row = eps.slice(i, i + chunk).map((e) => {
+          const epId2 = hashUrl(e.url).slice(0, 8);
+          samehadakuEpisodeMap.set(epId2, e.url);
+          return { text: `Ep ${e.ep}`, callback_data: `sam_ep:${epId2}` };
+        });
         keyboard.push(row);
       }
       const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
