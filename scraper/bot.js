@@ -2358,9 +2358,12 @@ async function handleFiledonUrl(chatId, url) {
     const fext = path.extname(outPath).toLowerCase();
     let finalCap = cap;
     if (titleForCap) {
+      const epLineFd = fdSame?.season
+        ? `➧ Season :- ${fdSame.season}${fdSame.part ? ` Part ${fdSame.part}` : ''} Episode ${partN}`
+        : `➧ Episode :- Episode ${partN}`;
       finalCap = [
         `➧ Judul :- ${titleForCap}`,
-        `➧ Episode :- Episode ${partN}`,
+        epLineFd,
         `➧ Provider :- samehadaku`,
       ].join('\n');
     }
