@@ -2215,6 +2215,20 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
 
     rp.updateEpisode(cap, 'download');
     const capEp = cap;
+    // Pre-check header — pixeldrain: 451 = takedown DMCA, kasih pesan jelas bukan aria2c cryptic
+    try {
+      const head = await axios.head(info.directUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, timeout: 15000, validateStatus: () => true });
+      if (head.status === 451 || /unavailable_for_legal|takedown|legal/i.test(String(head.headers['content-type'] || '') + (head.headers['content-disposition'] || ''))) {
+        throw new Error('File di-takedown DMCA (HTTP 451) — tidak bisa di-download dari Pixeldrain.');
+      }
+    } catch (e) {
+      if (/takedown|451|legal/i.test(e.message)) {
+        rp.updateEpisode(capEp, 'fail', 'takedown DMCA');
+        rp.done().catch(() => {});
+        await cleanupFiles(outPath).catch(() => {});
+        return bot.sendMessage(chatId, `⚠️ Pixeldrain: file di-takedown DMCA (HTTP 451) — tidak bisa didownload di server ini. \nCoba pilih server lain di pesan daftar episode.`).catch(() => {});
+      }
+    }
     await downloadWithAria2c(info.directUrl, outPath, (log) => {
       if (log.includes('progress:')) {
         rp.updateEpisode(capEp, 'download', log.split('progress: ')[1]);

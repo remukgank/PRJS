@@ -345,9 +345,14 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
         appLogger.info({ file: fileName, sizeMb, status: 'done' }, 'aria2c download complete');
         resolve(outPath);
       } else {
-        const errMsg = output.slice(-300).trim() || `aria2c exit ${code}`;
+        const rawErr = output.slice(-300).trim() || `aria2c exit ${code}`;
+        // Deteksi HTTP 451 (takedown DMCA / legal unavailable) → pesan jelas
+        if (/451|unavailable_for_legal|takedown|legal reasons/i.test(rawErr)) {
+          appLogger.error({ file: fileName, exitCode: code, output: output.slice(-500) }, 'aria2c takedown (451)');
+          return reject(new Error('File di-takedown DMCA (HTTP 451) — tidak bisa di-download dari host ini.'));
+        }
         appLogger.error({ file: fileName, exitCode: code, output: output.slice(-500) }, 'aria2c download failed');
-        reject(new Error(`Download gagal: ${errMsg}`));
+        reject(new Error(`Download gagal: ${rawErr}`));
       }
     });
 
