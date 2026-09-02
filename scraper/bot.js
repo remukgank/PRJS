@@ -2303,6 +2303,8 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
       rp.updateEpisode(cap || 'file', 'fail', err.message.slice(0, 50));
       rp.done().catch(() => {});
     }
+    // Feedback ke Telegram (jangan silent) — kirim pesan error agar user tahu
+    await bot.sendMessage(chatId, `⚠️ Pixeldrain gagal: ${err.message.slice(0, 120)}\n\nLink mungkin expired/private. Coba server/URL lain.`).catch(() => {});
   } finally {
     cleanupFiles(outPath);
   }
