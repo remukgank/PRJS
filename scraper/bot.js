@@ -4742,7 +4742,9 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         { text: `⬇️ ${labelOf(k)} (${quality})`, callback_data: `sam_dl:${k}:${urlId}` },
       ]);
       if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
-      keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(episodeUrl.split('/episode-')[0] + '/')}` }]);
+      const epInfoBack = parseSamehadakuEpisode(episodeUrl);
+      const animeUrlBack = epInfoBack?.slug ? `https://v2.samehadaku.how/anime/${epInfoBack.slug}/` : episodeUrl.split('/episode-')[0] + '/';
+      keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(animeUrlBack)}` }]);
       return bot.editMessageText(`📺 <b>Samehadaku ${quality}</b>\n\nPilih server untuk download:`, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => bot.sendMessage(chatId, `📺 <b>Samehadaku ${quality}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
@@ -4757,7 +4759,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     let animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa' }).catch(() => {});
     // fallback: jika sam_back dari episode, reconstruct anime base
-    if (!animeUrl.includes('/anime/')) animeUrl = animeUrl.replace(/\/tensei[^/]+\/.*/, '/anime/tensei-shitara-slime-datta-ken-season-4/');
+        if (!animeUrl.includes('/anime/')) {
+      // Reconstruct anime URL secara generic dari episode slug (bukan hardcode Tensura)
+      const epInfo = parseSamehadakuEpisode(animeUrl + '-episode-1/');
+      if (epInfo?.slug) animeUrl = `https://v2.samehadaku.how/anime/${epInfo.slug}/`;
+      else animeUrl = animeUrl.replace(/\/tensei[^/]+\/.*/, '/anime/tensei-shitara-slime-datta-ken-season-4/');
+    }
     await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     try {
       const res = await resolveSamehadakuFullhd(animeUrl);
