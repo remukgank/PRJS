@@ -913,38 +913,7 @@ function mainActionKeyboard() {
 }
 
 // ─── Slug cache (Telegram callback_data max 64 bytes, slug bisa 73+) ──────────
-const slugCache = new Map(); // shortId -> fullSlug
-let slugCacheCounter = 0;
-function cacheSlug(slug) {
-  // cleanup entries > 30 menit
-  if (slugCache.size > 500) {
-    const cutoff = Date.now() - 30 * 60 * 1000;
-    for (const [k, v] of slugCache) { if (v.ts < cutoff) slugCache.delete(k); }
-  }
-  const id = String(++slugCacheCounter);
-  slugCache.set(id, { slug, ts: Date.now() });
-  return id;
-}
-function resolveSlug(id) {
-  const entry = slugCache.get(String(id));
-  return entry ? entry.slug : null;
-}
-// ─── URL cache untuk gofile/pixeldrain (callback_data 64 bytes, URL bisa >100) ──────────
-const urlCache = new Map(); // shortId -> url
-let urlCacheCounter = 0;
-function cacheUrl(url) {
-  if (urlCache.size > 500) {
-    const cutoff = Date.now() - 30 * 60 * 1000;
-    for (const [k, v] of urlCache) { if (v.ts < cutoff) urlCache.delete(k); }
-  }
-  const id = String(++urlCacheCounter);
-  urlCache.set(id, { url, ts: Date.now() });
-  return id;
-}
-function resolveUrl(id) {
-  const entry = urlCache.get(String(id));
-  return entry ? entry.url : null;
-}
+const { cacheSlug, resolveSlug, cacheUrl, resolveUrl } = require('./lib/urlCache');
 // ─── Library keyboards ────────────────────────────────────────────────────────
 
 function librarySearchResultKeyboard(dramas) {
@@ -1308,23 +1277,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
 
 // ─── Samehadaku single download helper (dipakai sam_go & sam_next) ──────────
 async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo) {
-  const titleArg = sameInfo
-    ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
-    : null;
-  const backKb = { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${sameInfo ? cacheUrl(episodeUrl) : 'x'}` }]] };
-  const url = servers?.[server];
-  if (!url) {
-    return bot.sendMessage(chatId, `⚠️ Server ${server} tidak tersedia utk episode ini.`, { reply_markup: backKb }).catch(() => {});
-  }
-  try {
-    if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
-    if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg);
-    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg);
-    return bot.sendMessage(chatId, `⚠️ Server ${server} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
-  } catch (err) {
-    logger.warn({ server, err: err.message }, 'sam server gagal — tidak auto-coba lain (hormat pilihan user)');
-    await bot.sendMessage(chatId, `⚠️ ${server} gagal (${err.message.slice(0, 80)})\n\nKelik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
-  }
+  return _downloadHandlers.downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo);
 }
 
 // ─── Show file info (non-admin preview) ────────────────────────────────────────
