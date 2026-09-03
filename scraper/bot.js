@@ -310,11 +310,13 @@ const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjal
 const _vidaraHandlers = require('./handlers/vidara');
 _vidaraHandlers.initVidara({
   bot,
-  config: { MAX_UPLOAD_MB, PART_SEND_DELAY_MS },
+  config: { MAX_UPLOAD_MB, PART_SEND_DELAY_MS, RF_GROUP_ID, RF_GROUP_ENABLED },
   vidaraBusy,
   get sendVideo() { return sendVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
   Progress, RichProgress, // import const di top (E3b), aman langsung
   get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  get isAdmin() { return isAdmin; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  get sendToTopicVideo() { return sendToTopicVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
 });
 const sessions = new Map();
 const aiChatSessions = new Map();

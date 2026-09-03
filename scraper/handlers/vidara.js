@@ -8,7 +8,7 @@ const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat } = require('../services/vidaraService');
 const { buildChunks } = require('../lib/parser');
 const { sleep } = require('../lib/telegram');
-const { fileSizeMb } = require('../downloader');
+const { fileSizeMb, getVideoInfo } = require('../downloader');
 const V = require('../vidara-uploader');
 
 // ctx: { bot, logger, config: { MAX_UPLOAD_MB }, vidaraBusy, sendVideo, Progress, RichProgress, downloadAndSend }
@@ -208,7 +208,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
           ...(info.width && { width: info.width }),
           ...(info.height && { height: info.height }),
         };
-        const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+        const mirrorToTopic = isReelFren && _ctx.isAdmin(session?.userId) && _ctx.config.RF_GROUP_ENABLED && _ctx.config.RF_GROUP_ID;
         if (sizeMb > _ctx.config.MAX_UPLOAD_MB) {
           rp.note(`⚠️ ${partLabel}: ${sizeMb.toFixed(1)} MB > limit Telegram (${_ctx.config.MAX_UPLOAD_MB}) — hanya upload ke Vidara`);
           logger.warn({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1), limit: _ctx.config.MAX_UPLOAD_MB }, 'vt_merge10 part skipped Telegram — exceeds limit');
@@ -216,7 +216,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         } else {
           try {
             if (mirrorToTopic) {
-              const sendResult = await sendToTopicVideo(provider, mergedFile, options);
+              const sendResult = await _ctx.sendToTopicVideo(provider, mergedFile, options);
               if (sendResult) {
                 tgDone++;
                 rp.note(`📤 ${partLabel} — terkirim ke topic <b>${provider}</b> di grup`);
