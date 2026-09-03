@@ -35,7 +35,7 @@ Pemakai saat ini: bot.js 33x, download.js 18x, admin.js 1x, library.js 2x, vidar
 
 - Sender memakai `apiPost` (sudah di `lib/telegram` via E3a) + `LOCAL_API_PORT`/`TOKEN` dari config — pola init yang sama, tidak ada Map baru.
 - `sendVideo` punya logic `cacheInfo`/`file_id` (file_cache DB) — ikut pindah utuh, bukan disederhanakan.
-- Risk: Medium — 56 call site, tapi perubahan mekanis (pindah + import). Test: `node --check` + 1 download tiap provider (GoFile/Pixeldrain) verifikasi file terkirim.
+- Risk: Medium — 56 call site, tapi perubahan mekanis (pindah + import). Test: `node --check` + 1 download tiap provider (GoFile/Pixeldrain) verifikasi file terkirim + **1 trigger di luar handlers/download untuk pastikan ctx forwarding jalan di semua modul consumer** (pilih yang paling gampang dites real: 1 aksi Vidara+Telegram kecil via `vt_per_ep` yang memanggil `sendVideo` dari `handlers/vidara.js`, atau 1 output `lib_menu` yang mengirim poster via `sendPhoto` dari `handlers/library.js`).
 
 ## 4. Rollback Plan
 
