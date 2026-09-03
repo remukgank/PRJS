@@ -2065,7 +2065,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     cap = customTitle || cleanCaption(file.name);
     const fileName = file.name;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
-    const capWithEp = customTitle ? `${cap} — Episode ${extractPartFromFilename(file.name)}` : cap;
+    const capWithEp = customTitle ? `${cap} — Episode ${sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name)}` : cap;
     rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
     if (file.size / 1024 / 1024 > MAX_UPLOAD_MB) {
