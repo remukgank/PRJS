@@ -60,6 +60,7 @@ transfer_data/results/
 fomo-drama/
 VDL/
 data/
+transfer_data/
 
 # solver (nix store paths + vendored deps)
 .solver/
