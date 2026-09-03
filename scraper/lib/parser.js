@@ -158,6 +158,19 @@ function parseSamehadakuFilename(fileName) {
   };
 }
 
+function buildChunks(episodes, chunkSize = 10, minLastChunk = 6) {
+  if (episodes.length === 0) return [];
+  const chunks = [];
+  for (let i = 0; i < episodes.length; i += chunkSize) {
+    chunks.push(episodes.slice(i, i + chunkSize));
+  }
+  if (chunks.length > 1 && chunks[chunks.length - 1].length < minLastChunk) {
+    const last = chunks.pop();
+    chunks[chunks.length - 1] = [...chunks[chunks.length - 1], ...last];
+  }
+  return chunks;
+}
+
 module.exports = {
   stripHtml,
   truncateText,
@@ -168,4 +181,5 @@ module.exports = {
   extractSourcePattern,
   extractProvider,
   parseSamehadakuFilename,
+  buildChunks,
 };
