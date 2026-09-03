@@ -563,7 +563,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
 }
 
 
-async function handleFiledonUrl(chatId, url) {
+async function handleFiledonUrl(chatId, url, customTitle = null) {
   ensureCtx('handleFiledonUrl');
   let outPath = null;
   let rp = null;
@@ -590,6 +590,14 @@ async function handleFiledonUrl(chatId, url) {
       if (pat) {
         const m = await findMediaByPattern(pat).catch(() => null);
         if (m) title = m.nama;
+      }
+    }
+    // Fallback: customTitle dari alur samehadaku (sudah "... S2") bila DB lookup gagal —
+    // anti-dobel: jangan tambah S suffix kalau customTitle sudah mengandungnya.
+    if (!title && customTitle) {
+      title = customTitle;
+      if (fdSame?.season && !new RegExp(`\\bS${fdSame.season}\\b`, 'i').test(title)) {
+        title = `${title} S${fdSame.season}${fdSame.part ? ` P${fdSame.part}` : ''}`;
       }
     }
     const titleForCap = title; // title sudah incl S{season} (anti-dobel)

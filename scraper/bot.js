@@ -1302,8 +1302,8 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
  * Filedon — resolve url publik → download (R2 presigned) → kirim Telegram.
  * File Samehadaku (TSS-S3-18) → caption + library; auto-detect via pattern.
  */
-async function handleFiledonUrl(chatId, url) {
-  return _downloadHandlers.handleFiledonUrl(chatId, url);
+async function handleFiledonUrl(chatId, url, customTitle = null) {
+  return _downloadHandlers.handleFiledonUrl(chatId, url, customTitle);
 }
 
 // ─── Samehadaku single download helper (dipakai sam_go & sam_next) ──────────
@@ -1319,7 +1319,7 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
   try {
     if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
     if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg);
-    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url);
+    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg);
     return bot.sendMessage(chatId, `⚠️ Server ${server} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
   } catch (err) {
     logger.warn({ server, err: err.message }, 'sam server gagal — tidak auto-coba lain (hormat pilihan user)');
