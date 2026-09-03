@@ -34,3 +34,9 @@ Pindahkan 3 fungsi GoFile dari `scraper/bot.js` ke `scraper/handlers/download.js
 ## Rollback
 
 Branch `batch-e4a-gofile` dari `main` (7b97972, setelah koreksi proposal). Jika bermasalah: `git checkout main -- scraper/bot.js` + hapus `scraper/handlers/download.js`, atau `git revert` 1 commit. DB tidak disentuh.
+
+## Keputusan Tertunda (tracked, jangan dibiarkan menggantung)
+
+**`sendVideo`/`sendAudio`/`sendDocument`/`sendPhoto` masih definisi lokal di `bot.js:77-158`, belum pindah ke `lib/telegram.js`.** Proposal awal Batch E menyebut E3b mencakup `lib/telegram.js (sendVideo family) + lib/progress.js`, tapi yang dieksekusi hanya `lib/progress.js` — tanpa flag ke user saat laporan E3b. Bukan bug fungsional (ctx-injection di E4a meneruskan referensi lokal, tidak ada cyclical), tapi scope E3 tercatat selesai padahal tidak fully sesuai proposal.
+
+**Keputusan:** pemindahan sendVideo family ke `lib/telegram.js` ditunda sampai **E6 facade cleanup** (bukan masuk E4b/E4c). Alasan: 4 fungsi ini dipakai di semua handler (bukan cuma download), memindahkannya sekarang memperlebar blast radius E4. E6 adalah titik natural karena di sana `bot.js` tinggal routing + wiring ctx.
