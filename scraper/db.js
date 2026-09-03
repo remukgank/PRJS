@@ -387,7 +387,7 @@ async function getMediaBySlug(slug) {
 async function findMediaByPattern(pattern) {
   try {
     const r = await pool.query(
-      'SELECT slug, nama, source_pattern FROM media WHERE source_pattern = $1 LIMIT 1',
+      'SELECT slug, nama, source_pattern FROM media WHERE LOWER(source_pattern) = LOWER($1) LIMIT 1',
       [pattern]
     );
     return r.rows[0] || null;
