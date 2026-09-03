@@ -35,7 +35,9 @@ E5b tetap 1 commit (tidak jadi E5b1/b2). Alasan: 4 action berbagi helper yang sa
 ## 5. Testing
 
 1. `node --check` semua file berubah
-2. Functional: mock `uploadFileViaCurl`/`uploadDramaBatchesVidara` untuk 1 batch kecil → progress done; `vidaraBusy` release setelah selesai (cek tidak deadlock chat berikutnya)
-3. Restart pm2 dari branch → polling jalan, tidak ada `Unhandled` baru
+2. Functional (mock dulu): mock `uploadFileViaCurl`/`uploadDramaBatchesVidara` untuk 1 batch kecil → progress done; `vidaraBusy` release setelah selesai (cek tidak deadlock chat berikutnya).
+   **Kenapa mock dulu, bukan langsung live seperti E4b/E4c:** upload Vidara makan bandwidth besar (ratusan MB per file), butuh waktu menit, dan memakai kuota/API key produksi (`VIDARA_KEY`). Mock memverifikasi wiring ctx + lock release tanpa biaya. Ini keputusan sadar, bukan downgrade standar diam-diam.
+3. **Live test wajib 1x sebelum merge** (setelah mock lolos): `actionVidaraPerEp` untuk 1 file kecil beneran → upload ke Vidara asli → konfirmasi link `saveDomain` valid & `vidaraBusy` release (chat berikutnya tidak keblokir). Tidak harus semua 4 fungsi live — minimal 1 untuk pastikan wiring ctx jalan di kondisi nyata.
+4. Restart pm2 dari branch → polling jalan, tidak ada `Unhandled` baru
 
 Tunggu approve sebelum mulai E5b.
