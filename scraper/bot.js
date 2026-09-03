@@ -299,15 +299,18 @@ _downloadHandlers.initDownload({
 const _libraryHandlers = require('./handlers/library');
 _libraryHandlers.initLibrary({ bot, isAdmin });
 
+const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan) — dideklarasikan di atas wiring agar initVidara tidak TDZ
 // E5b: wire handlers/vidara via ctx injection
+// NOTE: bot.js dibungkus IIFE — tidak ada hoisting antar-bagian. Referensi ke
+// fungsi yang dideklarasikan di bawah (downloadAndSend) diteruskan lazy via getter.
 const _vidaraHandlers = require('./handlers/vidara');
 _vidaraHandlers.initVidara({
   bot,
   config: { MAX_UPLOAD_MB },
   vidaraBusy,
-  sendVideo,
-  Progress, RichProgress,
-  downloadAndSend,
+  get sendVideo() { return sendVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  Progress, RichProgress, // import const di top (E3b), aman langsung
+  get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
 });
 const sessions = new Map();
 const aiChatSessions = new Map();
@@ -321,7 +324,7 @@ const pendingAiModel = new Map(); // chatId → true (menunggu input model)
 const pendingVidaraDomain = new Map(); // chatId → true (menunggu input domain Vidara)
 const pendingMediaAlbums = new Map(); // media_group_id → { chatId, caption, fileIds: [], timer }
 const pendingDupScrape = new Map(); // chatId → { type, provider, fullId, lang, episodes, meta, userId, rfParams, params }
-const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan)
+// (vidaraBusy dideklarasikan di atas wiring initVidara agar tidak TDZ)
 const aiChatRateLimit = new Map(); // chatId -> [timestamps]
 
 const AI_CHAT_RATE_LIMIT = Number(process.env.AI_CHAT_RATE_LIMIT) || 3;   // pesan per menit
