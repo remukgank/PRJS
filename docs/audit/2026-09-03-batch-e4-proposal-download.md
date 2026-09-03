@@ -57,6 +57,8 @@ Tidak ada `require('../bot')` langsung dari handler — cegah cyclical. `session
 
 **Koreksi:** router (`downloadSamehadakuFile`) memanggil `handleGofileUrl`/`handlePixeldrainUrl`/`handleFiledonUrl`, sehingga harus menunggu callee stabil. Ia dipisah ke E4c sendiri setelah E4a+E4b merge, bukan digabung dalam commit yang sama dengan callee-nya.
 
+**Catatan perubahan router pra-E4c (commit 017ae21 di branch E4b):** `downloadSamehadakuFile` semula hanya meneruskan `titleArg` ke GoFile/Pixeldrain, kini juga ke Filedon (`handleFiledonUrl(chatId, url, titleArg)`). Saat E4c memindahkan router, kode yang dipindah sudah termasuk perubahan ini — bukan versi proposal awal.
+
 Tidak dipecah per-fungsi lebih jauh (overhead terlalu besar), tapi tidak juga 1 commit raksasa.
 
 ## 4. Rollback Plan
