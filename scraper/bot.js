@@ -1906,26 +1906,9 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
   if (isGofileDirectUrl(url)) {
     const fileName = filenameFromGofileUrl(url);
 
-    // Auto-detect title dari source pattern jika gak ada custom title
     if (!customTitle) {
-      const pattern = extractSourcePattern(fileName);
-      logger.info({ pattern, fileName }, 'Checking source pattern for auto-detect (gofile)');
-      if (pattern) {
-        const matched = await findMediaByPattern(pattern).catch(() => null);
-        logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result (gofile)');
-        if (matched) {
-          customTitle = matched.nama;
-          logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern (gofile)');
-        }
-      }
-      // Fallback utk file Samehadaku (SHORT-S2-P2-1-...) via gofile: alias short → kuronime/samehadaku pattern
-      const gdSame = parseSamehadakuFilename(fileName);
-      if (!customTitle && gdSame?.short) {
-        for (const prov of ['kuronime', 'samehadaku']) {
-          const m = await findMediaByPattern(`${prov}-${gdSame.short}`).catch(() => null);
-          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSame.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (gofile)'); break; }
-        }
-      }
+      const { title } = await detectTitleFromFilename(fileName);
+      if (title) customTitle = title;
     }
 
     const cap = customTitle || cleanCaption(fileName);
@@ -2041,26 +2024,9 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
   try {
     const file = await resolveGofileFirstFile(url);
     const sizeMb = (file.size / 1024 / 1024).toFixed(1);
-    // Auto-detect title dari source pattern jika gak ada custom title
     if (!customTitle) {
-      const pattern = extractSourcePattern(file.name);
-      logger.info({ pattern, fileName: file.name }, 'Checking source pattern for auto-detect (gofile share)');
-      if (pattern) {
-        const matched = await findMediaByPattern(pattern).catch(() => null);
-        logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result (gofile share)');
-        if (matched) {
-          customTitle = matched.nama;
-          logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern (gofile share)');
-        }
-      }
-      // Fallback utk file Samehadaku via gofile share
-      const gdSameShare = parseSamehadakuFilename(file.name);
-      if (!customTitle && gdSameShare?.short) {
-        for (const prov of ['kuronime', 'samehadaku']) {
-          const m = await findMediaByPattern(`${prov}-${gdSameShare.short}`).catch(() => null);
-          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSameShare.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (gofile share)'); break; }
-        }
-      }
+      const { title } = await detectTitleFromFilename(file.name);
+      if (title) customTitle = title;
     }
     cap = customTitle || cleanCaption(file.name);
     const fileName = file.name;
@@ -2252,26 +2218,9 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     const sizeMb = (info.size / 1024 / 1024).toFixed(1);
     const fileName = info.name;
 
-    // Auto-detect title dari source pattern jika gak ada custom title
     if (!customTitle) {
-      const pattern = extractSourcePattern(fileName);
-      logger.info({ pattern, fileName }, 'Checking source pattern for auto-detect');
-      if (pattern) {
-        const matched = await findMediaByPattern(pattern).catch(() => null);
-        logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result');
-        if (matched) {
-          customTitle = matched.nama;
-          logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern');
-        }
-      }
-      // Fallback utk file Samehadaku via pixeldrain
-      const gdSamePix = parseSamehadakuFilename(fileName);
-      if (!customTitle && gdSamePix?.short) {
-        for (const prov of ['kuronime', 'samehadaku']) {
-          const m = await findMediaByPattern(`${prov}-${gdSamePix.short}`).catch(() => null);
-          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSamePix.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (pixeldrain)'); break; }
-        }
-      }
+      const { title } = await detectTitleFromFilename(fileName);
+      if (title) customTitle = title;
     }
 
     cap = customTitle || cleanCaption(fileName);
@@ -2579,6 +2528,41 @@ function parseSamehadakuFilename(fileName) {
   };
 }
 
+// Helper terpusat — dedup 4 handler (GoFile direct/share, Pixeldrain, GDrive)
+// Penuhi syarat Batch C: .catch dibedakan jadi warn vs not-found, loop provider cross-check identik, log tetap jalan
+async function detectTitleFromFilename(fileName) {
+  const pattern = extractSourcePattern(fileName);
+  if (pattern) {
+    try {
+      const m = await findMediaByPattern(pattern);
+      if (m) {
+        logger.info({ pattern, matched: m.nama }, 'Auto-detected via pattern');
+        return { title: m.nama, pattern, source: 'pattern' };
+      }
+      logger.info({ pattern, matched: null, fileName }, 'Pattern match result - no match');
+    } catch (err) {
+      logger.warn({ pattern, err: err.message }, 'findMediaByPattern error (pattern) — beda dari not-found');
+    }
+  }
+  const gdSame = parseSamehadakuFilename(fileName);
+  if (gdSame?.short) {
+    for (const prov of ['kuronime', 'samehadaku']) {
+      const tryPat = `${prov}-${gdSame.short}`;
+      try {
+        const m = await findMediaByPattern(tryPat);
+        if (m) {
+          logger.info({ pattern: tryPat, matched: m.nama }, 'Auto-detected via samehadaku short');
+          return { title: m.nama, pattern: tryPat, source: 'samehadaku-short' };
+        }
+      } catch (err) {
+        logger.warn({ pattern: tryPat, err: err.message }, 'findMediaByPattern error (samehadaku-short) — beda dari not-found');
+      }
+    }
+    logger.info({ short: gdSame.short, fileName }, 'Samehadaku short fallback - no match');
+  }
+  return { title: null, pattern: null, source: null };
+}
+
 /**
  * Google Drive — resolve url publik → download → kirim ke Telegram/dll.
  * File dari kuronime/samehadaku (tnsrantssdk12-end dll) → caption + library.
@@ -2593,16 +2577,9 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     // Prioritas: filename gaya Samehadaku (TSSDK-S2-P2-1...) → season/part/episode + provider samehadaku
     const gdSame = parseSamehadakuFilename(fileName);
     let title = customTitle;
-    if (!title && sourcePattern) {
-      const matched = await findMediaByPattern(sourcePattern).catch(() => null);
-      if (matched) title = matched.nama;
-    }
-    if (!title && gdSame?.short) {
-      // short "tssdk" → pattern "kuronime-tssdk" / "samehadaku-tssdk" di DB
-      for (const prov of ['kuronime', 'samehadaku']) {
-        const m = await findMediaByPattern(`${prov}-${gdSame.short}`).catch(() => null);
-        if (m) { title = m.nama; break; }
-      }
+    if (!title) {
+      const { title: detected } = await detectTitleFromFilename(fileName);
+      if (detected) title = detected;
     }
     const part = extractPartFromFilename(fileName);
     const seasonEpLabel = gdSame
