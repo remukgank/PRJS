@@ -1,121 +1,118 @@
-# Dramafren Scraper + Telegram Bot
+# PRJS — Scraper + Telegram Bot
 
-Node.js scraper + Telegram bot untuk mengekstrak dan download video dari **dramafren.org** dan semua subdomain-nya.
+Scraper Node.js + Telegram bot untuk download konten dan kirim ke **Telegram** & **Vidara**. Mendukung drama pendek multi-provider, anime, dan file hosting.
 
-## Supported Subdomains
+## Supported Sources
 
-`shortmax`, `flickreels`, `goodshort`, `dramawave`, `dramabox`, `starshort`, `dramapops`, `stardusttv`, `microdrama`, `reelshort`, `flextv`, `dramabite`, `netshort`, `kalostv`, `tvseries`, `moboreels`, `idrama`, `reelfren`, `shortwave`
-
-## Setup
-
-### 1. Install dependencies
-
-```bash
-cd scraper
-npm install
-```
-
-### 2. Start FlareSolverr (Cloudflare bypass)
-
-```bash
-docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
-```
-
-### 3. Start Local Bot API Server (optional, for >50MB upload)
-
-```bash
-bash scraper/start-local-api.sh
-```
-
-### 4. Set environment variables
-
-```bash
-export TELEGRAM_BOT_TOKEN="your-bot-token"
-export TELEGRAM_API_PORT=9091        # optional: Local Bot API port
-export TELEGRAM_API_ID="your-api-id" # for local API
-export TELEGRAM_API_HASH="your-hash" # for local API
-```
-
-### 5. Run the bot
-
-```bash
-node scraper/bot.js
-```
-
-## Usage
-
-### As Module
-
-```js
-const { getVideoUrl, getAllEpisodes } = require('./index');
-
-// Get video URL for one episode (auto fallback to sv=2)
-const result = await getVideoUrl('goodshort', '31001380498', '', 1, 1, 'id');
-// { title, episode, server, videoUrl, subtitleUrl }
-
-// Get all episodes with metadata
-const { episodes, meta } = await getAllEpisodes('goodshort', '31001380498', '', 'id');
-// episodes: [{ ep: 1, urlEp: 0, url: "..." }, ...]
-// meta: { title, synopsis, poster }
-```
-
-### Telegram Bot Commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Show help |
-| Send drama link | Show episodes + download options |
-| Send watch link | Scrape video URL directly |
-
-### Test
-
-```bash
-npm test          # smoke test
-npm run test:all  # test all subdomains
-```
+| Kategori | Provider |
+|----------|----------|
+| **Reelfren** (34 provider) | `melolo`, `sereal`, `pinedrama`, `shorten`, `happyshort`, `vigloo`, `rapidtv`, `raptdrama`, `cubetv`, `joyreels`, `anyreel`, `minitv`, `bstation`, `golddrama`, `reelife`, `reelshort`, `dramawave`, `dramanova`, `kalostv`, `vibeshort`, `freereels`, `wetv`, `storyreel`, `moviebox`, `movieboxshorts`, `bonustv`, `moboreels`, `netshort`, `mydrama`, `flareflow`, `playlet`, `shortmax`, `flextv`, `dramabox` |
+| **Dramafren** | `stardusttv`, `shortmax`, `flickreels`, `dramawave`, `reelshort`, dll |
+| **Anime** | `samehadaku` (via `v2.samehadaku.how`, Worker relay) |
+| **File hosting** | `gofile.io`, `pixeldrain.com`, `filedon.co`, `drive.google.com`, `uc-share.com` |
 
 ## Architecture
 
 ```
 scraper/
-├── bot.js              # Telegram bot (progress tracker, HTML mode)
-├── index.js            # Public API (getVideoUrl, getAllEpisodes)
-├── downloader.js       # ffmpeg download + merge (iOS compatible)
-├── dramafren.js        # FlareSolverr session scraper
-├── start-local-api.sh  # Local Bot API Server launcher
-├── test.js             # Smoke test
-├── test-all-subdomains.js  # Test all subdomains
-└── package.json
+├── bot.js                 # Telegram bot (5610 baris, 4 handler utama)
+│   ├── safeHandler wrapper (H1/M4)
+│   ├── handleGofileUrl / handlePixeldrainUrl / handleFiledonUrl / handleGdriveUrl
+│   └── library, VIP, AI, Vidara integration
+├── reelfren.js            # Multi-provider aggregator (api.dramafren.org)
+├── samehadaku.js          # Anime via Cloudflare Worker relay
+├── downloader.js          # aria2c + ffmpeg (download, merge, remux)
+├── dramafren.js           # Session rotation & FlareSolverr
+├── db.js                  # PostgreSQL (Neon) — media, media_parts, file_cache, dll
+├── services/
+│   ├── vidaraService.js   # Upload ke Vidara (batch, HLS)
+│   ├── vipService.js      # VIP membership
+│   ├── vipPackages.js     # Pricing
+│   └── saweriaService.js  # Donasi Saweria + QR
+├── utils/
+│   └── rateLimiter.js
+├── vidara.js / vidara-uploader.js
+├── gofile.js / pixeldrain.js / filedon.js / gdrive.js / ucdrive.js
+└── test*.js               # Smoke & subdomain tests
 ```
 
-## Key Features
+**Data flow:** `Telegram link → parse URL → Worker/API → download (aria2c) → upload Telegram (Local API, 2GB) / Vidara → save library (PostgreSQL)`
 
-| Feature | Implementation |
-|---------|---------------|
-| Cloudflare bypass | FlareSolverr Docker (sessionless) |
-| Video URL intercept | Multi-strategy: decode base64 hash64, parse `videoServers` JSON, direct URL, video element src |
-| iOS compatibility | `-c copy` download, metadata (width/height/duration) via sendVideo |
-| Anti-duplicate | Skip download/merge if file already exists |
-| Progress tracker | Spinner animation + timer in Telegram |
-| Episode parsing | Handle ep=0 (goodshort) and ep=1 (standard) patterns |
-| Download location | `~/workspace/downloads/` |
+## Setup
 
-## Speed
+### 1. Install
+```bash
+cd scraper && npm install
+```
 
-| Operation | Time |
-|-----------|------|
-| Get episodes (non-CF) | ~400ms |
-| Get episodes (CF) | ~18s (first), ~1.5s (subsequent) |
-| Download episode | ~3-35s (depends on CDN) |
-| Merge 10 episodes | ~3-5s |
+### 2. FlareSolverr (Cloudflare bypass)
+```bash
+bash scraper/start-flaresolverr.sh   # native, fallback docker restart flaresolverr
+# port 8191 → external 3002
+```
 
-## Environment Variables
+### 3. Local Bot API Server (opsional, untuk >50MB)
+```bash
+bash scraper/start-local-api.sh   # port 9091 → external 9000
+```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token |
-| `TELEGRAM_API_PORT` | No | Local Bot API port (enables 2GB upload) |
-| `TELEGRAM_API_ID` | No | Telegram API ID (for local API) |
-| `TELEGRAM_API_HASH` | No | Telegram API hash (for local API) |
-| `FLARESOLVERR_URL` | No | FlareSolverr URL (default: http://127.0.0.1:8191) |
-| `FFMPEG_PATH` | No | Custom ffmpeg path |
+### 4. Environment Variables (28 vars, critical: `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`, `ADMIN_USER_IDS`)
+
+| Variable | Required | Deskripsi |
+|----------|----------|-----------|
+| `TELEGRAM_BOT_TOKEN` | Yes | Token bot |
+| `DATABASE_URL` | Yes | Neon PostgreSQL |
+| `ADMIN_USER_IDS` | Yes | ID admin (comma-separated) |
+| `TELEGRAM_API_PORT` | No | Local API port (2GB upload) |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | No | Untuk Local API |
+| `FLARESOLVERR_URL` | No | Default `http://127.0.0.1:8191` |
+| `GOFILE_TOKEN` | No | GoFile account token |
+| `GOFILE_WORKER_URL` | No | Cloudflare Worker relay (samehadaku) |
+| `RF_GROUP_ID` / `RF_GROUP_ENABLED` | No | Forum topic mirror per provider |
+| `VIDARA_DOMAIN` / `VIDARA_API` | No | Vidara upload |
+| `SAWERIA_USERNAME` / `SAWERIA_USER_ID` | No | Donasi |
+| `AI_CHAT_*` | No | Rate limit AI chat |
+
+Lihat `scraper/bot.js:213-222, 305-306, 5395` untuk daftar lengkap.
+
+### 5. Run
+```bash
+node scraper/bot.js
+# atau via pm2: pm2 start scraper/bot.js --name bot
+# atau via Replit workflow: PRJS → Telegram Bot
+```
+
+## Usage
+
+### Telegram Bot
+| Command | Deskripsi |
+|---------|-----------|
+| `/start` | Menu utama |
+| `/cari <nama>` | Cari di library |
+| Kirim link drama/anime | Tampilkan episode + opsi download |
+| Kirim link file hosting | Download & kirim file |
+
+**Inline keyboards:** Katalog, Cari, Library parts, VIP, Admin panel, dll. Callback data `act:*`, `lib_menu:*`, `sam_*`, dll.
+
+### Library
+- Kategori: Drama (`reelfren_*`, `stardusttv`) vs Anime (`anime:*`)
+- Simpan per part/episode ke `media` + `media_parts` (PostgreSQL)
+
+## Development
+
+### Test
+```bash
+npm test          # smoke test (scraper/test.js)
+npm run test:all  # test all subdomains
+node --check scraper/bot.js   # syntax check
+```
+
+### Audit Log
+- Format: `docs/audit/YYYY-MM-DD-judul-singkat.md` (lihat `.opencode/skills/audit-workflow/SKILL.md`)
+- Batch flow: **propose → approve → implement → test (`node --check` + functional) → log → restart → commit**
+
+### Batch History (2026-09)
+- Batch A: `safeHandler` top-level try/catch (H1/M4)
+- Batch B: `findMediaByPattern` case-insensitive (H3)
+- Batch C: dedup helper `detectTitleFromFilename` (H2)
+- Batch D: README update + cleanup legacy files
