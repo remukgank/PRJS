@@ -1,7 +1,6 @@
 { pkgs }:
 {
   deps = [
-    pkgs.systemd
     pkgs.opencode
     pkgs.speedtest-cli
     pkgs.chromium
