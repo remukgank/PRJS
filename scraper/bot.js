@@ -294,6 +294,10 @@ _downloadHandlers.initDownload({
   sendVideo, sendAudio, sendDocument,
   Progress, RichProgress,
 });
+
+// E5a: wire handlers/library via ctx injection
+const _libraryHandlers = require('./handlers/library');
+_libraryHandlers.initLibrary({ bot, isAdmin });
 const sessions = new Map();
 const aiChatSessions = new Map();
 const pendingDownloads = new Map(); // chatId → { url, handler, fileName }
@@ -916,132 +920,6 @@ function mainActionKeyboard() {
 const { cacheSlug, resolveSlug, cacheUrl, resolveUrl } = require('./lib/urlCache');
 // ─── Library keyboards ────────────────────────────────────────────────────────
 
-function librarySearchResultKeyboard(dramas) {
-  const rows = dramas.map(d => {
-    const isAnime = d.slug.startsWith('anime:');
-    const unit = isAnime ? 'episode' : 'part';
-    const epInfo = d.total_eps > 0 ? `${d.total_eps} ep` : `${d.lib_parts} ${unit}`;
-    const tag = isAnime ? '🎌 Anime' : '🎬 Drama';
-    const icon = isAnime ? '🎌' : '🎬';
-    const label = d.lib_parts > 0
-      ? `${icon} ${d.nama} (${epInfo}) · ${tag}`
-      : `${icon} ${d.nama} · ${tag}`;
-    return [{ text: truncateText(label), callback_data: `lib_menu:${cacheSlug(d.slug)}` }];
-  });
-  rows.push([{ text: '⬅️ Kembali', callback_data: 'act:lib_search' }]);
-  return { inline_keyboard: rows };
-}
-
-async function buildLibraryKeyboard(kat = 'all', page = 1, all = null) {
-  all = all || await listAllLibrary();
-  const isAnime = (slug) => slug.startsWith('anime:');
-  const list = kat === 'all'
-    ? all
-    : all.filter(d => (kat === 'anime') === isAnime(d.slug));
-  const perPage = 20;
-  const totalPages = Math.max(1, Math.ceil(list.length / perPage));
-  const safePage = Math.min(Math.max(1, page || 1), totalPages);
-  const start = (safePage - 1) * perPage;
-  const slice = list.slice(start, start + perPage);
-
-  const dramaCount = all.filter(d => !isAnime(d.slug)).length;
-  const animeCount = all.length - dramaCount;
-
-  const rows = slice.map(d => {
-    const anime = isAnime(d.slug);
-    const unit = anime ? 'episode' : 'part';
-    const epInfo = d.total_eps > 0 ? `${d.total_eps} ep` : '';
-    const label = `${anime ? '🎌' : '🎬'} ${d.nama} (${d.lib_parts} ${unit}${epInfo ? `, ${epInfo}` : ''})`;
-    return [{ text: truncateText(label), callback_data: `lib_menu:${cacheSlug(d.slug)}` }];
-  });
-  if (!rows.length) {
-    const emptyLabel = kat === 'anime' ? 'Tidak ada anime' : (kat === 'drama' ? 'Tidak ada drama' : 'Kosong');
-    rows.push([{ text: `📭 ${emptyLabel}`, callback_data: 'noop' }]);
-  }
-
-  const filterRow = [
-    { text: `${kat === 'drama' ? '✅' : ''}🎬 Drama`, callback_data: 'act:lib_list_c:drama:1' },
-    { text: `${kat === 'all' ? '✅' : ''}👍 Semua`, callback_data: 'act:lib_list_c:all:1' },
-    { text: `${kat === 'anime' ? '✅' : ''}🎌 Anime`, callback_data: 'act:lib_list_c:anime:1' },
-  ];
-
-  if (list.length > 0) {
-    const nav = [];
-    if (safePage > 1) nav.push({ text: '⬅️ Prev', callback_data: `act:lib_list_c:${kat}:${safePage - 1}` });
-    nav.push({ text: `${safePage}/${totalPages}`, callback_data: 'noop' });
-    if (safePage < totalPages) nav.push({ text: 'Next ➡️', callback_data: `act:lib_list_c:${kat}:${safePage + 1}` });
-    rows.push(nav);
-  }
-  rows.unshift(filterRow);
-
-  let header;
-  if (kat === 'drama') header = `🎬 <b>Daftar Drama</b> — ${list.length} judul (🎌 Anime: ${animeCount})`;
-  else if (kat === 'anime') header = `🎌 <b>Daftar Anime</b> — ${list.length} judul (🎬 Drama: ${dramaCount})`;
-  else header = `📚 <b>Daftar Library</b> — 🎬 Drama: ${dramaCount} · 🎌 Anime: ${animeCount}`;
-  return { header, rows };
-}
-
-function libraryPartsKeyboard(slug, parts, isAdminUser = false) {
-  const perPage = 20;
-  const totalPages = Math.ceil(parts.length / perPage);
-  const page = 1;
-  const start = (page - 1) * perPage;
-  const slice = parts.slice(start, start + perPage);
-  const isAnime = slug.startsWith('anime:');
-  const unit = isAnime ? 'Ep' : 'Part';
-  const sid = cacheSlug(slug);
-  const rows = [];
-  for (let i = 0; i < slice.length; i += 5) {
-    rows.push(
-      slice.slice(i, i + 5).map(p => ({
-        text: `${unit} ${p.part}`,
-        callback_data: `lib_part:${sid}:${p.part}`,
-      }))
-    );
-  }
-  if (totalPages > 1) {
-    const nav = [];
-    nav.push({ text: `${page}/${totalPages}`, callback_data: 'noop' });
-    nav.push({ text: 'Next ➡️', callback_data: `lib_menu:${sid}:p:2` });
-    rows.push(nav);
-  }
-  if (isAdminUser) {
-    rows.push([{ text: '🔄 Replace', callback_data: `lib_replace:${sid}` }]);
-    rows.push([{ text: '➕ Tambah', callback_data: `lib_add:${sid}` }]);
-  }
-  rows.push([{ text: '⬅️ Kembali', callback_data: 'act:lib_list' }]);
-  return { inline_keyboard: rows };
-}
-
-function libraryPartsPageKeyboard(slug, parts, page, isAdminUser = false) {
-  const perPage = 20;
-  const totalPages = Math.ceil(parts.length / perPage);
-  const start = (page - 1) * perPage;
-  const slice = parts.slice(start, start + perPage);
-  const isAnime = slug.startsWith('anime:');
-  const unit = isAnime ? 'Ep' : 'Part';
-  const sid = cacheSlug(slug);
-  const rows = [];
-  for (let i = 0; i < slice.length; i += 5) {
-    rows.push(
-      slice.slice(i, i + 5).map(p => ({
-        text: `${unit} ${p.part}`,
-        callback_data: `lib_part:${sid}:${p.part}`,
-      }))
-    );
-  }
-  const nav = [];
-  if (page > 1) nav.push({ text: '⬅️ Prev', callback_data: `lib_menu:${sid}:p:${page - 1}` });
-  nav.push({ text: `${page}/${totalPages}`, callback_data: 'noop' });
-  if (page < totalPages) nav.push({ text: 'Next ➡️', callback_data: `lib_menu:${sid}:p:${page + 1}` });
-  rows.push(nav);
-  if (isAdminUser) {
-    rows.push([{ text: '🔄 Replace', callback_data: `lib_replace:${sid}` }]);
-    rows.push([{ text: '➕ Tambah', callback_data: `lib_add:${sid}` }]);
-  }
-  rows.push([{ text: '⬅️ Kembali', callback_data: 'act:lib_list' }]);
-  return { inline_keyboard: rows };
-}
 
 function titlePromptKeyboard(fileName, url, detectedTitle = null) {
   const label = detectedTitle
@@ -2820,7 +2698,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (text === '📚 Katalog') {
       const all = await listAllLibrary();
       if (!all.length) return bot.sendMessage(chatId, '📭 Library kosong.', { reply_markup: breadcrumbKeyboard(isAdminUser) });
-      const { header, rows } = await buildLibraryKeyboard('all', 1, all);
+      const { header, rows } = await _libraryHandlers.buildLibraryKeyboard('all', 1, all);
       rows.push([{ text: '🔍 Cari', callback_data: 'act:lib_search' }, { text: '🏠 Menu', callback_data: 'act:main_menu' }]);
       return bot.sendMessage(chatId, header, { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
     }
@@ -2873,7 +2751,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     });
     return bot.sendMessage(chatId, `🔍 <b>Hasil pencarian:</b>\n\n${lines.join('\n')}`, {
       parse_mode: 'HTML',
-      reply_markup: librarySearchResultKeyboard(dramas),
+      reply_markup: _libraryHandlers.librarySearchResultKeyboard(dramas),
     });
   }
 
@@ -3651,49 +3529,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   // ─── Library callbacks ────────────────────────────────────────────────────────
 
   if (data.startsWith('lib_menu:')) {
-    let slugId, page;
-    const pMatch = data.match(/^lib_menu:(.+):p:(\d+)$/);
-    if (pMatch) {
-      slugId = pMatch[1];
-      page = parseInt(pMatch[2]) || 1;
-    } else {
-      slugId = data.slice(9);
-      page = 1;
-    }
-    const slug = resolveSlug(slugId);
-    if (!slug) return bot.answerCallbackQuery(query.id, { text: '⚠️ Session expired — buka ulang', show_alert: true });
-    const parts = await listPartsWithFile(slug);
-    if (!parts.length) return bot.answerCallbackQuery(query.id, { text: '⚠️ Belum ada part di library' });
-    const media = await getMediaBySlug(slug);
-    const dramaName = media?.nama || slug.replace(/^[^:]+:/, '');
-    const isAnime = slug.startsWith('anime:');
-    const unit = isAnime ? 'episode' : 'part';
-    const perPage = 20;
-    const totalPages = Math.ceil(parts.length / perPage);
-    const isAdminUserLib = isAdmin(query.from.id);
-    const kb = page > 1 ? libraryPartsPageKeyboard(slug, parts, page, isAdminUserLib) : libraryPartsKeyboard(slug, parts, isAdminUserLib);
-    const synopsis = media?.synopsis ? media.synopsis.slice(0, 380) + (media.synopsis.length > 380 ? '…' : '') : '';
-    const escSyn = synopsis ? synopsis.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
-    const provider = slug.split(':')[0].replace('reelfren_', '');
-    const katTag = isAnime ? '🎌 Anime' : '🎬 Drama';
-    const caption = [`<b>${dramaName}</b> — ${katTag}`, `📡 Provider: <code>${provider}</code>`, '', escSyn, '', `📁 ${parts.length} ${unit} tersedia di library`].filter(Boolean).join('\n');
-    // Coba kirim poster jika ada (page 1 saja)
-    if (page === 1 && (media?.poster_file_id || media?.poster_url)) {
-      try {
-        if (media.poster_file_id) {
-          await bot.sendPhoto(chatId, media.poster_file_id, { caption, parse_mode: 'HTML', reply_markup: kb });
-        } else {
-          await bot.sendPhoto(chatId, media.poster_url, { caption, parse_mode: 'HTML', reply_markup: kb });
-        }
-        await bot.answerCallbackQuery(query.id).catch(() => {});
-        await bot.deleteMessage(chatId, msgId).catch(() => {});
-        return;
-      } catch {}
-    }
-    return bot.editMessageText(
-      caption,
-      { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: kb }
-    ).catch(() => {});
+    return _libraryHandlers.handleLibMenu({ chatId, msgId, query, data });
   }
 
   if (data.startsWith('lib_part:')) {
@@ -4078,7 +3914,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         try { await bot.editMessageText('📭 Library kosong.', { chat_id: chatId, message_id: msgId }); } catch { await bot.sendMessage(chatId, '📭 Library kosong.'); }
         return;
       }
-      const { header, rows } = await buildLibraryKeyboard(kat, page, all);
+      const { header, rows } = await _libraryHandlers.buildLibraryKeyboard(kat, page, all);
       rows.push([{ text: '⬅️ Kembali', callback_data: 'act:back_main' }]);
       try {
         await bot.editMessageText(header, { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
