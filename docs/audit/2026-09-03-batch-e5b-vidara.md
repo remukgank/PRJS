@@ -23,7 +23,7 @@ Pindahkan dari `scraper/bot.js` ke `scraper/handlers/vidara.js` via ctx injectio
 - `node --check scraper/bot.js`, `scraper/handlers/vidara.js` — lulus
 - **Functional test (mock):** guard tanpa init throw jelas ✓; init menerima `vidaraBusy` custom ✓
 - **Startup pm2 dari branch:** `Bot running`, `Polling started`, `Database tables initialized`, tidak ada `Unhandled` baru ✓
-- **Live test 1x `actionVidaraPerEp` (wajib sebelum merge):** belum dilakukan — menunggu trigger dari Telegram
+- **Live test (wajib sebelum merge):** ✅ LOLOS — batch Vidara 43/43 episode (`Ciuman di Sisik Naga`, netshort) selesai via kode branch E5b: `✅ 43 ok · ❌ 0 gagal`, link `vidara.so/e/...` valid per episode (Ep 10-29 terverifikasi), tidak ada `Unhandled`/`ERROR` baru. Catatan: sempat ditemukan bug `saveVidaraUpload is not defined` dari live test awal → di-fix (tambah import) di commit terpisah dalam branch yang sama sebelum tes ulang lolos.
 
 ## Rollback
 
