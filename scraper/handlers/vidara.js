@@ -4,7 +4,7 @@ const fs = require('fs');
 const { logger } = require('../logger');
 const { getVideoUrl, destroySession } = require('../index');
 const { getVideoUrlReelFren } = require('../reelfren');
-const { getVidaraActiveDomain } = require('../db');
+const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat } = require('../services/vidaraService');
 const V = require('../vidara-uploader');
 
