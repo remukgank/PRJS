@@ -2,6 +2,7 @@
 const path = require('path');
 const { logger } = require('../logger');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile } = require('../gofile');
+const { cacheUrl } = require('../lib/urlCache');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('../pixeldrain');
 const { isFiledonUrl, resolveFiledonFile } = require('../filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../gdrive');
@@ -764,4 +765,24 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   }
 }
 
-module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl };
+async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo) {
+  const titleArg = sameInfo
+    ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
+    : null;
+  const backKb = { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${sameInfo ? cacheUrl(episodeUrl) : 'x'}` }]] };
+  const url = servers?.[server];
+  if (!url) {
+    return _ctx.bot.sendMessage(chatId, `⚠️ Server ${server} tidak tersedia utk episode ini.`, { reply_markup: backKb }).catch(() => {});
+  }
+  try {
+    if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
+    if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg);
+    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg);
+    return _ctx.bot.sendMessage(chatId, `⚠️ Server ${server} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
+  } catch (err) {
+    logger.warn({ server, err: err.message }, 'sam server gagal — tidak auto-coba lain (hormat pilihan user)');
+    await _ctx.bot.sendMessage(chatId, `⚠️ ${server} gagal (${err.message.slice(0, 80)})\n\nKelik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
+  }
+}
+
+module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, downloadSamehadakuFile };
