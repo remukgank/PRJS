@@ -4860,7 +4860,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
-    return downloadSamehadakuFile(chatId, episodeUrlG, server, serversAll, sameInfoG);
+    await downloadSamehadakuFile(chatId, episodeUrlG, server, serversAll, sameInfoG);
+    // Setelah download samehadaku selesai, tampilkan tombol kembali ke list episode (UX)
+    if (sameInfoG?.slug) {
+      const animeUrlBack = `https://v2.samehadaku.how/anime/${sameInfoG.slug}/`;
+      await bot.sendMessage(chatId, `⬅️ Kembali ke list episode?`, {
+        reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(animeUrlBack)}` }]] },
+      }).catch(() => {});
+    }
+    return;
   }
 
   // ─── Title prompt callbacks ───────────────────────────────────────────────────
