@@ -112,15 +112,12 @@ export default {
             if (!episodes.find((e) => e.ep === num)) episodes.push({ ep: num, url: href.startsWith("http") ? href : new URL(href, target).href, title });
           }
           episodes.sort((a, b) => a.ep - b.ep);
-          if (!episodes.length) {
-            return new Response(JSON.stringify({ ok: false, message: "no episodes found (anime page)", htmlSnippet: html.slice(0, 2000) }), {
-              status: 404,
+          if (episodes.length) {
+            return new Response(JSON.stringify({ ok: true, type: "anime", episodes }), {
               headers: { "Content-Type": "application/json", ...cors },
             });
           }
-          return new Response(JSON.stringify({ ok: true, type: "anime", episodes }), {
-            headers: { "Content-Type": "application/json", ...cors },
-          });
+          // Movie/single — no episode links, fall through to parse download blocks below
         }
         // Episode page: Parse download-eps blocks: <li><strong>FULLHD</strong> <span><a href="...gofile...">...</a>
         const qualityOrder = ["4K", "FULLHD", "MP4HD", "480p", "360p"];

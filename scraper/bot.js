@@ -27,6 +27,10 @@ const fs = require('fs');
 const axios = require('axios');
 const { logger } = require('./logger');
 
+function stripHtml(s) {
+  return String(s || '').replace(/<[^>]*>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
+}
+
 function isUcDriveUrl(text) {
   return /(?:uc-share\.com|drive\.ucweb\.com)\/s\/[A-Za-z0-9]+/.test(text);
 }
@@ -253,6 +257,19 @@ async function getOrCreateTopic(provider) {
   return topic.message_thread_id;
 }
 
+function isStaleTopicError(err) {
+  return /message thread not found/i.test(err?.message || '') || /thread not found/i.test(err?.message || '');
+}
+
+function evictStaleTopic(provider) {
+  if (reelfrenTopics.has(provider)) {
+    const oldId = reelfrenTopics.get(provider);
+    reelfrenTopics.delete(provider);
+    saveReelfrenTopics();
+    logger.warn({ provider, oldThreadId: oldId }, 'Stale topic evicted dari mapping');
+  }
+}
+
 async function sendToProviderTopic(provider, caption, posterPath) {
   if (!RF_GROUP_ENABLED || !RF_GROUP_ID) return;
   try {
@@ -264,6 +281,18 @@ async function sendToProviderTopic(provider, caption, posterPath) {
       await bot.sendMessage(RF_GROUP_ID, caption, base);
     }
   } catch (err) {
+    if (isStaleTopicError(err)) {
+      evictStaleTopic(provider);
+      try {
+        const newThreadId = await getOrCreateTopic(provider);
+        const base2 = { message_thread_id: newThreadId, parse_mode: 'HTML' };
+        if (posterPath) await bot.sendPhoto(RF_GROUP_ID, posterPath, { ...base2, caption });
+        else await bot.sendMessage(RF_GROUP_ID, caption, base2);
+        return;
+      } catch (err2) {
+        logger.warn({ provider, err: err2.message }, 'Retry kirim ke topic baru gagal');
+      }
+    }
     logger.warn({ provider, err: err.message }, 'Kirim ke topic grup gagal');
   }
 }
@@ -280,6 +309,17 @@ async function sendToTopicVideo(provider, filePath, opts = {}) {
     logger.info({ provider, threadId }, 'Video terkirim ke topic grup');
     return result;
   } catch (err) {
+    if (isStaleTopicError(err)) {
+      evictStaleTopic(provider);
+      try {
+        const newThreadId = await getOrCreateTopic(provider);
+        const result2 = await sendVideo(RF_GROUP_ID, filePath, { ...opts, message_thread_id: newThreadId });
+        logger.info({ provider, threadId: newThreadId }, 'Video terkirim ke topic baru (retry)');
+        return result2;
+      } catch (err2) {
+        logger.warn({ provider, err: err2.message }, 'Retry kirim video ke topic baru gagal');
+      }
+    }
     logger.warn({ provider, err: err.message }, 'Kirim video ke topic grup gagal');
     return null;
   }
@@ -1601,7 +1641,10 @@ function extractPartFromFilename(fileName) {
   // "tnsrantssdk12-end" → hapus -end biar episode 12 kebaca (bukan 1)
   raw = raw.replace(/-end$/i, '');
   const base = raw;
-  let m = base.match(/\b[Ee][Pp]\s*(\d{1,3})\b/);
+  // Kuronime: "kjny02unc" → episode 2
+  let m = base.match(/\b([a-z]{3,})(\d{2})unc/i);
+  if (m) return Number(m[2]);
+  m = base.match(/\b[Ee][Pp]\s*(\d{1,3})\b/);
   if (m) return Number(m[1]);
   m = base.match(/\b[Ee]pisode\s*(\d{1,3})\b/);
   if (m) return Number(m[1]);
@@ -1639,6 +1682,10 @@ function extractSourcePattern(fileName) {
   normalized = normalized.replace(/-end$/i, '');               // strip -end
   normalized = normalized.replace(/([a-z]{3,})s\d\d{1,2}$/i, '$1');
   normalized = normalized.replace(/([a-z]{3,})\d{2,3}$/i, '$1');
+  // Kuronime uncensored: "kjny02unc"/"kjny03unc" → "kjny" (strip {ep}unc)
+  // Supaya semua episode 1 judul punya source_pattern yang sama (auto-detect karya manual sekali).
+  // (Catatan: "kjny01unc01" sudah ter-strip oleh \d{2,3}$ di atas jadi "kjny01unc", lalu kena regex ini.)
+  normalized = normalized.replace(/([a-z]{2,})\d{1,3}unc$/i, '$1');
   const noEp = normalized.replace(/-$/, '');
   const parts = noEp.split('-');
   const filtered = parts.filter((p, i) => {
@@ -1858,11 +1905,19 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       const pattern = extractSourcePattern(fileName);
       logger.info({ pattern, fileName }, 'Checking source pattern for auto-detect (gofile)');
       if (pattern) {
-        const matched = await findMediaByPattern(pattern);
+        const matched = await findMediaByPattern(pattern).catch(() => null);
         logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result (gofile)');
         if (matched) {
           customTitle = matched.nama;
           logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern (gofile)');
+        }
+      }
+      // Fallback utk file Samehadaku (SHORT-S2-P2-1-...) via gofile: alias short → kuronime/samehadaku pattern
+      const gdSame = parseSamehadakuFilename(fileName);
+      if (!customTitle && gdSame?.short) {
+        for (const prov of ['kuronime', 'samehadaku']) {
+          const m = await findMediaByPattern(`${prov}-${gdSame.short}`).catch(() => null);
+          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSame.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (gofile)'); break; }
         }
       }
     }
@@ -1985,11 +2040,19 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       const pattern = extractSourcePattern(file.name);
       logger.info({ pattern, fileName: file.name }, 'Checking source pattern for auto-detect (gofile share)');
       if (pattern) {
-        const matched = await findMediaByPattern(pattern);
+        const matched = await findMediaByPattern(pattern).catch(() => null);
         logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result (gofile share)');
         if (matched) {
           customTitle = matched.nama;
           logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern (gofile share)');
+        }
+      }
+      // Fallback utk file Samehadaku via gofile share
+      const gdSameShare = parseSamehadakuFilename(file.name);
+      if (!customTitle && gdSameShare?.short) {
+        for (const prov of ['kuronime', 'samehadaku']) {
+          const m = await findMediaByPattern(`${prov}-${gdSameShare.short}`).catch(() => null);
+          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSameShare.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (gofile share)'); break; }
         }
       }
     }
@@ -2188,11 +2251,19 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
       const pattern = extractSourcePattern(fileName);
       logger.info({ pattern, fileName }, 'Checking source pattern for auto-detect');
       if (pattern) {
-        const matched = await findMediaByPattern(pattern);
+        const matched = await findMediaByPattern(pattern).catch(() => null);
         logger.info({ matched: matched?.nama || null, pattern }, 'Pattern match result');
         if (matched) {
           customTitle = matched.nama;
           logger.info({ pattern, matched: matched.nama }, 'Auto-detected title from source pattern');
+        }
+      }
+      // Fallback utk file Samehadaku via pixeldrain
+      const gdSamePix = parseSamehadakuFilename(fileName);
+      if (!customTitle && gdSamePix?.short) {
+        for (const prov of ['kuronime', 'samehadaku']) {
+          const m = await findMediaByPattern(`${prov}-${gdSamePix.short}`).catch(() => null);
+          if (m) { customTitle = m.nama; logger.info({ pattern: `${prov}-${gdSamePix.short}`, matched: m.nama }, 'Auto-detected via samehadaku short (pixeldrain)'); break; }
         }
       }
     }
@@ -3543,7 +3614,24 @@ async function actionVidaraAndTelegramPerEp(chatId, session) {
 
 // ─── Handler: pesan teks ────────────────────────────────────────────────────────
 
-bot.on('message', async (msg) => {
+// Wrapper aman utk async Telegram handler — tangkap error & kasih feedback ke user
+// (fix H1: message/callback_query tadinya async tanpa top-level catch → unhandled rejection tanpa konteks)
+function safeHandler(kind) {
+  return (fn) => async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      const chatId = kind === 'callback' ? args[0]?.message?.chat?.id : args[0]?.chat?.id;
+      logger.error({ err: { message: err.message, stack: err.stack }, chatId, kind }, `Unhandled error in ${kind} handler`);
+      // `bot` adalah const module-scope (dideklarasi di atas) — tersedia saat handler dipanggil
+      try {
+        if (chatId) await bot.sendMessage(chatId, `❌ Error: ${String(err.message || 'unknown').slice(0, 150)}`).catch(() => {});
+      } catch {}
+    }
+  };
+}
+
+bot.on('message', safeHandler('message')(async (msg) => {
   logger.info({ chatId: msg.chat.id, text: msg.text || msg.caption || '', from: msg.from?.username || msg.from?.id, hasMedia: !!(msg.photo || msg.video || msg.document) }, 'Message received');
   const chatId = msg.chat.id;
   const text = msg.text || msg.caption || '';
@@ -4306,7 +4394,10 @@ bot.on('message', async (msg) => {
       return bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
     } catch (err) {
       if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
-      return bot.sendMessage(chatId, `⚠️ Samehadaku gagal: ${err.message.slice(0, 200)}`, { parse_mode: 'HTML' });
+      const samErrMsg = /no episodes found|no FULLHD|no servers/i.test(err.message)
+        ? 'Halaman ini belum tersedia untuk download (film/movie tanpa episode/server)'
+        : stripHtml(err.message).slice(0, 200);
+      return bot.sendMessage(chatId, `⚠️ Samehadaku gagal: ${samErrMsg}`, { parse_mode: 'HTML' });
     }
   }
 
@@ -4446,7 +4537,7 @@ bot.on('message', async (msg) => {
       });
     } catch (err) {
       if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
-      return bot.sendMessage(chatId, `⚠️ Google Drive gagal: ${err.message.slice(0, 150)}`, { parse_mode: 'HTML' });
+      return bot.sendMessage(chatId, `⚠️ Google Drive gagal: ${stripHtml(err.message).slice(0, 150)}`, { parse_mode: 'HTML' });
     }
   }
 
@@ -4566,11 +4657,11 @@ bot.on('message', async (msg) => {
     logger.error({ chatId, subdomain: params.subdomain, err: { message: err.message, stack: err.stack } }, 'Get episodes failed');
     await p.fail(`Gagal: ${err.message.slice(0, 100)}`);
   }
-});
+}));
 
 // ─── Handler: callback_query ────────────────────────────────────────────────────
 
-bot.on('callback_query', async (query) => {
+bot.on('callback_query', safeHandler('callback')(async (query) => {
   const chatId = query.message.chat.id;
   const msgId = query.message.message_id;
   const data = query.data || '';
@@ -5484,7 +5575,7 @@ bot.on('callback_query', async (query) => {
     if (act === 'vt_merge10') return actionVidaraAndTelegramMerge10(chatId, session);
     return;
   }
-});
+}));
 
 bot.on('pre_checkout_query', async (query) => {
   try {

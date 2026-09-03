@@ -18,8 +18,11 @@ function curlJson(method, url, extraHeaders = [], timeoutSec = 30) {
       }
       let json = null;
       try { json = body ? JSON.parse(body) : null; } catch {}
-      if (status >= 400) return reject(new Error(`Worker HTTP ${status}: ${body.slice(0, 100)}`));
-      if (!json) return reject(new Error(`Worker non-JSON: ${body.slice(0, 100)}`));
+      if (status >= 400) {
+        const workerMsg = json?.message || json?.ok === false ? json.message : null;
+        return reject(new Error(workerMsg || `Worker HTTP ${status}`));
+      }
+      if (!json) return reject(new Error(`Worker non-JSON (len=${body.length})`));
       resolve(json);
     });
   });
