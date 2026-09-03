@@ -1929,7 +1929,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     }
 
     const cap = customTitle || cleanCaption(fileName);
-    const goPartInit = sami?.episode ?? extractPartFromFilename(fileName);
+    const goPartInit = sami?.episode ?? parseSamehadakuFilename(fileName)?.episode ?? extractPartFromFilename(fileName);
     const capWithEp = customTitle ? `${cap} — Episode ${goPartInit}` : cap;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
     const rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
@@ -1961,7 +1961,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
 
       // Build caption: Samehadaku prioritas, lalu kuronime Season detect, else generic
       const kurSame = parseKuronimeSeasonEpisode(fileName);
-      const goPart = sami?.episode ?? extractPartFromFilename(fileName);
+      const goPart = sami?.episode ?? parseSamehadakuFilename(fileName)?.episode ?? extractPartFromFilename(fileName);
       let finalCap = cap;
       if (customTitle) {
         if (isSame && sami) {
@@ -2095,7 +2095,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
 
     // Build caption: Samehadaku > kuronime Season > generic Episode
     const kurSame2 = parseKuronimeSeasonEpisode(file.name);
-    const batchPart = sami?.episode ?? extractPartFromFilename(file.name);
+    const batchPart = sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name);
     let finalCap = cap;
     if (customTitle) {
       if (isSame && sami) {
@@ -2276,7 +2276,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
 
     cap = customTitle || cleanCaption(fileName);
     // utk file samehadaku pakai sami.episode (extractPartFromFilename gagal utk format SHORT-S2-N-FULLHD-SAMEHADAKU)
-    const pixPart = sami?.episode ?? extractPartFromFilename(info.name);
+    const pixPart = sami?.episode ?? parseSamehadakuFilename(info.name)?.episode ?? extractPartFromFilename(info.name);
     const capWithEp = customTitle ? `${cap} — Episode ${pixPart}` : cap;
     const cacheInfo = { urlHash, source: 'pixeldrain', fileName };
     rp = await new RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
