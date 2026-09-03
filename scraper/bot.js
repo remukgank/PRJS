@@ -299,6 +299,10 @@ _downloadHandlers.initDownload({
 const _libraryHandlers = require('./handlers/library');
 _libraryHandlers.initLibrary({ bot, isAdmin });
 
+// E5c: wire handlers/admin via ctx injection
+const _adminHandlers = require('./handlers/admin');
+_adminHandlers.initAdmin({ bot, config: { ADMIN_IDS, STAR_PRICE, LOCAL_API_PORT, TOKEN } });
+
 const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan) — dideklarasikan di atas wiring agar initVidara tidak TDZ
 // E5b: wire handlers/vidara via ctx injection
 // NOTE: bot.js dibungkus IIFE — tidak ada hoisting antar-bagian. Referensi ke
@@ -3381,15 +3385,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
   if (act === 'admin_panel') {
     if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
-    const libOn = await getSetting('libsimpan');
-    const aiEp = await getSetting('ai_endpoint');
-    const aiModel = await getSetting('ai_model');
-    const aiKey = await getSetting('ai_api_key');
-    return bot.sendMessage(
-      chatId,
-      `<b>🛠 Admin Panel</b>\n\nKelola bot:`,
-      { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(libOn === 'on', aiEp, aiModel, aiKey) }
-    );
+    return _adminHandlers.handleAdminPanel({ chatId });
   }
 
   if (act === 'ai_endpoint') {
@@ -3664,107 +3660,16 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     ).catch(() => {});
   }
 
-  // ─── Paket VIP: bikin baris keyboard paket untuk QRIS/Stars ───────────────
-
-  function vipPaymentRows(kind) {
-    const rows = [];
-    let cur = [];
-    VIP_PACKAGE_ORDER.forEach((d, i) => {
-      const p = VIP_PACKAGES[d];
-      const mark = d === 30 ? '🔥' : kind === 'qris' ? '⬛' : '⭐';
-      const priceTxt = kind === 'qris' ? `${(p.price / 1000).toFixed(0)}K` : `${VIP_STAR_PRICES[d]}⭐`;
-      cur.push({ text: `${mark} ${p.label} (${priceTxt})`, callback_data: `act:${kind}_pkg_${d}` });
-      if (cur.length === 2 || i === VIP_PACKAGE_ORDER.length - 1) {
-        rows.push(cur);
-        cur = [];
-      }
-    });
-    rows.push([{ text: '🔙 Kembali', callback_data: 'act:vip' }]);
-    return rows;
-  }
-
   if (act === 'vip') {
-    const vipService = require('./services/vipService');
-    const pricing = VIP_PACKAGE_ORDER.map((d) => {
-      const p = VIP_PACKAGES[d];
-      return `• ${p.label} — Rp ${p.price.toLocaleString('id-ID')} / ${VIP_STAR_PRICES[d]}⭐`;
-    }).join('\n');
-    const info = vipService.getVipInfo(query.from.id);
-    const statusText = info
-      ? `✅ <b>Status:</b> VIP aktif — sisa <b>${info.daysLeft} hari</b> (s/d ${info.expireDate})\n\n`
-      : '';
-    const msg = `💎 <b>VIP MEMBERSHIP</b>\n\n${statusText}<b>💰 Paket:</b>\n${pricing}\n\n<b>🛒 Cara:</b>\n1. Pilih paket → QRIS / Stars\n2. Bayar sesuai nominal\n3. VIP aktif otomatis\n\n<i>⚠️ Bayar persis nominal QRIS.</i>`;
-    const rows = [[{ text: '⬛ QRIS', callback_data: 'act:select_payment_qris' }, { text: '⭐ Stars', callback_data: 'act:select_payment_stars' }]];
-    if (info) rows.push([{ text: '➕ Perpanjang VIP', callback_data: 'act:select_payment_qris' }]);
-    rows.push([{ text: '🔙 Kembali', callback_data: 'act:main_menu' }]);
-    const kb = { inline_keyboard: rows };
-    return bot.editMessageText(msg, { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: kb }).catch(() => bot.sendMessage(chatId, msg, { parse_mode: 'HTML', reply_markup: kb }));
+    return _adminHandlers.handleVip({ chatId, msgId, query, mainMenuKeyboard });
   }
 
-  if (act === 'select_payment_qris') {
-    if (!process.env.SAWERIA_USERNAME || !process.env.SAWERIA_USER_ID) {
-      return bot.answerCallbackQuery(query.id, { text: 'QRIS belum dikonfigurasi, hubungi admin', show_alert: true });
-    }
-    const rows = vipPaymentRows('qris');
-    return bot.editMessageText('⬛ <b>QRIS Payment</b>\n\nPilih paket (nominal kelipatan Rp 1.000):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+  if (act === 'select_payment_qris' || act === 'select_payment_stars') {
+    return _adminHandlers.handleSelectPayment({ chatId, msgId, query, act });
   }
 
-  if (act === 'select_payment_stars') {
-    const rows = vipPaymentRows('stars');
-    return bot.editMessageText('⭐ <b>Stars Payment</b>\n\nPilih paket (dibayar via Telegram Stars):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
-  }
-
-  if (act.startsWith('stars_pkg_')) {
-    const days = parseInt(act.split('_')[2]);
-    const stars = VIP_STAR_PRICES[days];
-    const pkg = VIP_PACKAGES[days];
-    if (!stars || !pkg) return bot.answerCallbackQuery(query.id, { text: 'Paket tidak valid', show_alert: true });
-    return sendInvoice(chatId, `💎 VIP ${pkg.label}`, `VIP ${days} hari — aktif otomatis setelah bayar`, `vip:${days}:${query.from.id}`, stars, `VIP ${days} hari`);
-  }
-
-  if (act.startsWith('qris_pkg_')) {
-    const days = parseInt(act.split('_')[2]);
-    if (!process.env.SAWERIA_USERNAME || !process.env.SAWERIA_USER_ID) {
-      return bot.answerCallbackQuery(query.id, { text: 'QRIS belum dikonfigurasi, hubungi admin', show_alert: true });
-    }
-    if (!VIP_PACKAGES[days]) return bot.answerCallbackQuery(query.id, { text: 'Paket tidak valid', show_alert: true });
-    try {
-      const saweriaService = require('./services/saweriaService');
-      const ctx = {
-        from: query.from,
-        chat: { id: chatId },
-        answerCbQuery: (text, opts) => text
-          ? bot.answerCallbackQuery(query.id, Object.assign({ text, show_alert: !!opts?.show_alert }, opts))
-          : bot.answerCallbackQuery(query.id),
-        reply: (html, opts) => bot.sendMessage(chatId, html, opts),
-        replyWithPhoto: (photo, opts) => bot.sendPhoto(chatId, photo, opts),
-        telegram: {
-          deleteMessage: (cid, mid) => bot.deleteMessage(cid, mid),
-          editMessageText: (cid, mid, _inlineId, html, opts) => bot.editMessageText(html, Object.assign({ chat_id: cid, message_id: mid }, opts)),
-          sendMessage: (cid, html, opts) => bot.sendMessage(cid, html, opts),
-        },
-        notify: (html) => ADMIN_IDS.length ? bot.sendMessage(ADMIN_IDS[0], html, { parse_mode: 'HTML' }) : Promise.resolve(),
-      };
-      await saweriaService.startPayment(ctx, query.from.id, days);
-    } catch (e) {
-      logger.error({ err: e.message }, 'QRIS start failed');
-      return bot.sendMessage(chatId, `QRIS ${days} hari — hubungi admin untuk aktivasi.`);
-    }
-    return;
-  }
-
-  if (act.startsWith('saweria_cancel_')) {
-    const donationId = act.replace('saweria_cancel_', '');
-    try {
-      const saweriaService = require('./services/saweriaService');
-      await saweriaService.cancelAndCleanup({
-        telegram: { deleteMessage: (cid, mid) => bot.deleteMessage(cid, mid) },
-      }, donationId);
-      await bot.sendMessage(chatId, '❌ Pembayaran dibatalkan.', { reply_markup: { inline_keyboard: [[{ text: '💎 Menu VIP', callback_data: 'act:vip' }]] } });
-    } catch (e) {
-      logger.warn({ err: e.message }, 'saweria cancel failed');
-    }
-    return;
+  if (act.startsWith('stars_pkg_') || act.startsWith('qris_pkg_') || act.startsWith('saweria_cancel_')) {
+    return _adminHandlers.handlePaymentAction({ chatId, msgId, query, act, mainMenuKeyboard, isAdminUser: isAdmin(query.from.id) });
   }
 
   if (act === 'pay_stars') {
@@ -3797,15 +3702,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 }));
 
 bot.on('pre_checkout_query', async (query) => {
-  try {
-    await makePostRequest('answerPreCheckoutQuery', {
-      pre_checkout_query_id: query.id,
-      ok: true,
-    });
-    logger.info({ queryId: query.id, userId: query.from.id }, 'Pre-checkout approved');
-  } catch (err) {
-    logger.error({ queryId: query.id, err: err.message }, 'Pre-checkout answer failed');
-  }
+  return _adminHandlers.handlePreCheckout(query);
 });
 
 bot.on('polling_error', (err) => {
