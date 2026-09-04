@@ -26,7 +26,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const axios = require('axios');
 const { logger } = require('./logger');
-const { stripHtml, truncateText, cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename } = require('./lib/parser');
+const { stripHtml, truncateText, cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename, buildChunks } = require('./lib/parser');
 const { detectTitleFromFilename } = require('./lib/titleDetect');
 const { sleep, floodRetryMs, initTelegram, apiPost } = require('./lib/telegram');
 const { initProgress, Progress, RichProgress } = require('./lib/progress');
@@ -306,11 +306,13 @@ const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjal
 const _vidaraHandlers = require('./handlers/vidara');
 _vidaraHandlers.initVidara({
   bot,
-  config: { MAX_UPLOAD_MB },
+  config: { MAX_UPLOAD_MB, PART_SEND_DELAY_MS, RF_GROUP_ID, RF_GROUP_ENABLED },
   vidaraBusy,
   get sendVideo() { return sendVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
   Progress, RichProgress, // import const di top (E3b), aman langsung
   get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  get isAdmin() { return isAdmin; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  get sendToTopicVideo() { return sendToTopicVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
 });
 const sessions = new Map();
 const aiChatSessions = new Map();
@@ -1502,21 +1504,6 @@ async function actionPerEpisode(chatId, session) {
 
   await p.done(`${episodes.length} episode selesai`);
   logger.info({ chatId, subdomain, total: episodes.length, mode: 'per_ep' }, 'Per-episode download complete');
-}
-
-// ─── Chunk builder ────────────────────────────────────────────────────────────
-
-function buildChunks(episodes, chunkSize = 10, minLastChunk = 6) {
-  if (episodes.length === 0) return [];
-  const chunks = [];
-  for (let i = 0; i < episodes.length; i += chunkSize) {
-    chunks.push(episodes.slice(i, i + chunkSize));
-  }
-  if (chunks.length > 1 && chunks[chunks.length - 1].length < minLastChunk) {
-    const last = chunks.pop();
-    chunks[chunks.length - 1] = [...chunks[chunks.length - 1], ...last];
-  }
-  return chunks;
 }
 
 // ─── Aksi: gabung per 10 episode ──────────────────────────────────────────────

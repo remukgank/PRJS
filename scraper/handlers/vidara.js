@@ -6,6 +6,9 @@ const { getVideoUrl, destroySession } = require('../index');
 const { getVideoUrlReelFren } = require('../reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat } = require('../services/vidaraService');
+const { buildChunks } = require('../lib/parser');
+const { sleep } = require('../lib/telegram');
+const { fileSizeMb, getVideoInfo } = require('../downloader');
 const V = require('../vidara-uploader');
 
 // ctx: { bot, logger, config: { MAX_UPLOAD_MB }, vidaraBusy, sendVideo, Progress, RichProgress, downloadAndSend }
@@ -205,7 +208,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
           ...(info.width && { width: info.width }),
           ...(info.height && { height: info.height }),
         };
-        const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+        const mirrorToTopic = isReelFren && _ctx.isAdmin(session?.userId) && _ctx.config.RF_GROUP_ENABLED && _ctx.config.RF_GROUP_ID;
         if (sizeMb > _ctx.config.MAX_UPLOAD_MB) {
           rp.note(`⚠️ ${partLabel}: ${sizeMb.toFixed(1)} MB > limit Telegram (${_ctx.config.MAX_UPLOAD_MB}) — hanya upload ke Vidara`);
           logger.warn({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1), limit: _ctx.config.MAX_UPLOAD_MB }, 'vt_merge10 part skipped Telegram — exceeds limit');
@@ -213,7 +216,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         } else {
           try {
             if (mirrorToTopic) {
-              const sendResult = await sendToTopicVideo(provider, mergedFile, options);
+              const sendResult = await _ctx.sendToTopicVideo(provider, mergedFile, options);
               if (sendResult) {
                 tgDone++;
                 rp.note(`📤 ${partLabel} — terkirim ke topic <b>${provider}</b> di grup`);
@@ -241,7 +244,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         try { fs.rmSync(batchWorkDir, { recursive: true, force: true }); } catch {}
       }
 
-      if (ci < chunks.length - 1 && PART_SEND_DELAY_MS > 0) await sleep(PART_SEND_DELAY_MS);
+      if (ci < chunks.length - 1 && _ctx.config.PART_SEND_DELAY_MS > 0) await sleep(_ctx.config.PART_SEND_DELAY_MS);
     }
 
     await rp.done();
@@ -252,7 +255,8 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
     await _ctx.bot.sendMessage(chatId, `📤 <b>${title}</b> — Vidara + Telegram selesai\n✅ Vidara: ${vidDone} batch · ❌ ${vidFail}\n✅ Telegram: ${tgDone} batch · ❌ ${tgFail}\n\n${vidLines.join('\n')}`, { parse_mode: 'HTML' });
   } catch (err) {
     logger.error({ chatId, err: err.message }, 'vt_merge10 outer error');
-    await rp.fail(err.message.slice(0, 100));
+    rp.note(`❌ Error: ${err.message.slice(0, 80)}`);
+    await rp.done();
   } finally {
     _ctx.vidaraBusy.delete(String(chatId));
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
