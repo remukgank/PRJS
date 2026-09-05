@@ -6,16 +6,55 @@ function sleep(ms) {
 
 // Parse flood limit Telegram: "Too Many Requests: retry after N" → N detik (ms)
 function floodRetryMs(err) {
+  const structuredRetryAfter = err?.response?.body?.parameters?.retry_after
+    ?? err?.response?.parameters?.retry_after
+    ?? err?.parameters?.retry_after;
+  if (Number.isFinite(Number(structuredRetryAfter))) return Number(structuredRetryAfter) * 1000;
   const msg = err?.message?.description || err?.message || String(err || '');
   const m = msg.match(/retry after (\d+)/i);
   return m ? Number(m[1]) * 1000 : 0;
 }
 
-// Config holder untuk apiPost — di-init sekali dari bot.js facade
+// Config holder untuk apiPost + sender — di-init sekali dari bot.js facade
 let _config = null;
+let _bot = null;
+const ANSWER_CALLBACK_WRAP_MARK = Symbol.for('prjs.telegram.answerCallbackQueryWrapped');
+const { setCachedFileId: _setCachedFileId } = require('../db');
+
+function wrapAnswerCallbackQuery(bot, sleepFn = sleep) {
+  if (!bot || typeof bot.answerCallbackQuery !== 'function' || bot[ANSWER_CALLBACK_WRAP_MARK]) return;
+
+  const originalAnswerCallbackQuery = bot.answerCallbackQuery.bind(bot);
+  bot.answerCallbackQuery = async (queryId, options) => {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await originalAnswerCallbackQuery(queryId, options);
+      } catch (err) {
+        const waitMs = floodRetryMs(err);
+        if (waitMs <= 0 || attempt >= (_config?.API_MAX_RETRY || 0)) throw err;
+        attempt += 1;
+        logger.warn(
+          { queryId, retryAfterMs: waitMs, attempt, err: err.message },
+          'answerCallbackQuery flood — retry'
+        );
+        await sleepFn(waitMs + 500);
+      }
+    }
+  };
+  Object.defineProperty(bot, ANSWER_CALLBACK_WRAP_MARK, { value: true, enumerable: false });
+}
+
 function initTelegram(config) {
-  // config: { TOKEN, API_BASE, API_HTTP, API_MAX_RETRY }
+  // config: { TOKEN, API_BASE, API_HTTP, API_MAX_RETRY, bot, LOCAL_API_PORT }
   _config = config;
+  if (config.bot) {
+    _bot = config.bot;
+    wrapAnswerCallbackQuery(config.bot);
+  }
+}
+function ensureSender(caller) {
+  if (!_config || !_bot) throw new Error(`lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, ..., bot }) dulu (dari ${caller})`);
 }
 
 // Kirim via apiPost dengan retry saat flood 429 (tunggu retry_after lalu ulang).
@@ -56,4 +95,112 @@ function apiPost(method, payload, _retry) {
   });
 }
 
-module.exports = { sleep, floodRetryMs, initTelegram, apiPost };
+async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
+  ensureSender('sendVideo');
+  const { caption, supports_streaming, duration, width, height, message_thread_id, parse_mode } = opts;
+  const cap = caption ? caption.slice(0, 1024) : undefined;
+  let result;
+  let attempt = 0;
+  for (;;) {
+    try {
+      result = _config.LOCAL_API_PORT
+        ? await apiPost('sendVideo', {
+            chat_id: chatId,
+            video: `file://${filePath}`,
+            caption: cap,
+            parse_mode,
+            supports_streaming,
+            ...(message_thread_id && { message_thread_id }),
+            ...(duration && { duration }),
+            ...(width && { width }),
+            ...(height && { height }),
+          })
+        : await _bot.sendVideo(chatId, filePath, {
+            caption: cap,
+            parse_mode,
+            supports_streaming,
+            ...(message_thread_id && { message_thread_id }),
+            ...(duration && { duration }),
+            ...(width && { width }),
+            ...(height && { height }),
+          });
+      break;
+    } catch (err) {
+      const waitMs = floodRetryMs(err);
+      if (waitMs > 0 && attempt < _config.API_MAX_RETRY) {
+        attempt += 1;
+        logger.warn({ chatId, retryAfterMs: waitMs, attempt, err: err.message }, 'sendVideo flood — retry');
+        await sleep(waitMs + 500);
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (cacheInfo) {
+    const fileId = result?.video?.file_id;
+    if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'video', cacheInfo.fileName).catch(() => {});
+  }
+  return result;
+}
+
+async function sendAudio(chatId, filePath, opts = {}, cacheInfo = null) {
+  ensureSender('sendAudio');
+  const { caption } = opts;
+  const cap = caption ? caption.slice(0, 1024) : undefined;
+  const result = _config.LOCAL_API_PORT
+    ? await apiPost('sendAudio', {
+        chat_id: chatId,
+        audio: `file://${filePath}`,
+        caption: cap,
+      })
+    : await _bot.sendAudio(chatId, filePath, { caption: cap });
+  if (cacheInfo) {
+    const fileId = result?.audio?.file_id;
+    if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'audio', cacheInfo.fileName).catch(() => {});
+  }
+  return result;
+}
+
+async function sendDocument(chatId, filePath, opts = {}, cacheInfo = null) {
+  ensureSender('sendDocument');
+  const { caption } = opts;
+  const cap = caption ? caption.slice(0, 1024) : undefined;
+  const result = _config.LOCAL_API_PORT
+    ? await apiPost('sendDocument', {
+        chat_id: chatId,
+        document: `file://${filePath}`,
+        caption: cap,
+      })
+    : await _bot.sendDocument(chatId, filePath, { caption: cap });
+  if (cacheInfo) {
+    const fileId = result?.document?.file_id;
+    if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'document', cacheInfo.fileName).catch(() => {});
+  }
+  return result;
+}
+
+async function sendPhoto(chatId, filePath, opts = {}) {
+  ensureSender('sendPhoto');
+  const { caption } = opts;
+  const cap = caption ? caption.slice(0, 1024) : undefined;
+  return _config.LOCAL_API_PORT
+    ? await apiPost('sendPhoto', {
+        chat_id: chatId,
+        photo: `file://${filePath}`,
+        caption: cap,
+        parse_mode: 'HTML',
+      })
+    : await _bot.sendPhoto(chatId, filePath, { caption: cap, parse_mode: 'HTML' });
+}
+
+module.exports = {
+  sleep,
+  floodRetryMs,
+  wrapAnswerCallbackQuery,
+  initTelegram,
+  apiPost,
+  sendVideo,
+  sendAudio,
+  sendDocument,
+  sendPhoto,
+};

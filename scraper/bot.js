@@ -72,101 +72,9 @@ const API_HTTP = require(LOCAL_API_PORT ? 'http' : 'https');
 const API_MAX_RETRY = Number(process.env.API_MAX_RETRY) || 3;   // retry maksimal utk flood 429
 const PART_SEND_DELAY_MS = Number(process.env.PART_SEND_DELAY_MS) || 8000; // jeda antar part di merge10
 
-initTelegram({ TOKEN, API_BASE, API_HTTP, API_MAX_RETRY });
 
-async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
-  const { caption, supports_streaming, duration, width, height, message_thread_id, parse_mode } = opts;
-  const cap = caption ? caption.slice(0, 1024) : undefined;
-  let result;
-  let attempt = 0;
-  for (;;) {
-    try {
-      result = LOCAL_API_PORT
-        ? await apiPost('sendVideo', {
-            chat_id: chatId,
-            video: `file://${filePath}`,
-            caption: cap,
-            parse_mode,
-            supports_streaming,
-            ...(message_thread_id && { message_thread_id }),
-            ...(duration && { duration }),
-            ...(width && { width }),
-            ...(height && { height }),
-          })
-        : await bot.sendVideo(chatId, filePath, {
-            caption: cap,
-            parse_mode,
-            supports_streaming,
-            ...(message_thread_id && { message_thread_id }),
-            ...(duration && { duration }),
-            ...(width && { width }),
-            ...(height && { height }),
-          });
-      break;
-    } catch (err) {
-      const waitMs = floodRetryMs(err);
-      if (waitMs > 0 && attempt < API_MAX_RETRY) {
-        attempt += 1;
-        logger.warn({ chatId, retryAfterMs: waitMs, attempt, err: err.message }, 'sendVideo flood — retry');
-        await sleep(waitMs + 500);
-        continue;
-      }
-      throw err;
-    }
-  }
-  if (cacheInfo) {
-    const fileId = result?.video?.file_id;
-    if (fileId) setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'video', cacheInfo.fileName).catch(() => {});
-  }
-  return result;
-}
 
-async function sendAudio(chatId, filePath, opts = {}, cacheInfo = null) {
-  const { caption } = opts;
-  const cap = caption ? caption.slice(0, 1024) : undefined;
-  const result = LOCAL_API_PORT
-    ? await apiPost('sendAudio', {
-        chat_id: chatId,
-        audio: `file://${filePath}`,
-        caption: cap,
-      })
-    : await bot.sendAudio(chatId, filePath, { caption: cap });
-  if (cacheInfo) {
-    const fileId = result?.audio?.file_id;
-    if (fileId) setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'audio', cacheInfo.fileName).catch(() => {});
-  }
-  return result;
-}
-
-async function sendDocument(chatId, filePath, opts = {}, cacheInfo = null) {
-  const { caption } = opts;
-  const cap = caption ? caption.slice(0, 1024) : undefined;
-  const result = LOCAL_API_PORT
-    ? await apiPost('sendDocument', {
-        chat_id: chatId,
-        document: `file://${filePath}`,
-        caption: cap,
-      })
-    : await bot.sendDocument(chatId, filePath, { caption: cap });
-  if (cacheInfo) {
-    const fileId = result?.document?.file_id;
-    if (fileId) setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'document', cacheInfo.fileName).catch(() => {});
-  }
-  return result;
-}
-
-async function sendPhoto(chatId, filePath, opts = {}) {
-  const { caption } = opts;
-  const cap = caption ? caption.slice(0, 1024) : undefined;
-  return LOCAL_API_PORT
-    ? await apiPost('sendPhoto', {
-        chat_id: chatId,
-        photo: `file://${filePath}`,
-        caption: cap,
-        parse_mode: 'HTML',
-      })
-    : await bot.sendPhoto(chatId, filePath, { caption: cap, parse_mode: 'HTML' });
-}
+const { sendVideo, sendAudio, sendDocument, sendPhoto } = require('./lib/telegram'); // E6: sender pindah ke lib
 
 const MAX_UPLOAD_MB = LOCAL_API_PORT ? 2000 : 49;
 
@@ -284,6 +192,7 @@ async function sendToTopicVideo(provider, filePath, opts = {}) {
 loadReelfrenTopics();
 const bot = new TelegramBot(TOKEN, botOptions);
 initProgress({ bot, config: { TOKEN, LOCAL_API_PORT } });
+initTelegram({ TOKEN, API_BASE, API_HTTP, API_MAX_RETRY, bot, LOCAL_API_PORT }); // E6: sender butuh bot + LOCAL_API_PORT
 
 // E4a: wire handlers/download via ctx injection (bukan require ../bot dari handler)
 const _downloadHandlers = require('./handlers/download');
@@ -315,8 +224,8 @@ _vidaraHandlers.initVidara({
   get sendVideo() { return sendVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
   Progress, RichProgress, // import const di top (E3b), aman langsung
   get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
-  get isAdmin() { return isAdmin; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
-  get sendToTopicVideo() { return sendToTopicVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  isAdmin,
+  sendToTopicVideo,
 });
 const sessions = new Map();
 const aiChatSessions = new Map();

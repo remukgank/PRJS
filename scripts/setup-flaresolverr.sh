@@ -37,6 +37,27 @@ if [ ! -d "$SOLVER_DIR/src" ]; then
   rm -rf "$SOLVER_DIR/repo"
 fi
 
+# Keep the upstream runtime from discovering a different Chromium installed by
+# the workspace, and pass the detected major version as an integer to the
+# current undetected-chromedriver API.
+python3 - "$SOLVER_DIR/src/utils.py" <<'PY'
+from pathlib import Path
+import sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+marker = "    # linux pyinstaller bundle\n"
+override = """    configured_path = os.environ.get('CHROME_BIN') or os.environ.get('CHROMIUM_BIN')\n    if configured_path:\n        if not os.path.isfile(configured_path) or not os.access(configured_path, os.X_OK):\n            raise Exception(f'Configured Chrome binary \\"{configured_path}\\" is not executable.')\n        CHROME_EXE_PATH = configured_path\n        return CHROME_EXE_PATH\n"""
+if "configured_path = os.environ.get('CHROME_BIN')" not in s:
+    s = s.replace(marker, override + marker, 1)
+s = s.replace(
+    "version_main = get_chrome_major_version()",
+    "version_main = int(get_chrome_major_version())",
+    1,
+)
+p.write_text(s)
+PY
+
 echo "[setup] Installing python deps (pypi.org)..."
 "$PIP_PKG/bin/pip" install --target="$SOLVER_DIR/pkg" --index-url https://pypi.org/simple -r "$SOLVER_DIR/requirements.txt"
 "$PIP_PKG/bin/pip" install --target="$SOLVER_DIR/pkg" --index-url https://pypi.org/simple undetected-chromedriver
@@ -45,6 +66,7 @@ echo "[setup] Verifying undetected_chromedriver runs..."
 # shellcheck disable=SC1091
 source "$SOLVER_DIR/paths.env"
 export LD_LIBRARY_PATH="$GLIB_LIB:$NSS_LIB:$XCB_LIB:$NSPR_LIB"
+export CHROME_BIN="$CHROMIUM_BIN"
 "$HOME/.local/share/undetected_chromedriver/undetected_chromedriver" --version
 
 echo "[setup] Done. Start with: bash scraper/start-flaresolverr.sh"
