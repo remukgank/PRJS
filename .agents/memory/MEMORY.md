@@ -1,2 +1,3 @@
 - [Replit locale](replit-locale.md) — gunakan locale UTF-8 yang tersedia; locale Indonesia tidak terpasang di image workspace.
 - [FlareSolverr runtime](flaresolverr-runtime.md) — pakai Chromium yang dipilih setup dan integer major version untuk undetected-chromedriver.
+- [Live batch verification](live-batch-verification.md) — validasi batch gabungan memakai progress final, row upload per episode, topic sends, dan workdir yang hilang.
