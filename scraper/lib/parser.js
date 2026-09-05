@@ -110,6 +110,8 @@ function extractSourcePattern(fileName) {
 }
 
 function extractProvider(fileName) {
+  // Grup rilis wibu/winbu (mis. "...-WINBU.ORG.mp4", "...-wibu.tv.mp4") → label wibu.tv
+  if (/win?bu(\.[a-z]{2,})+/i.test(fileName)) return 'wibu.tv';
   // "1080p-nIVJp5U-kuronime-blcktrch04.mp4" → "kuronime"
   const base = fileName.replace(/\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i, '');
   const parts = base.split('-');

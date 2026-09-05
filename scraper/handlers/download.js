@@ -638,7 +638,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
       finalCap = [
         `➧ Judul :- ${titleForCap}`,
         epLineFd,
-        `➧ Provider :- samehadaku`,
+        `➧ Provider :- ${fdSame ? 'samehadaku' : extractProvider(fdName)}`,
       ].join('\n');
     }
     let sendResult = null;
