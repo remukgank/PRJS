@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const {
   initTelegram,
   wrapAnswerCallbackQuery,
-} = require('./lib/telegram');
+} = require('../lib/telegram');
 
 function setupBot(behavior, maxRetry = 2) {
   const calls = [];

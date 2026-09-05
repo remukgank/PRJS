@@ -5,7 +5,7 @@
  * Run: TELEGRAM_BOT_TOKEN=xxx TELEGRAM_CHAT_ID=xxx node scraper/test-rich.js
  */
 
-const { sendRichMessage } = require('./bot');
+const { sendRichMessage } = require('../bot');
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 

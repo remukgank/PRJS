@@ -3,7 +3,7 @@
  * Standalone test untuk ucdrive.js - validate sintaks, require, dan test API call.
  */
 
-const { getShareInfo, resolveDownloadUrl, downloadShare, sanitize } = require('./ucdrive');
+const { getShareInfo, resolveDownloadUrl, downloadShare, sanitize } = require('../providers/ucdrive');
 
 console.log('✅ Module ucdrive.js loaded successfully');
 console.log('✅ Exports tersedia:', {

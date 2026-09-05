@@ -5,7 +5,7 @@
  * Usage: npm run test:all
  */
 
-const { getAllEpisodes, getVideoUrl } = require('./index');
+const { getAllEpisodes, getVideoUrl } = require('../index');
 
 // Known working IDs per subdomain (update when found)
 const TEST_URLS = {

@@ -6,7 +6,7 @@
  *       (from the workspace root, after cd into scraper/ and npm install)
  */
 
-const { getVideoUrl, getAllEpisodes } = require('./index');
+const { getVideoUrl, getAllEpisodes } = require('../index');
 
 const SUBDOMAIN = 'stardusttv';
 const ID = '19712';
