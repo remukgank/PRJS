@@ -6,6 +6,10 @@ function sleep(ms) {
 
 // Parse flood limit Telegram: "Too Many Requests: retry after N" → N detik (ms)
 function floodRetryMs(err) {
+  const structuredRetryAfter = err?.response?.body?.parameters?.retry_after
+    ?? err?.response?.parameters?.retry_after
+    ?? err?.parameters?.retry_after;
+  if (Number.isFinite(Number(structuredRetryAfter))) return Number(structuredRetryAfter) * 1000;
   const msg = err?.message?.description || err?.message || String(err || '');
   const m = msg.match(/retry after (\d+)/i);
   return m ? Number(m[1]) * 1000 : 0;
@@ -14,11 +18,40 @@ function floodRetryMs(err) {
 // Config holder untuk apiPost + sender — di-init sekali dari bot.js facade
 let _config = null;
 let _bot = null;
+const ANSWER_CALLBACK_WRAP_MARK = Symbol.for('prjs.telegram.answerCallbackQueryWrapped');
 const { setCachedFileId: _setCachedFileId } = require('../db');
+
+function wrapAnswerCallbackQuery(bot, sleepFn = sleep) {
+  if (!bot || typeof bot.answerCallbackQuery !== 'function' || bot[ANSWER_CALLBACK_WRAP_MARK]) return;
+
+  const originalAnswerCallbackQuery = bot.answerCallbackQuery.bind(bot);
+  bot.answerCallbackQuery = async (queryId, options) => {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await originalAnswerCallbackQuery(queryId, options);
+      } catch (err) {
+        const waitMs = floodRetryMs(err);
+        if (waitMs <= 0 || attempt >= (_config?.API_MAX_RETRY || 0)) throw err;
+        attempt += 1;
+        logger.warn(
+          { queryId, retryAfterMs: waitMs, attempt, err: err.message },
+          'answerCallbackQuery flood — retry'
+        );
+        await sleepFn(waitMs + 500);
+      }
+    }
+  };
+  Object.defineProperty(bot, ANSWER_CALLBACK_WRAP_MARK, { value: true, enumerable: false });
+}
+
 function initTelegram(config) {
   // config: { TOKEN, API_BASE, API_HTTP, API_MAX_RETRY, bot, LOCAL_API_PORT }
   _config = config;
-  if (config.bot) _bot = config.bot;
+  if (config.bot) {
+    _bot = config.bot;
+    wrapAnswerCallbackQuery(config.bot);
+  }
 }
 function ensureSender(caller) {
   if (!_config || !_bot) throw new Error(`lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, ..., bot }) dulu (dari ${caller})`);
@@ -160,4 +193,14 @@ async function sendPhoto(chatId, filePath, opts = {}) {
     : await _bot.sendPhoto(chatId, filePath, { caption: cap, parse_mode: 'HTML' });
 }
 
-module.exports = { sleep, floodRetryMs, initTelegram, apiPost, sendVideo, sendAudio, sendDocument, sendPhoto };
+module.exports = {
+  sleep,
+  floodRetryMs,
+  wrapAnswerCallbackQuery,
+  initTelegram,
+  apiPost,
+  sendVideo,
+  sendAudio,
+  sendDocument,
+  sendPhoto,
+};
