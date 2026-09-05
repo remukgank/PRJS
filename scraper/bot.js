@@ -89,6 +89,8 @@ const { VIP_PACKAGES, VIP_STAR_PRICES, VIP_PACKAGE_ORDER } = require('./services
 // ─── ReelFren group topic mirror (optional) ──────────────────────────────────
 const RF_GROUP_ID = process.env.RF_GROUP_ID ? Number(process.env.RF_GROUP_ID) : null;
 const RF_GROUP_ENABLED = (process.env.RF_GROUP_ENABLED || 'false') === 'true';
+// Topic anime (single-file: gofile/pixeldrain/filedon/mega/gdrive/uc) — grup sama, thread tetap
+const ANIME_TOPIC_ID = process.env.ANIME_TOPIC_ID ? Number(process.env.ANIME_TOPIC_ID) : 655;
 // Provider yang subtitlenya di-burn-in (hardcode) ke video, mis. cubetv
 const BURN_SUBTITLE_PROVIDERS = (process.env.BURN_SUBTITLE_PROVIDERS || 'cubetv').split(',').map(s => s.trim()).filter(Boolean);
 const RF_TOPICS_FILE = path.join(__dirname, '..', 'data', 'reelfren_topics.json');
@@ -190,6 +192,30 @@ async function sendToTopicVideo(provider, filePath, opts = {}) {
   }
 }
 
+// ─── Anime topic mirror (single-file) ────────────────────────────────────────
+// Kirim kopian file anime ke thread tetap ANIME_TOPIC_ID di grup yang sama.
+// Gagal mirror tidak boleh menggagalkan kirim utama (return null).
+async function sendToAnimeTopic(filePath, opts = {}) {
+  if (!RF_GROUP_ENABLED || !RF_GROUP_ID || !ANIME_TOPIC_ID) return null;
+  try {
+    const base = { ...opts, message_thread_id: ANIME_TOPIC_ID };
+    const ext = String(filePath || '').split('.').pop().toLowerCase();
+    let result;
+    if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].includes(ext)) {
+      result = await sendAudio(RF_GROUP_ID, filePath, { caption: base.caption });
+    } else if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(ext)) {
+      result = await sendVideo(RF_GROUP_ID, filePath, { ...base, supports_streaming: true });
+    } else {
+      result = await sendDocument(RF_GROUP_ID, filePath, { caption: base.caption });
+    }
+    logger.info({ threadId: ANIME_TOPIC_ID }, 'File anime terkirim ke topic grup');
+    return result;
+  } catch (err) {
+    logger.warn({ err: err.message }, 'Kirim file anime ke topic grup gagal');
+    return null;
+  }
+}
+
 loadReelfrenTopics();
 const bot = new TelegramBot(TOKEN, botOptions);
 initProgress({ bot, config: { TOKEN, LOCAL_API_PORT } });
@@ -201,7 +227,7 @@ _downloadHandlers.initDownload({
   bot,
   config: { MAX_UPLOAD_MB },
   samehadakuEpisodeMap,
-  sendVideo, sendAudio, sendDocument, sendRichMessage,
+  sendVideo, sendAudio, sendDocument, sendRichMessage, sendToAnimeTopic,
   Progress, RichProgress,
 });
 

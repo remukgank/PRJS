@@ -40,6 +40,16 @@ function ensureCtx(caller) {
   if (!_ctx || !_ctx.bot) throw new Error(`handlers/download belum di-init — panggil initDownload({ bot, config, samehadakuEpisodeMap, ... }) dulu (dari ${caller})`);
 }
 
+// Mirror kopian file anime ke topic grup (thread tetap). Gagal mirror = warn saja.
+async function mirrorAnimeToTopic(outPath, caption) {
+  try {
+    if (!outPath || typeof _ctx.sendToAnimeTopic !== 'function') return;
+    await _ctx.sendToAnimeTopic(outPath, { caption });
+  } catch (err) {
+    logger.warn({ err: err.message }, 'Mirror anime ke topic gagal');
+  }
+}
+
 async function handleGofileUrl(chatId, url, customTitle = null) {
   ensureCtx('handleGofileUrl');
   const gofileToken = (process.env.GOFILE_TOKEN || '').trim();
@@ -155,6 +165,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           await savePartFileId(slug, goPart, sendResult.video.file_id, Math.round(sizeMb * 1024 * 1024), fileName, finalCap);
         }
       }
+      await mirrorAnimeToTopic(outPath, finalCap);
       rp.updateEpisode(capWithEp, 'done', `${sizeMb.toFixed(1)} MB`);
       rp.done();
     } catch (err) {
@@ -263,9 +274,10 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       } else {
         const sourcePattern = extractSourcePattern(file.name);
         await upsertMedia(slug, cleanTitle || customTitle, 0, url, sourcePattern);
-        await savePartFileId(slug, batchPart, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), file.name, finalCap);
+          await savePartFileId(slug, batchPart, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), file.name, finalCap);
       }
     }
+    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -338,6 +350,7 @@ async function handleGofileBatch(chatId, urls) {
       } else {
         await _ctx.sendDocument(chatId, outPath, { caption }, cacheInfo);
       }
+      await mirrorAnimeToTopic(outPath, caption);
       rp.updateEpisode(ep.ep, 'done', `${sizeMb.toFixed(1)} MB`);
       done++;
     } catch (err) {
@@ -409,6 +422,7 @@ async function handleUcDriveUrl(chatId, text) {
           ...(info.height && { height: info.height }),
         });
         sent++;
+        await mirrorAnimeToTopic(f, cap);
       } catch (e) {
         fail++;
         logger.error({ file: path.basename(f), err: e.message }, 'sendVideo failed');
@@ -558,6 +572,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, part, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), info.name, finalCap);
       }
     }
+    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -659,6 +674,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fdName, finalCap);
       }
     }
+    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -741,6 +757,7 @@ async function handleMegaUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), mfName, finalCap);
       }
     }
+    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -847,6 +864,7 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
         await savePartFileId(slug, epNum, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fileName, finalCap);
       }
     }
+    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
