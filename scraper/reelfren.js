@@ -373,6 +373,8 @@ async function getAllEpisodesReelFren(provider, fullId, lang = 'id', opts = {}) 
 
   let episodes = [];
   let totalEpisodes = result.totalEpisodes;
+  let detailMeta = null;
+  let watchFallbackMeta = null;
 
   if (result.totalEpisodes) {
     for (let ep = 1; ep <= result.totalEpisodes; ep++) {
@@ -382,6 +384,7 @@ async function getAllEpisodesReelFren(provider, fullId, lang = 'id', opts = {}) 
     if (totalEpisodes && totalEpisodes <= 5) {
       try {
         const detailCheck = await getDramaDetail(provider, fullId, lang, opts);
+        detailMeta = detailCheck;
         const detailTotal = detailCheck.totalEpisodes || detailCheck.videos.length || 0;
         if (detailTotal > totalEpisodes) {
           logger.info({ provider, fullId, videoTotal: totalEpisodes, detailTotal }, 'Detail has more episodes, using detail');
@@ -399,6 +402,7 @@ async function getAllEpisodesReelFren(provider, fullId, lang = 'id', opts = {}) 
     // Fallback: /api/detail (no Cloudflare) — gives videos array with episode list
     logger.info({ provider, fullId }, 'Falling back to /api/detail for episode list');
     const detail = await getDramaDetail(provider, fullId, lang, opts);
+    detailMeta = detail;
     if (detail.videos.length) {
       episodes = detail.videos.map(v => ({
         ep: v.episode,
@@ -413,11 +417,20 @@ async function getAllEpisodesReelFren(provider, fullId, lang = 'id', opts = {}) 
       const fallback = await scrapeWatchPage(provider, fullId, lang, opts);
       episodes = fallback.episodes;
       totalEpisodes = fallback.meta.totalEpisodes;
+      watchFallbackMeta = fallback.meta;
     }
   }
 
-  // Enrich with drama page metadata (title, synopsis, poster) — API-first
-  const dramaMeta = await getDramaMeta(provider, fullId, lang, opts);
+  // Enrich metadata only when it has not already been fetched as part of a
+  // fallback. If both APIs are down, calling /api/detail again only repeats
+  // the same 502s and delays the useful failure message.
+  const dramaMeta = detailMeta || watchFallbackMeta
+    ? {
+        ...(detailMeta || {}),
+        ...(watchFallbackMeta || {}),
+        title: watchFallbackMeta?.title || detailMeta?.title || result.title || null,
+      }
+    : await getDramaMeta(provider, fullId, lang, opts);
 
   return {
     episodes,
