@@ -414,7 +414,7 @@ async function handleUcDriveUrl(chatId, text) {
       }
     }
 
-    await _ctx.bot.sendMessage(chatId, `📤 Terkirim ${sent} video (${fail} gagal).`, { parse_mode: 'HTML' }).catch(() => {});
+    await _ctx.sendRichMessage(chatId, `📤 Terkirim ${sent} video (${fail} gagal).`, { format: 'markdown' });
   } catch (err) {
     logger.error({ chatId, shareId, err: { message: err.message, stack: err.stack } }, 'UC Drive handler failed');
     await _ctx.bot.editMessageText(`❌ Gagal: ${err.message.slice(0, 150)}`, {

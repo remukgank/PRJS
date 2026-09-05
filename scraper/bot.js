@@ -200,7 +200,7 @@ _downloadHandlers.initDownload({
   bot,
   config: { MAX_UPLOAD_MB },
   samehadakuEpisodeMap,
-  sendVideo, sendAudio, sendDocument,
+  sendVideo, sendAudio, sendDocument, sendRichMessage,
   Progress, RichProgress,
 });
 
