@@ -19,11 +19,21 @@
  */
 
 const axios = require('axios');
+const { execFile } = require('child_process');
 const { logger } = require('./logger');
 
 const API_BASE = 'https://api.dramafren.org';
 const WEB_BASE = 'https://reelfren.dramafren.org';
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191';
+
+// Validasi stream: probe cepat via ffprobe sebelum download full.
+// Latar: backend provider bisa flip-flop (segmen 200 OK tapi isi sampah,
+// mis. flareflow hls-encrypted tanpa kunci) — tanpa probe, ffmpeg gagal
+// setelah resolve dan tidak ada fallback. Timeout + retry dibatasi agar
+// tidak menghambat episode sehat.
+const PROBE_TIMEOUT_MS = 20000;
+const PROBE_RETRIES = 1; // total percobaan = 1 + PROBE_RETRIES
+const PROBE_BACKOFF_MS = 2000;
 
 /**
  * Parse a ReelFren drama URL into its components.
@@ -211,7 +221,66 @@ async function getReelFrenVideo(provider, fullId, ep, lang = 'id', server = 1, o
     totalEpisodes: data.totalEpisodes || 0,
     locked: data.locked || false,
     server: data.sourceServer ? Number(data.sourceServer) : server,
+    qualityList: Array.isArray(data.qualityList)
+      ? data.qualityList.filter((q) => q && q.url).map((q) => ({ label: q.label || 'unknown', url: q.url, format: q.format || null }))
+      : [],
   };
+}
+
+/**
+ * Probe cepat: apakah URL stream bisa dibuka (playlist + segmen awal valid)?
+ * return true/false, tidak pernah throw. ffprobe dibatasi analyzeduration,
+ * probesize, dan timeout agar fast-fail saat backend kirim sampah.
+ */
+function probeStreamUrl(url, timeoutMs = PROBE_TIMEOUT_MS) {
+  if (!url) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const args = [
+      '-v', 'error',
+      '-analyzeduration', '8M',
+      '-probesize', '8M',
+      '-show_entries', 'format=format_name',
+      '-of', 'default=nw=1:nk=1',
+      url,
+    ];
+    execFile('ffprobe', args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err) return resolve(false);
+      resolve(String(stdout || '').trim().length > 0);
+    });
+  });
+}
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Pilih URL yang valid dari kandidat [default, ...qualityList].
+ * Tiap kandidat di-probe (retry + backoff untuk backend flip-flop).
+ * return { url, label } atau null bila semua gagal.
+ */
+async function pickWorkingUrl(candidates, ctx = {}) {
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!c || !c.url || seen.has(c.url)) continue;
+    seen.add(c.url);
+    for (let attempt = 1; attempt <= 1 + PROBE_RETRIES; attempt++) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await probeStreamUrl(c.url);
+      if (ok) {
+        if (attempt > 1 || c.label !== 'default') {
+          logger.info({ provider: ctx.provider, ep: ctx.ep, label: c.label, attempt }, 'Stream fallback OK');
+        }
+        return c;
+      }
+      logger.warn({ provider: ctx.provider, ep: ctx.ep, label: c.label, attempt }, 'Stream probe gagal');
+      if (attempt <= PROBE_RETRIES) {
+        // eslint-disable-next-line no-await-in-loop
+        await sleepMs(PROBE_BACKOFF_MS * attempt);
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -225,12 +294,21 @@ async function getReelFrenVideo(provider, fullId, ep, lang = 'id', server = 1, o
  * @returns {Promise<{ videoUrl: string|null, ... }>}
  */
 async function getVideoUrlReelFren(provider, fullId, ep, lang = 'id', opts = {}) {
+  let firstFallback = null;
   for (const server of [1, 2, 3, 4]) {
     const result = await getReelFrenVideo(provider, fullId, ep, lang, server, opts);
-    if (result.videoUrl) return result;
+    if (result.videoUrl) {
+      const candidates = [{ label: 'default', url: result.videoUrl }, ...(result.qualityList || [])];
+      const working = await pickWorkingUrl(candidates, { provider, ep });
+      if (working) return { ...result, videoUrl: working.url, qualityLabel: working.label };
+      if (!firstFallback) firstFallback = result;
+    }
     // Backend 502 → stop trying other servers
     if (!result.videoUrl && !result.totalEpisodes && !result.locked) break;
   }
+  // Tidak ada kandidat valid: kembalikan default pertama agar caller gagal
+  // keras seperti dulu (tidak ada perubahan perilaku diam-diam).
+  if (firstFallback) return { ...firstFallback, qualityLabel: 'default-unverified' };
   return { videoUrl: null, title: null, episode: ep, totalEpisodes: 0, locked: false, server: 1 };
 }
 
@@ -514,6 +592,8 @@ module.exports = {
   parseReelFrenUrl,
   getReelFrenVideo,
   getVideoUrlReelFren,
+  probeStreamUrl,
+  pickWorkingUrl,
   getAllEpisodesReelFren,
   scrapeWatchPage,
   createSession,
