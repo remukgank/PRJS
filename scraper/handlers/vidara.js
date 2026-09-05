@@ -6,6 +6,7 @@ const { getVideoUrl, destroySession } = require('../index');
 const { getVideoUrlReelFren } = require('../reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat } = require('../services/vidaraService');
+const { fileSizeMb } = require('../downloader');
 const V = require('../vidara-uploader');
 
 // ctx: { bot, logger, config: { MAX_UPLOAD_MB }, vidaraBusy, sendVideo, Progress, RichProgress, downloadAndSend }
@@ -18,6 +19,27 @@ function ensureCtx(caller) {
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
+
+function buildChunks(items, size, minLast = 6) {
+  if (!items.length) return [];
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  if (chunks.length > 1 && chunks[chunks.length - 1].length < minLast) {
+    const last = chunks.pop();
+    chunks[chunks.length - 1] = [...chunks[chunks.length - 1], ...last];
+  }
+  return chunks;
+}
+
+const PART_SEND_DELAY_MS = Number(process.env.PART_SEND_DELAY_MS) || 8000;
+const RF_GROUP_ID = process.env.RF_GROUP_ID ? Number(process.env.RF_GROUP_ID) : null;
+const RF_GROUP_ENABLED = (process.env.RF_GROUP_ENABLED || 'false') === 'true';
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function buildResolveVideoUrl(session) {
   const { subdomain, id, slug, lang } = session;
@@ -205,7 +227,10 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
           ...(info.width && { width: info.width }),
           ...(info.height && { height: info.height }),
         };
-        const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+        const mirrorToTopic = isReelFren
+          && _ctx.isAdmin?.(session?.userId)
+          && RF_GROUP_ENABLED
+          && RF_GROUP_ID;
         if (sizeMb > _ctx.config.MAX_UPLOAD_MB) {
           rp.note(`⚠️ ${partLabel}: ${sizeMb.toFixed(1)} MB > limit Telegram (${_ctx.config.MAX_UPLOAD_MB}) — hanya upload ke Vidara`);
           logger.warn({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1), limit: _ctx.config.MAX_UPLOAD_MB }, 'vt_merge10 part skipped Telegram — exceeds limit');
@@ -213,7 +238,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         } else {
           try {
             if (mirrorToTopic) {
-              const sendResult = await sendToTopicVideo(provider, mergedFile, options);
+              const sendResult = await _ctx.sendToTopicVideo(provider, mergedFile, options);
               if (sendResult) {
                 tgDone++;
                 rp.note(`📤 ${partLabel} — terkirim ke topic <b>${provider}</b> di grup`);

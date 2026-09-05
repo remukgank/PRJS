@@ -224,6 +224,8 @@ _vidaraHandlers.initVidara({
   get sendVideo() { return sendVideo; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
   Progress, RichProgress, // import const di top (E3b), aman langsung
   get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
+  isAdmin,
+  sendToTopicVideo,
 });
 const sessions = new Map();
 const aiChatSessions = new Map();
