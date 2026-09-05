@@ -4,6 +4,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const { execFile } = require('child_process');
+const { logger } = require('../logger');
 const V = require('../vidara-uploader');
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -37,17 +38,42 @@ function isHlsUrl(url) {
 }
 
 // Pastikan video jadi .mp4 lokal: HLS (.m3u8) → ffmpeg stream-copy; bukan HLS → download langsung.
-async function ensureMp4(url, destPath) {
-  if (isHlsUrl(url)) {
-    return new Promise((resolve, reject) => {
-      execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', url, '-c', 'copy', destPath], { timeout: 3600000 }, (err) => {
-        if (err) return reject(new Error(`HLS→mp4 gagal: ${err.message}`));
-        resolve(destPath);
-      });
-    });
+// Retry + resolveFresh: backend bisa flip-flop (URL valid saat probe tapi
+// sampah saat download) — coba ulang dengan URL fresh per attempt.
+// opts: { retries=2, backoffMs=15000, resolveFresh=null (async()=>url), logCtx={} }
+async function ensureMp4(url, destPath, opts = {}) {
+  const retries = opts.retries ?? 2;
+  const backoffMs = opts.backoffMs ?? 15000;
+  const resolveFresh = opts.resolveFresh || null;
+  const logCtx = opts.logCtx || {};
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 1 + retries; attempt++) {
+    try {
+      if (isHlsUrl(url)) {
+        await new Promise((resolve, reject) => {
+          execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', url, '-c', 'copy', destPath], { timeout: 3600000 }, (err) => {
+            if (err) return reject(new Error(`HLS→mp4 gagal: ${err.message}`));
+            resolve(destPath);
+          });
+        });
+      } else {
+        await downloadTo(url, destPath);
+      }
+      return destPath;
+    } catch (err) {
+      lastErr = err;
+      if (attempt > retries) break;
+      logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 gagal — retry dengan URL fresh');
+      await new Promise((r) => setTimeout(r, backoffMs * attempt));
+      if (resolveFresh) {
+        try {
+          const fresh = await resolveFresh();
+          if (fresh) url = fresh;
+        } catch {}
+      }
+    }
   }
-  await downloadTo(url, destPath);
-  return destPath;
+  throw lastErr;
 }
 
 function ffmpegConcat(inputs, outPath) {
@@ -109,7 +135,7 @@ async function uploadDramaBatchesVidara(opts) {
           const url = await resolveVideoUrl(epObj);
           if (!url) throw new Error('video URL kosong');
           const dest = path.join(workDir, `ep${pad(j + 1)}-${pad(Number(epObj.ep) || j + 1)}.mp4`);
-          await ensureMp4(url, dest);
+          await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { ep: epObj.ep } });
           results[j] = dest;
         } catch (e) { results[j] = { error: e.message || String(e) }; }
       }

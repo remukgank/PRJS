@@ -77,7 +77,7 @@ async function actionVidaraPerEp(chatId, session) {
         const url = await resolveVideoUrl(epObj);
         if (!url) throw new Error('video URL kosong');
         const dest = path.join(workDir, `ep${epStr}.mp4`);
-        await ensureMp4(url, dest);
+        await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { chatId, ep: epStr } });
         p.update(`[${i + 1}/${episodes.length}] Ep ${epStr} — upload`);
         const fc = await V.uploadFileViaCurl(dest);
         filecodes[epStr] = fc;
@@ -188,7 +188,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
           const url = await resolveVideoUrl(epObj);
           if (!url) throw new Error(`video URL kosong Ep ${epObj.ep}`);
           const dest = path.join(batchWorkDir, `ep${String(epObj.ep).padStart(2, '0')}.mp4`);
-          await ensureMp4(url, dest);
+          await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { chatId, ep: epObj.ep } });
           epFiles.push(dest);
           rp.updateLabel(partLabel, 'download', `${j + 1}/${chunk.length}`);
         }
@@ -310,7 +310,7 @@ async function actionVidaraAndTelegramPerEp(chatId, session) {
         const url = await resolveVideoUrl(epObj);
         if (!url) throw new Error('video URL kosong');
         const dest = path.join(workDir, `ep${epStr}.mp4`);
-        await ensureMp4(url, dest);
+        await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { chatId, ep: epStr } });
 
         // Upload to Vidara
         p.update(`[${i + 1}/${episodes.length}] Ep ${epStr} — upload Vidara`);
