@@ -16,6 +16,7 @@ const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirs
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./samehadaku');
 const { isFiledonUrl, resolveFiledonFile } = require('./filedon');
+const { isMegaUrl, resolveMegaFile } = require('./mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
 const { getShareInfo, downloadShare, sanitize } = require('./ucdrive');
@@ -1189,6 +1190,13 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
   return _downloadHandlers.handleFiledonUrl(chatId, url, customTitle);
 }
 
+/**
+ * Mega — resolve mega.nz/file#key → download stream → kirim Telegram.
+ */
+async function handleMegaUrl(chatId, url, customTitle = null) {
+  return _downloadHandlers.handleMegaUrl(chatId, url, customTitle);
+}
+
 // ─── Samehadaku single download helper (dipakai sam_go & sam_next) ──────────
 async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo) {
   return _downloadHandlers.downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo);
@@ -2166,6 +2174,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'filedon') return handleFiledonUrl(chatId, pending.url, customTitle);
+    if (pending.handler === 'mega') return handleMegaUrl(chatId, pending.url, customTitle);
   }
 
   if (text === '/status') {
@@ -2656,6 +2665,42 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
   }
 
+  // Mega — admin only (flow prompt judul seperti gofile/filedon)
+  if (isMegaUrl(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info share Mega...').catch(() => null);
+    try {
+      const mf = await resolveMegaFile(text.trim());
+      const fileName = mf.name || 'file_mega';
+      let detectedTitle = null;
+      try {
+        const pattern = extractSourcePattern(fileName);
+        if (pattern) {
+          const matched = await findMediaByPattern(pattern);
+          if (matched) detectedTitle = matched.nama;
+        }
+      } catch {}
+      const promptText = detectedTitle
+        ? `📥 <b>Mega Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+        : `📥 <b>Mega Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
+      if (statusMsg) {
+        return bot.editMessageText(promptText, {
+          chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+          reply_markup: titlePromptKeyboard(fileName, text, detectedTitle),
+        }).catch(() => bot.sendMessage(chatId, promptText, { parse_mode: 'HTML', reply_markup: titlePromptKeyboard(fileName, text, detectedTitle) }));
+      }
+      return bot.sendMessage(chatId, promptText, {
+        parse_mode: 'HTML',
+        reply_markup: titlePromptKeyboard(fileName, text, detectedTitle),
+      });
+    } catch (err) {
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return bot.sendMessage(chatId, `⚠️ Mega gagal dibaca: ${stripHtml(err.message).slice(0, 150)}`, { parse_mode: 'HTML' });
+    }
+  }
+
   // Filedon — admin only
   if (isFiledonUrl(text)) {
     if (!isAdmin(msg.from.id)) {
@@ -2769,7 +2814,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
 
   const params = parseDramaUrl(text);
   if (!params || !params.id) {
-    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>mega.nz</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
   }
 
   // Dramafren scraper — admin only
@@ -3114,7 +3159,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const isCustom = data.startsWith('dl_title_custom:');
 
     if (isCustom) {
-      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : isFiledonUrl(url) ? 'filedon' : 'pixeldrain' });
+      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : isFiledonUrl(url) ? 'filedon' : isMegaUrl(url) ? 'mega' : 'pixeldrain' });
       await bot.editMessageText('✏️ Ketik judul untuk caption video:', { chat_id: chatId, message_id: msgId }).catch(() => {});
       return;
     }
@@ -3127,6 +3172,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
       else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
       else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
+      else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
       else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
       if (fileName) {
         const pat = extractSourcePattern(fileName);
@@ -3165,6 +3211,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     }
     if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
     if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
+    if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
   }
 
   // ─── Delete confirmation callbacks ───────────────────────────────────────────

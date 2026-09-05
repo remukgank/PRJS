@@ -7,6 +7,7 @@ const { cacheUrl, resolveFileName } = require('../lib/urlCache');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('../pixeldrain');
 const { isFiledonUrl, resolveFiledonFile } = require('../filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../gdrive');
+const { isMegaUrl, resolveMegaFile, downloadMegaFile } = require('../mega');
 const { getShareInfo, downloadShare, sanitize } = require('../ucdrive');
 const axios = require('axios');
 const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, remuxToMp4 } = require('../downloader');
@@ -670,6 +671,87 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
 }
 
 
+async function handleMegaUrl(chatId, url, customTitle = null) {
+  ensureCtx('handleMegaUrl');
+  let outPath = null;
+  let cap = '';
+  let capWithEp = '';
+  let rp = null;
+  try {
+    const mf = await resolveMegaFile(url);
+    const mfName = mf.name;
+    const partN = extractPartFromFilename(mfName);
+    const patFile = extractSourcePattern(mfName);
+    let title = customTitle || null;
+    if (!title) {
+      const { title: detected } = await detectTitleFromFilename(mfName);
+      if (detected) title = detected;
+    }
+    const titleForCap = title;
+    cap = titleForCap || cleanCaption(mfName);
+    capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
+    const cacheInfo = { urlHash: hashUrl(url), source: 'mega', fileName: mfName };
+    rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    if (mf.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
+      rp.updateEpisode(capWithEp, 'fail', `${(mf.size / 1024 / 1024).toFixed(1)} MB > limit`);
+      rp.done();
+      return;
+    }
+    rp.updateEpisode(capWithEp, 'download');
+    outPath = tempPath(mfName);
+    let lastPct = -1;
+    await downloadMegaFile(mf.file, outPath, (done, total) => {
+      if (!total) return;
+      const pct = Math.floor((done / total) * 100);
+      if (pct !== lastPct && pct % 10 === 0) {
+        lastPct = pct;
+        rp.updateEpisode(capWithEp, 'download', `${pct}%`);
+      }
+    });
+    const finalSize = fileSizeMb(outPath);
+    logger.info({ chatId, file: mfName, sizeMb: finalSize.toFixed(1) }, 'Mega download selesai');
+    rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
+    const info = await getVideoInfo(outPath).catch(() => ({}));
+    const fext = path.extname(outPath).toLowerCase();
+    let finalCap = cap;
+    if (titleForCap) {
+      const cleanTitle = titleForCap.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+      finalCap = [
+        `➧ Judul :- ${cleanTitle || titleForCap}`,
+        `➧ Episode :- ${partN}`,
+        `➧ Provider :- ${extractProvider(mfName)}`,
+      ].join('\n');
+    }
+    let sendResult = null;
+    if (VIDEO_EXTS.has(fext)) {
+      sendResult = await _ctx.sendVideo(chatId, outPath, {
+        caption: finalCap, supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
+    } else if (AUDIO_EXTS.has(fext)) {
+      await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
+    } else await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
+    if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+      const slug = `anime:${sanitizeSlug(title)}`;
+      const existing = await getPartFileId(slug, partN);
+      if (!existing) {
+        await upsertMedia(slug, title, 0, url, patFile);
+        await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), mfName, finalCap);
+      }
+    }
+    rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
+    rp.done();
+  } catch (err) {
+    logger.error({ chatId, url: url.slice(0, 90), err: err.message }, 'Mega gagal');
+    if (rp) { rp.updateEpisode(capWithEp || cap || 'file', 'fail', err.message.slice(0, 50)); rp.done().catch(() => {}); }
+    await _ctx.bot.sendMessage(chatId, `⚠️ Mega gagal: ${err.message.slice(0, 120)}\n\nLink mungkin private/expired atau tanpa #key.`).catch(() => {});
+  } finally {
+    cleanupFiles(outPath);
+  }
+}
+
 async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   ensureCtx('handleGdriveUrl');
   let outPath = null;
@@ -798,4 +880,4 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
   }
 }
 
-module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, downloadSamehadakuFile };
+module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile };
