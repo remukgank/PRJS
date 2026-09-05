@@ -3,6 +3,7 @@
 **Date**: 2026-09-03
 **Author**: opencode
 **Status**: Backlog — belum dikerjakan, bukan bagian Batch E
+**Item**: 1 — GoFile multi-file quality picker (parkir, belum diputusin)
 
 ## Temuan
 
