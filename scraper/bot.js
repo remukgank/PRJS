@@ -213,9 +213,99 @@ const _adminHandlers = require('./handlers/admin');
 _adminHandlers.initAdmin({ bot, config: { ADMIN_IDS, STAR_PRICE, LOCAL_API_PORT, TOKEN } });
 
 const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan) — dideklarasikan di atas wiring agar initVidara tidak TDZ
+// ─── Download + kirim 1 file ──────────────────────────────────────────────────
+
+async function downloadAndSend(chatId, subdomain, id, slug, ep, lang, caption) {
+  const p = await new Progress(chatId, `Ep ${ep} — scrape URL`).start();
+
+  let result;
+  if (subdomain.startsWith('reelfren_')) {
+    // ReelFren multi-provider
+    const provider = subdomain.replace('reelfren_', '');
+    result = await getVideoUrlReelFren(provider, id, ep, lang).catch((err) => {
+      logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'getVideoUrlReelFren failed');
+      return null;
+    });
+  } else {
+    result = await getVideoUrl(subdomain, id, slug, ep, 1, lang).catch((err) => {
+      logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'getVideoUrl failed');
+      return null;
+    });
+  }
+  if (!result?.videoUrl) {
+    await p.fail(`Ep ${ep}: URL tidak ditemukan`);
+    return null;
+  }
+
+const outPath = tempPath(`ep${ep}.mp4`);
+  const streamType = result.videoUrl.includes('m3u8') ? 'HLS' : 'MP4';
+  const isReelFren = subdomain.startsWith('reelfren_');
+  const provider = isReelFren ? subdomain.replace('reelfren_', '') : null;
+  const burnSubtitle = !!provider && BURN_SUBTITLE_PROVIDERS.includes(provider);
+
+  try {
+    p.update(`Ep ${ep} — download ${streamType}`);
+    logger.info({ chatId, episode: ep, streamType, url: result.videoUrl.slice(0, 80), burnSubtitle }, 'Download starting');
+    await downloadStream(result.videoUrl, outPath, (log) => {
+      if (log.includes('progress:')) {
+        const t = log.split('progress: ')[1];
+        p.update(`Ep ${ep} — download ${t}`);
+      }
+    }, result.subtitleUrl, { burnSubtitle });
+  } catch (err) {
+    cleanupFiles(outPath);
+    logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'Download failed');
+    await p.fail(`Ep ${ep}: gagal download`);
+    return null;
+  }
+
+  const sizeMb = fileSizeMb(outPath);
+  const cap = caption || (result.title ? `${result.title} - Ep ${ep}` : `Episode ${ep}`);
+  p.update(`Ep ${ep} — upload (${sizeMb.toFixed(1)} MB)`);
+
+  try {
+    if (sizeMb > MAX_UPLOAD_MB) {
+      await p.fail(`Ep ${ep}: ${sizeMb.toFixed(1)} MB — terlalu besar`);
+    } else {
+      const info = await getVideoInfo(outPath).catch(() => ({}));
+      const opts = {
+        caption: cap,
+        supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      };
+      const session = sessions.get(String(chatId));
+      const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+      if (mirrorToTopic) {
+        const sent = await sendToTopicVideo(provider, outPath, opts);
+        if (sent) {
+          logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent to topic');
+          await p.done(`Ep ${ep} — terkirim ke topic <b>${provider}</b> di grup`);
+        } else {
+          await sendVideo(chatId, outPath, opts);
+          logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent (fallback chat)');
+          await p.done(`Ep ${ep} — selesai (${sizeMb.toFixed(1)} MB)`);
+        }
+      } else {
+        await sendVideo(chatId, outPath, opts);
+        logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent');
+        await p.done(`Ep ${ep} — selesai (${sizeMb.toFixed(1)} MB)`);
+      }
+    }
+  } catch (err) {
+    logger.error({ chatId, episode: ep, err: err.message }, 'Send failed');
+    await p.fail(`Ep ${ep}: gagal kirim — ${err.message.slice(0, 100)}`);
+  } finally {
+    cleanupFiles(outPath);
+  }
+
+  return true;
+}
+
 // E5b: wire handlers/vidara via ctx injection
-// NOTE: bot.js dibungkus IIFE — tidak ada hoisting antar-bagian. Referensi ke
-// fungsi yang dideklarasikan di bawah (downloadAndSend) diteruskan lazy via getter.
+// NOTE: sebagian file dibungkus IIFE (async, mulai ~line 669). Referensi ke
+// fungsi di bawah IIFE diteruskan lazy via getter agar tidak TDZ.
 const _vidaraHandlers = require('./handlers/vidara');
 _vidaraHandlers.initVidara({
   bot,
@@ -1311,95 +1401,6 @@ async function downloadAndSendPaidMedia(chatId, url, source, fileName, userId) {
   }
 }
 
-// ─── Download + kirim 1 file ──────────────────────────────────────────────────
-
-async function downloadAndSend(chatId, subdomain, id, slug, ep, lang, caption) {
-  const p = await new Progress(chatId, `Ep ${ep} — scrape URL`).start();
-
-  let result;
-  if (subdomain.startsWith('reelfren_')) {
-    // ReelFren multi-provider
-    const provider = subdomain.replace('reelfren_', '');
-    result = await getVideoUrlReelFren(provider, id, ep, lang).catch((err) => {
-      logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'getVideoUrlReelFren failed');
-      return null;
-    });
-  } else {
-    result = await getVideoUrl(subdomain, id, slug, ep, 1, lang).catch((err) => {
-      logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'getVideoUrl failed');
-      return null;
-    });
-  }
-  if (!result?.videoUrl) {
-    await p.fail(`Ep ${ep}: URL tidak ditemukan`);
-    return null;
-  }
-
-const outPath = tempPath(`ep${ep}.mp4`);
-  const streamType = result.videoUrl.includes('m3u8') ? 'HLS' : 'MP4';
-  const isReelFren = subdomain.startsWith('reelfren_');
-  const provider = isReelFren ? subdomain.replace('reelfren_', '') : null;
-  const burnSubtitle = !!provider && BURN_SUBTITLE_PROVIDERS.includes(provider);
-
-  try {
-    p.update(`Ep ${ep} — download ${streamType}`);
-    logger.info({ chatId, episode: ep, streamType, url: result.videoUrl.slice(0, 80), burnSubtitle }, 'Download starting');
-    await downloadStream(result.videoUrl, outPath, (log) => {
-      if (log.includes('progress:')) {
-        const t = log.split('progress: ')[1];
-        p.update(`Ep ${ep} — download ${t}`);
-      }
-    }, result.subtitleUrl, { burnSubtitle });
-  } catch (err) {
-    cleanupFiles(outPath);
-    logger.error({ chatId, episode: ep, err: { message: err.message, stack: err.stack } }, 'Download failed');
-    await p.fail(`Ep ${ep}: gagal download`);
-    return null;
-  }
-
-  const sizeMb = fileSizeMb(outPath);
-  const cap = caption || (result.title ? `${result.title} - Ep ${ep}` : `Episode ${ep}`);
-  p.update(`Ep ${ep} — upload (${sizeMb.toFixed(1)} MB)`);
-
-  try {
-    if (sizeMb > MAX_UPLOAD_MB) {
-      await p.fail(`Ep ${ep}: ${sizeMb.toFixed(1)} MB — terlalu besar`);
-    } else {
-      const info = await getVideoInfo(outPath).catch(() => ({}));
-      const opts = {
-        caption: cap,
-        supports_streaming: true,
-        ...(info.duration && { duration: info.duration }),
-        ...(info.width && { width: info.width }),
-        ...(info.height && { height: info.height }),
-      };
-      const session = sessions.get(String(chatId));
-      const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
-      if (mirrorToTopic) {
-        const sent = await sendToTopicVideo(provider, outPath, opts);
-        if (sent) {
-          logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent to topic');
-          await p.done(`Ep ${ep} — terkirim ke topic <b>${provider}</b> di grup`);
-        } else {
-          await sendVideo(chatId, outPath, opts);
-          logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent (fallback chat)');
-          await p.done(`Ep ${ep} — selesai (${sizeMb.toFixed(1)} MB)`);
-        }
-      } else {
-        await sendVideo(chatId, outPath, opts);
-        logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent');
-        await p.done(`Ep ${ep} — selesai (${sizeMb.toFixed(1)} MB)`);
-      }
-    }
-  } catch (err) {
-    logger.error({ chatId, episode: ep, err: err.message }, 'Send failed');
-    await p.fail(`Ep ${ep}: gagal kirim — ${err.message.slice(0, 100)}`);
-  } finally {
-    cleanupFiles(outPath);
-  }
-
-  return true;
-}
 
 // ─── Aksi: kirim per episode ───────────────────────────────────────────────────
 
@@ -2147,6 +2148,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (pending.handler === 'gofile') return handleGofileUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
+    if (pending.handler === 'filedon') return handleFiledonUrl(chatId, pending.url, customTitle);
   }
 
   if (text === '/status') {
@@ -2618,7 +2620,35 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (!isAdmin(msg.from.id)) {
       return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
     }
-    return handleFiledonUrl(chatId, text.trim());
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info share Filedon...').catch(() => null);
+    try {
+      const fd = await resolveFiledonFile(text.trim());
+      const fileName = fd.name || 'file_filedon';
+      let detectedTitle = null;
+      try {
+        const pattern = extractSourcePattern(fileName);
+        if (pattern) {
+          const matched = await findMediaByPattern(pattern);
+          if (matched) detectedTitle = matched.nama;
+        }
+      } catch {}
+      const promptText = detectedTitle
+        ? `📥 <b>Filedon Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+        : `📥 <b>Filedon Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
+      if (statusMsg) {
+        return bot.editMessageText(promptText, {
+          chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+          reply_markup: titlePromptKeyboard(fileName, text, detectedTitle),
+        }).catch(() => bot.sendMessage(chatId, promptText, { parse_mode: 'HTML', reply_markup: titlePromptKeyboard(fileName, text, detectedTitle) }));
+      }
+      return bot.sendMessage(chatId, promptText, {
+        parse_mode: 'HTML',
+        reply_markup: titlePromptKeyboard(fileName, text, detectedTitle),
+      });
+    } catch (err) {
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return handleFiledonUrl(chatId, text.trim());
+    }
   }
 
   // Google Drive — admin only (flow prompt judul seperti gofile/pixeldrain)
@@ -3018,7 +3048,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const isCustom = data.startsWith('dl_title_custom:');
 
     if (isCustom) {
-      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : 'pixeldrain' });
+      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : isFiledonUrl(url) ? 'filedon' : 'pixeldrain' });
       await bot.editMessageText('✏️ Ketik judul untuk caption video:', { chat_id: chatId, message_id: msgId }).catch(() => {});
       return;
     }
@@ -3029,6 +3059,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       let fileName = null;
       if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
       else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
+      else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
       else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
       if (fileName) {
         const pat = extractSourcePattern(fileName);
@@ -3066,6 +3097,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return handleGdriveUrl(chatId, url, gdTitle || undefined);
     }
     if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
+    if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
   }
 
   // ─── Delete confirmation callbacks ───────────────────────────────────────────
