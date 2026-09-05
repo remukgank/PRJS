@@ -15,7 +15,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { URLSearchParams } = require('url');
-const { logger } = require('./logger');
+const { logger } = require('../logger');
 
 const API_BASE = 'https://m-intldrive.ucweb.com';
 const CHROMIUM = '/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium';

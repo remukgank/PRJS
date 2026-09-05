@@ -10,7 +10,7 @@
  *   https://{subdomain}.dramafren.org/index.php?page=watch&id=...&ep=...&sv=1&lang=id
  */
 
-const { interceptVideoUrl, destroySession, decodeHtmlEntities } = require('./dramafren');
+const { interceptVideoUrl, destroySession, decodeHtmlEntities } = require('./providers/dramafren');
 const axios = require('axios');
 const https = require('https');
 const { logger } = require('./logger');

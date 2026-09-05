@@ -9,7 +9,7 @@ const TelegramBotLib = require('node-telegram-bot-api');
 const TelegramBot = TelegramBotLib.default || TelegramBotLib;
 const { pool, initDatabase, savePartFileId, getSetting } = require('./db');
 const { getVideoUrl, getAllEpisodes } = require('./index');
-const { createSession, destroySession } = require('./dramafren');
+const { createSession, destroySession } = require('./providers/dramafren');
 const { downloadStream, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb } = require('./downloader');
 
 const CHANNEL_ID = process.env.CHANNEL_ID || '';

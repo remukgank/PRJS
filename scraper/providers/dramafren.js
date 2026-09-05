@@ -5,7 +5,7 @@
  */
 
 const axios = require('axios');
-const { logger } = require('./logger');
+const { logger } = require('../logger');
 
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191';
 

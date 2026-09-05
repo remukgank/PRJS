@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { execFile } = require('child_process');
-const { logger } = require('./logger');
+const { logger } = require('../logger');
 
 const API_BASE = 'https://api.gofile.io';
 const GOFILE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';

@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const { getVideoUrl, getAllEpisodes } = require('./index');
-const { createSession, destroySession } = require('./dramafren');
+const { createSession, destroySession } = require('./providers/dramafren');
 
 let DOWNLOADS = path.join(__dirname, 'downloads');
 let GLOBAL_TRACK = path.join(DOWNLOADS, 'track.json');

@@ -20,7 +20,7 @@
 
 const axios = require('axios');
 const { execFile } = require('child_process');
-const { logger } = require('./logger');
+const { logger } = require('../logger');
 
 const API_BASE = 'https://api.dramafren.org';
 const WEB_BASE = 'https://reelfren.dramafren.org';
