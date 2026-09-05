@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { logger } = require('../logger');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile } = require('../gofile');
-const { cacheUrl } = require('../lib/urlCache');
+const { cacheUrl, resolveFileName } = require('../lib/urlCache');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('../pixeldrain');
 const { isFiledonUrl, resolveFiledonFile } = require('../filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../gdrive');
@@ -52,7 +52,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
   const isSame = !!sami;
 
   if (isGofileDirectUrl(url)) {
-    const fileName = filenameFromGofileUrl(url);
+    const fileName = resolveFileName(url) || filenameFromGofileUrl(url);
 
     if (!customTitle) {
       const { title } = await detectTitleFromFilename(fileName);

@@ -35,5 +35,19 @@ function resolveUrl(id) {
   const entry = urlCache.get(String(id));
   return entry ? entry.url : null;
 }
+// ─── Nama file untuk direct URL tanpa nama (mis. /download/web/<uuid>) ──────
+const fileNameCache = new Map(); // url -> fileName
+function cacheFileName(url, name) {
+  if (!url || !name) return;
+  if (fileNameCache.size > 500) {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    for (const [k, v] of fileNameCache) { if (v.ts < cutoff) fileNameCache.delete(k); }
+  }
+  fileNameCache.set(url, { name, ts: Date.now() });
+}
+function resolveFileName(url) {
+  const entry = fileNameCache.get(url);
+  return entry ? entry.name : null;
+}
 
-module.exports = { cacheSlug, resolveSlug, cacheUrl, resolveUrl };
+module.exports = { cacheSlug, resolveSlug, cacheUrl, resolveUrl, cacheFileName, resolveFileName };

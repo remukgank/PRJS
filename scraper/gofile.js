@@ -25,7 +25,7 @@ function isGofileUrl(url) {
 function isGofileDirectUrl(url) {
   try {
     const host = new URL(url).hostname;
-    return /^(cold|store)[\w-]*\.gofile\.io$/i.test(host);
+    return /^((cold|store|file)[\w-]*)\.gofile\.io$/i.test(host);
   } catch { return false; }
 }
 

@@ -936,7 +936,7 @@ function mainActionKeyboard() {
 }
 
 // ─── Slug cache (Telegram callback_data max 64 bytes, slug bisa 73+) ──────────
-const { cacheSlug, resolveSlug, cacheUrl, resolveUrl } = require('./lib/urlCache');
+const { cacheSlug, resolveSlug, cacheUrl, resolveUrl, cacheFileName, resolveFileName } = require('./lib/urlCache');
 // ─── Library keyboards ────────────────────────────────────────────────────────
 
 
@@ -3089,6 +3089,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const entry = gofileShareCache.get(String(shareId));
     const file = entry?.files[Number(idxRaw)];
     if (!file) return bot.answerCallbackQuery(query.id, { text: '⚠️ Pilihan kadaluarsa, kirim ulang link' }).catch(() => {});
+    cacheFileName(file.url, file.name); // direct URL /download/web/<uuid> tak ada nama file
     const fileName = file.name;
     let detectedTitle = null;
     try {
@@ -3123,6 +3124,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     try {
       let fileName = null;
       if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
+      if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
       else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
       else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
       else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
