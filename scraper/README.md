@@ -9,31 +9,37 @@ Scraper Node.js + Telegram bot untuk download konten dan kirim ke **Telegram** &
 | **Reelfren** (34 provider) | `melolo`, `sereal`, `pinedrama`, `shorten`, `happyshort`, `vigloo`, `rapidtv`, `raptdrama`, `cubetv`, `joyreels`, `anyreel`, `minitv`, `bstation`, `golddrama`, `reelife`, `reelshort`, `dramawave`, `dramanova`, `kalostv`, `vibeshort`, `freereels`, `wetv`, `storyreel`, `moviebox`, `movieboxshorts`, `bonustv`, `moboreels`, `netshort`, `mydrama`, `flareflow`, `playlet`, `shortmax`, `flextv`, `dramabox` |
 | **Dramafren** | `stardusttv`, `shortmax`, `flickreels`, `dramawave`, `reelshort`, dll |
 | **Anime** | `samehadaku` (via `v2.samehadaku.how`, Worker relay) |
-| **File hosting** | `gofile.io`, `pixeldrain.com`, `filedon.co`, `drive.google.com`, `uc-share.com` |
+| **File hosting** | `gofile.io`, `pixeldrain.com`, `filedon.co`, `mega.nz`, `drive.google.com`, `uc-share.com` |
 
 ## Architecture
 
 ```
 scraper/
-├── bot.js                 # Telegram bot (5610 baris, 4 handler utama)
+├── bot.js                 # Telegram bot (~3700 baris: router, callback, library, VIP, AI)
 │   ├── safeHandler wrapper (H1/M4)
-│   ├── handleGofileUrl / handlePixeldrainUrl / handleFiledonUrl / handleGdriveUrl
+│   ├── handleGofileUrl / handlePixeldrainUrl / handleFiledonUrl / handleMegaUrl / handleGdriveUrl
 │   └── library, VIP, AI, Vidara integration
-├── reelfren.js            # Multi-provider aggregator (api.dramafren.org)
-├── samehadaku.js          # Anime via Cloudflare Worker relay
-├── downloader.js          # aria2c + ffmpeg (download, merge, remux)
-├── dramafren.js           # Session rotation & FlareSolverr
-├── db.js                  # PostgreSQL (Neon) — media, media_parts, file_cache, dll
+├── providers/             # Modul per sumber (Batch F)
+│   ├── reelfren.js        # Multi-provider aggregator (api.dramafren.org + probe/fallback kualitas)
+│   ├── samehadaku.js      # Anime via Cloudflare Worker relay
+│   ├── gofile.js / pixeldrain.js / filedon.js / mega.js / gdrive.js / ucdrive.js
+│   └── dramafren.js       # Session rotation & FlareSolverr
+├── handlers/              # Handler per domain (ctx injection, tanpa require ../bot)
+│   ├── download.js        # GoFile/Pixeldrain/Filedon/Mega/GDrive/UC (Batch E4)
+│   ├── vidara.js          # Aksi Vidara + Telegram (Batch E5b)
+│   ├── library.js / admin.js
+├── lib/                   # Util murni (parser, telegram sender, progress, urlCache, titleDetect)
 ├── services/
-│   ├── vidaraService.js   # Upload ke Vidara (batch, HLS)
+│   ├── vidaraService.js   # Upload ke Vidara (batch, HLS, retry ensureMp4)
 │   ├── vipService.js      # VIP membership
 │   ├── vipPackages.js     # Pricing
 │   └── saweriaService.js  # Donasi Saweria + QR
 ├── utils/
 │   └── rateLimiter.js
 ├── vidara.js / vidara-uploader.js
-├── gofile.js / pixeldrain.js / filedon.js / gdrive.js / ucdrive.js
-└── test*.js               # Smoke & subdomain tests
+├── db.js                  # PostgreSQL (Neon) — media, media_parts, file_cache, dll
+├── downloader.js          # aria2c + ffmpeg (download, merge, remux)
+└── tests/                 # Smoke & subdomain tests (Batch F)
 ```
 
 **Data flow:** `Telegram link → parse URL → Worker/API → download (aria2c) → upload Telegram (Local API, 2GB) / Vidara → save library (PostgreSQL)`
@@ -73,7 +79,7 @@ bash scraper/start-local-api.sh   # port 9091 → external 9000
 | `SAWERIA_USERNAME` / `SAWERIA_USER_ID` | No | Donasi |
 | `AI_CHAT_*` | No | Rate limit AI chat |
 
-Lihat `scraper/bot.js:213-222, 305-306, 5395` untuk daftar lengkap.
+Lihat `scraper/bot.js` (env: TOKEN, DATABASE_URL, ADMIN_USER_IDS) untuk daftar lengkap.
 
 ### 5. Run
 ```bash
@@ -102,7 +108,7 @@ node scraper/bot.js
 
 ### Test
 ```bash
-npm test          # smoke test (scraper/test.js)
+npm test          # smoke test (scraper/tests/test.js)
 npm run test:all  # test all subdomains
 node --check scraper/bot.js   # syntax check
 ```
