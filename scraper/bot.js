@@ -12,7 +12,7 @@ const TelegramBot = TelegramBotLib.default || TelegramBotLib;
 const { getVideoUrl, getAllEpisodes, destroySession } = require('./index');
 const { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, remuxToMp4 } = require('./downloader');
 const { cleanupStaleSessions } = require('./dramafren');
-const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile } = require('./gofile');
+const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile, resolveGofileFiles } = require('./gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./samehadaku');
 const { isFiledonUrl, resolveFiledonFile } = require('./filedon');
@@ -939,6 +939,23 @@ function mainActionKeyboard() {
 const { cacheSlug, resolveSlug, cacheUrl, resolveUrl } = require('./lib/urlCache');
 // ─── Library keyboards ────────────────────────────────────────────────────────
 
+
+const gofileShareCache = new Map(); // shareUrlId -> files[] (picker kualitas multi-file, TTL 30 mnt)
+
+function gofileQualityRank(name) {
+  const n = String(name || '').toLowerCase();
+  if (/1080p|\bfhd\b|2160p|\b4k\b/.test(n)) return 3;
+  if (/720p|\bhd\b/.test(n)) return 2;
+  if (/480p|\bsd\b/.test(n)) return 1;
+  return 0;
+}
+function fmtSizeMb(bytes) {
+  const mb = Number(bytes || 0) / 1024 / 1024;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+}
+function isMediaFile(name) {
+  return /\.(mp4|mkv|mov|avi|webm|mp3|aac|ogg|m4a|wav)$/i.test(String(name || ''));
+}
 
 function titlePromptKeyboard(fileName, url, detectedTitle = null) {
   const label = detectedTitle
@@ -2559,7 +2576,31 @@ bot.on('message', safeHandler('message')(async (msg) => {
       if (isGofileDirectUrl(text)) {
         fileName = filenameFromGofileUrl(text);
       } else {
-        const file = await resolveGofileFirstFile(text);
+        const allFiles = await resolveGofileFiles(text);
+        const mediaFiles = allFiles.filter((f) => isMediaFile(f.name));
+        if (mediaFiles.length > 1) {
+          // Share multi-file: tampilkan picker kualitas (terbaik dulu) — item 1
+          const sorted = [...mediaFiles].sort((a, b) => gofileQualityRank(b.name) - gofileQualityRank(a.name));
+          const shareId = cacheUrl(text);
+          gofileShareCache.set(shareId, { files: sorted, ts: Date.now() });
+          if (gofileShareCache.size > 200) {
+            const cutoff = Date.now() - 30 * 60 * 1000;
+            for (const [k, v] of gofileShareCache) { if (v.ts < cutoff) gofileShareCache.delete(k); }
+          }
+          const rows = sorted.map((f, i) => [{
+            text: `${i === 0 ? '⭐ ' : ''}${f.name.length > 42 ? f.name.slice(0, 39) + '...' : f.name} (${fmtSizeMb(f.size)})`,
+            callback_data: `dl_gofile_pick:${shareId}:${i}`,
+          }]);
+          const pickText = `📥 <b>GoFile Download</b> — ${sorted.length} file, pilih kualitas:`;
+          if (statusMsg) {
+            return bot.editMessageText(pickText, {
+              chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+              reply_markup: { inline_keyboard: rows },
+            }).catch(() => bot.sendMessage(chatId, pickText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } }));
+          }
+          return bot.sendMessage(chatId, pickText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+        }
+        const file = mediaFiles[0] || allFiles[0];
         fileName = file.name;
       }
       let detectedTitle = null;
@@ -3041,6 +3082,30 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Title prompt callbacks ───────────────────────────────────────────────────
+
+  // ─── GoFile multi-file quality picker (item 1) ──────────────────────────────
+  if (data.startsWith('dl_gofile_pick:')) {
+    const [, shareId, idxRaw] = data.split(':');
+    const entry = gofileShareCache.get(String(shareId));
+    const file = entry?.files[Number(idxRaw)];
+    if (!file) return bot.answerCallbackQuery(query.id, { text: '⚠️ Pilihan kadaluarsa, kirim ulang link' }).catch(() => {});
+    const fileName = file.name;
+    let detectedTitle = null;
+    try {
+      const pattern = extractSourcePattern(fileName);
+      if (pattern) {
+        const matched = await findMediaByPattern(pattern);
+        if (matched) detectedTitle = matched.nama;
+      }
+    } catch {}
+    const promptText = detectedTitle
+      ? `📥 <b>GoFile Download</b>\n\nFile: <code>${fileName}</code>\n➧ Judul :- <b>${detectedTitle}</b>\n➧ Episode :- ${extractPartFromFilename(fileName)}\n➧ Provider :- ${extractProvider(fileName)}\n\nPilih judul untuk caption:`
+      : `📥 <b>GoFile Download</b>\n\nFile: <code>${fileName}</code>\n\nPilih judul untuk caption:`;
+    return bot.editMessageText(promptText, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+      reply_markup: titlePromptKeyboard(fileName, file.url, detectedTitle),
+    }).catch(() => bot.sendMessage(chatId, promptText, { parse_mode: 'HTML', reply_markup: titlePromptKeyboard(fileName, file.url, detectedTitle) }));
+  }
 
   if (data.startsWith('dl_title_use:') || data.startsWith('dl_title_custom:')) {
     const rawUrl = data.split(':').slice(1).join(':');
