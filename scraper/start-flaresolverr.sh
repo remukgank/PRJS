@@ -25,6 +25,7 @@ source "$SOLVER_DIR/paths.env"
 
 export PYTHONPATH="$SOLVER_DIR/pkg:$SOLVER_DIR/src"
 export HEADLESS=true
+export CHROME_BIN="$CHROMIUM_BIN"
 export PATH="$XVFB_BIN:$PATH"
 export LD_LIBRARY_PATH="$GLIB_LIB:$NSS_LIB:$XCB_LIB:$NSPR_LIB"
 
