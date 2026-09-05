@@ -1,4 +1,5 @@
 // handlers/download.js — E4a GoFile family (ctx injection, no require ../bot)
+const fs = require('fs');
 const path = require('path');
 const { logger } = require('../logger');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile } = require('../gofile');
@@ -20,6 +21,13 @@ const AUDIO_EXTS = new Set(['.mp3', '.aac', '.ogg', '.m4a', '.wav']);
 
 function hashUrl(url) {
   return require('crypto').createHash('md5').update(url).digest('hex');
+}
+
+// Extract UC share ID dari URL (uc-share.com / drive.ucweb.com) — duplikat kecil dari bot.js
+// agar handler mandiri tanpa require ../bot (E5 ctx injection).
+function ucShareId(text) {
+  const m = text.match(/(?:uc-share\.com|drive\.ucweb\.com)\/s\/([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
 }
 
 // ctx: { bot, config: { MAX_UPLOAD_MB }, samehadakuEpisodeMap }
@@ -160,6 +168,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
 
   let outPath = null;
   let cap = '';
+  let capWithEp = '';
   let rp;
   try {
     const file = await resolveGofileFirstFile(url);
@@ -171,7 +180,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     cap = customTitle || cleanCaption(file.name);
     const fileName = file.name;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
-    const capWithEp = customTitle ? `${cap} — Episode ${sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name)}` : cap;
+    capWithEp = customTitle ? `${cap} — Episode ${sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name)}` : cap;
     rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
     if (file.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
@@ -405,7 +414,7 @@ async function handleUcDriveUrl(chatId, text) {
       }
     }
 
-    await sendRichMessage(chatId, `📤 Terkirim ${sent} video (${fail} gagal).`, { format: 'markdown' });
+    await _ctx.bot.sendMessage(chatId, `📤 Terkirim ${sent} video (${fail} gagal).`, { parse_mode: 'HTML' }).catch(() => {});
   } catch (err) {
     logger.error({ chatId, shareId, err: { message: err.message, stack: err.stack } }, 'UC Drive handler failed');
     await _ctx.bot.editMessageText(`❌ Gagal: ${err.message.slice(0, 150)}`, {
@@ -567,6 +576,8 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
 async function handleFiledonUrl(chatId, url, customTitle = null) {
   ensureCtx('handleFiledonUrl');
   let outPath = null;
+  let cap = '';
+  let capWithEp = '';
   let rp = null;
   try {
     const fd = await resolveFiledonFile(url);
@@ -602,8 +613,8 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
       }
     }
     const titleForCap = title; // title sudah incl S{season} (anti-dobel)
-    const cap = titleForCap || cleanCaption(fdName);
-    const capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
+    cap = titleForCap || cleanCaption(fdName);
+    capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
     const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
     rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
@@ -662,6 +673,8 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
 async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   ensureCtx('handleGdriveUrl');
   let outPath = null;
+  let cap = '';
+  let capWithEp = '';
   let rp = null;
   try {
     const gd = await resolveGdriveFile(url);
@@ -690,8 +703,8 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
         titleForMedia = `${titleForMedia} P${gdSame.part}`;
       }
     }
-    const cap = titleForMedia || cleanCaption(fileName);
-    const capWithEp = titleForMedia ? `${cap} — ${seasonEpLabel}` : `${cap}`;
+    cap = titleForMedia || cleanCaption(fileName);
+    capWithEp = titleForMedia ? `${cap} — ${seasonEpLabel}` : `${cap}`;
     const cacheInfo = { urlHash: hashUrl(url), source: 'gdrive', fileName };
     rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
