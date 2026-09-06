@@ -22,12 +22,14 @@ function parseKey(key) {
   return { source: key.slice(0, i), id: key.slice(i + 1) }
 }
 
-// Poster: file_id Telegram dulu (awet, sama seperti bot), fallback URL.
-// file_id kecil (KB) sehingga lolos batas 20MB Bot API.
+// Poster: URL dulu (terbukti valid), file_id sebagai fallback.
+// (file_id diprioritaskan sebelumnya tapi sebagian isi DB ternyata video,
+//  bukan foto → <img> rusak massal.)
 function posterFor(r) {
+  if (r.poster) return r.poster
   const fid = r.poster_fid || r.poster_file_id || null
   if (fid) return `/api/file?file_id=${encodeURIComponent(fid)}`
-  return r.poster || null
+  return null
 }
 
 async function queryAllDramas() {
@@ -71,6 +73,8 @@ async function queryAllDramas() {
     for (const r of mrows) {
       const p = parseKey(r.drama_key)
       if (!p || seen[p.id]) continue
+      // Sembunyikan cangkang kosong: ada poster/judul tapi nol video.
+      if (Number(r.eps) === 0) continue
       seen[p.id] = true
       dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps) || 0, poster: posterFor(r) })
     }
