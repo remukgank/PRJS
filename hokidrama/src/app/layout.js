@@ -303,6 +303,50 @@ export default function RootLayout({ children }) {
             color: var(--text2);
           }
           .empty-state h2 { font-size: 1.5rem; margin-bottom: 8px; color: var(--text); }
+          .hero {
+            position: relative;
+            display: block;
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            margin-bottom: 28px;
+            min-height: 260px;
+            background: var(--bg2);
+            color: var(--text);
+          }
+          .hero-backdrop {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.45;
+          }
+          .hero-shade {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, rgba(15,23,42,0.95) 20%, rgba(15,23,42,0.55) 55%, rgba(15,23,42,0.15));
+          }
+          .hero-body {
+            position: relative;
+            padding: 36px 32px;
+            max-width: 640px;
+          }
+          .hero-body h2 {
+            font-size: 1.9rem;
+            margin: 12px 0 8px;
+            line-height: 1.2;
+          }
+          .hero-body p { color: var(--text2); margin-bottom: 16px; }
+          .hero-kicker { background: var(--accent); color: white; border: none; }
+          .hero-cta {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 8px 18px;
+            font-size: 0.9rem;
+          }
+          .hero:hover { border-color: var(--accent); color: var(--text); }
           @media (max-width: 768px) {
             .navbar .search-bar { margin-left: 0; width: 100%; }
             .navbar .search-bar input { flex: 1; }

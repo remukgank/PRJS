@@ -10,9 +10,25 @@ export default async function HomePage({ searchParams }) {
     getAllDramas(),
   ])
   const total = totalDramas.length
+  const featured = !query && dramas.length > 0 ? dramas[0] : null
 
   return (
     <>
+      {featured && (
+        <a href={`/drama/${featured.id}?source=${featured.source}`} className="hero">
+          {featured.poster && (
+            <img src={featured.poster} alt="" aria-hidden="true" className="hero-backdrop" loading="eager" />
+          )}
+          <div className="hero-shade" />
+          <div className="hero-body">
+            <span className="chip hero-kicker">✨ Terbaru</span>
+            <h2>{featured.title}</h2>
+            <p>{featured.source} · {featured.eps} episode</p>
+            <span className="chip hero-cta"><span aria-hidden="true">▶</span> Tonton Sekarang</span>
+          </div>
+        </a>
+      )}
+
       <div className="page-header">
         <h1>{query ? `Hasil: "${query}"` : 'Semua Drama'}</h1>
         <p>{dramas.length} drama dari {sources.length} sumber · Total {total} drama</p>

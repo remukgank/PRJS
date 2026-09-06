@@ -46,6 +46,27 @@ async function queryAllDramas() {
     seen[p.id] = true
     dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps), poster: r.poster || null })
   }
+  // Tambahan: drama yang HANYA ada di library Telegram (media_parts,
+  // mis. part merged) — tidak ada di vidara_uploads sehingga tak terlihat.
+  try {
+    const { rows: mrows } = await pool.query(`
+      SELECT m.slug AS drama_key,
+             MAX(m.nama) AS title,
+             COUNT(p.part) AS eps,
+             MIN(m.poster_url) AS poster
+      FROM media m
+      LEFT JOIN media_parts p ON p.media_slug = m.slug
+      GROUP BY m.slug
+    `)
+    for (const r of mrows) {
+      const p = parseKey(r.drama_key)
+      if (!p || seen[p.id]) continue
+      seen[p.id] = true
+      dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps) || 0, poster: r.poster || null })
+    }
+  } catch (e) {
+    console.error('[data] queryAllDramas media fallback:', e.message)
+  }
   return dramas
 }
 
@@ -135,6 +156,38 @@ export async function getVidaraEpisodes(source, id) {
     return { found: true, episodes, info: { title: res.rows[0].title || id } }
   } catch (e) {
     console.error('[data] getVidaraEpisodes:', e.message)
+    return { found: false }
+  }
+}
+
+// Parts dari library Telegram (media_parts) — termasuk part MERGED (1 file
+// untuk banyak episode) yang tidak ada di vidara_uploads. Playback via
+// /api/file?file_id= (proxy Bot API, token tidak bocor ke client).
+export async function getTelegramParts(source, id) {
+  const slug = `${source}:${id}`
+  const animeSlug = `anime:${id}`
+  try {
+    const res = await pool.query(
+      `SELECT p.part, p.file_id, p.file_name, p.caption
+       FROM media_parts p
+       JOIN media m ON m.slug = p.media_slug
+       WHERE p.media_slug IN ($1, $2) AND p.file_id IS NOT NULL AND p.file_id <> ''
+       ORDER BY p.part`,
+      [slug, animeSlug]
+    )
+    if (res.rows.length === 0) return { found: false }
+    return {
+      found: true,
+      parts: res.rows.map(r => ({
+        part: r.part,
+        fileId: r.file_id,
+        fileName: r.file_name,
+        caption: r.caption,
+        playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
+      })),
+    }
+  } catch (e) {
+    console.error('[data] getTelegramParts:', e.message)
     return { found: false }
   }
 }
