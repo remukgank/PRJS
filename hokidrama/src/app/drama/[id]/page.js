@@ -55,27 +55,16 @@ export default async function DramaPage({ params, searchParams }) {
             {tgPart ? `🎬 ${tgPart.fileName || `Part ${tgPart.part}`}` : `🎬 ${currentEp ? `Ep ${currentEp.episode}` : 'Pemutar Video'}`}
           </h3>
           {tgPart ? (
-            tgPart.playable ? (
-              <div className="player-wrapper">
-                <video
-                  key={tgPart.fileId}
-                  src={tgPart.playUrl}
-                  controls
-                  preload="metadata"
-                  style={{ width: '100%', height: '100%', background: '#000' }}
-                />
+            <div className="player-wrapper" style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 12, minHeight: 200, background: '#0f172a',
+            }}>
+              <div style={{ fontSize: '2rem', opacity: 0.3 }}>📦</div>
+              <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{tgPart.fileName || `Part ${tgPart.part}`}</div>
+              <div style={{ color: '#94a3b8', fontSize: '0.85rem' }}>
+                {tgPart.sizeMb ? `${tgPart.sizeMb} MB · ` : ''}tersimpan di Telegram — tonton via bot atau tunggu upload Vidara
               </div>
-            ) : (
-              <div className="player-wrapper" style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexDirection: 'column', gap: 12, minHeight: 200, background: '#0f172a',
-              }}>
-                <div style={{ fontSize: '2rem', opacity: 0.3 }}>📦</div>
-                <div style={{ color: '#94a3b8' }}>
-                  File {tgPart.sizeMb ? `${tgPart.sizeMb} MB ` : ''}terlalu besar untuk web player — tonton via Telegram atau Vidara
-                </div>
-              </div>
-            )
+            </div>
           ) : currentEp?.embedUrl ? (
             <div className="player-wrapper">
               <iframe
