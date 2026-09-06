@@ -62,8 +62,13 @@ export default async function DramaPage({ params, searchParams }) {
               <div style={{ fontSize: '2rem', opacity: 0.3 }}>📦</div>
               <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{tgPart.fileName || `Part ${tgPart.part}`}</div>
               <div style={{ color: '#94a3b8', fontSize: '0.85rem' }}>
-                {tgPart.sizeMb ? `${tgPart.sizeMb} MB · ` : ''}tersimpan di Telegram — tonton via bot atau tunggu upload Vidara
+                {tgPart.sizeMb ? `${tgPart.sizeMb} MB · ` : ''}tersimpan di Telegram
               </div>
+              {tgPart.tgUrl && (
+                <a href={tgPart.tgUrl} target="_blank" rel="noopener noreferrer" className="chip hero-cta" style={{ textDecoration: 'none' }}>
+                  <span aria-hidden="true">✈️</span> Tonton di Telegram
+                </a>
+              )}
             </div>
           ) : currentEp?.embedUrl ? (
             <div className="player-wrapper">

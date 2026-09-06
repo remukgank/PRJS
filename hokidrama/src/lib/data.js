@@ -174,6 +174,30 @@ export async function getVidaraEpisodes(source, id) {
   }
 }
 
+// Kode deeplink stabil untuk tombol "Tonton di Telegram" (?start=dl_<code>).
+async function mintDeeplink(slug, part) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO deeplinks(code, media_slug, part)
+       VALUES (substr(md5(random()::text || clock_timestamp()::text), 1, 10), $1, $2)
+       ON CONFLICT (media_slug, part) DO NOTHING
+       RETURNING code`,
+      [slug, part]
+    )
+    if (rows[0]?.code) return rows[0].code
+    const existing = await pool.query(
+      'SELECT code FROM deeplinks WHERE media_slug = $1 AND part = $2',
+      [slug, part]
+    )
+    return existing.rows[0]?.code || null
+  } catch (e) {
+    console.error('[data] mintDeeplink:', e.message)
+    return null
+  }
+}
+
+const BOT_USERNAME = process.env.BOT_USERNAME || 'freedramashortbot'
+
 // Parts dari library Telegram (media_parts) — termasuk part MERGED (1 file
 // untuk banyak episode) yang tidak ada di vidara_uploads. Playback via
 // /api/file?file_id= (proxy Bot API, token tidak bocor ke client).
@@ -182,7 +206,7 @@ export async function getTelegramParts(source, id) {
   const animeSlug = `anime:${id}`
   try {
     const res = await pool.query(
-      `SELECT p.part, p.file_id, p.file_name, p.caption, p.file_size
+      `SELECT p.part, p.file_id, p.file_name, p.caption, p.file_size, p.media_slug
        FROM media_parts p
        JOIN media m ON m.slug = p.media_slug
        WHERE p.media_slug IN ($1, $2) AND p.file_id IS NOT NULL AND p.file_id <> ''
@@ -190,24 +214,22 @@ export async function getTelegramParts(source, id) {
       [slug, animeSlug]
     )
     if (res.rows.length === 0) return { found: false }
-    return {
-      found: true,
-      // playable: hanya file kecil yang lolos batas 20MB Bot API cloud.
-      // File besar (mis. part merged ratusan MB) tetap di-list tapi player
-      // disembunyikan — tonton via Telegram/Vidara.
-      parts: res.rows.map(r => {
-        const sizeMb = Number(r.file_size) / 1024 / 1024 || 0
-        return {
-          part: r.part,
-          fileId: r.file_id,
-          fileName: r.file_name,
-          caption: r.caption,
-          sizeMb: Math.round(sizeMb * 10) / 10,
-          playable: sizeMb > 0 && sizeMb <= 20,
-          playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
-        }
-      }),
+    const parts = []
+    for (const r of res.rows) {
+      const sizeMb = Number(r.file_size) / 1024 / 1024 || 0
+      const code = await mintDeeplink(r.media_slug, r.part)
+      parts.push({
+        part: r.part,
+        fileId: r.file_id,
+        fileName: r.file_name,
+        caption: r.caption,
+        sizeMb: Math.round(sizeMb * 10) / 10,
+        playable: sizeMb > 0 && sizeMb <= 20,
+        playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
+        tgUrl: code ? `https://t.me/${BOT_USERNAME}?start=dl_${code}` : null,
+      })
     }
+    return { found: true, parts }
   } catch (e) {
     console.error('[data] getTelegramParts:', e.message)
     return { found: false }

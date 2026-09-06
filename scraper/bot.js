@@ -21,7 +21,7 @@ const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, searchDrama, listPartsWithFile, getPartFileId, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
+const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -2344,6 +2344,37 @@ bot.on('message', safeHandler('message')(async (msg) => {
         `➧ Provider :- <tg-spoiler>${extractProvider(file.file_name || '')}</tg-spoiler>`,
       ].join('\n');
       return bot.sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+    }
+
+    // Deep link dari web: /start dl_<code> (minta file per part)
+    const dlMatch = text.match(/^\/start dl_([A-Za-z0-9]+)$/i);
+    if (dlMatch) {
+      if (!isAdmin(msg.from.id)) {
+        try {
+          const vipService = require('./services/vipService');
+          const isVip = await vipService.isVipUser(msg.from.id);
+          if (!isVip) {
+            const rateLimiter = require('./utils/rateLimiter');
+            if (rateLimiter.isLimited(msg.from.id, 'lib_view')) {
+              return bot.sendMessage(chatId, '⏳ Rate limit 1/menit — VIP unlimited. Cek 👤 Akun → 💎 VIP', { reply_markup: mainMenuKeyboard(false) });
+            }
+          }
+        } catch {}
+      }
+      const dl = await resolveDeeplink(dlMatch[1]);
+      if (!dl) return bot.sendMessage(chatId, '⚠️ Link kadaluarsa / tidak dikenal.');
+      const dfile = await getPartFileId(dl.media_slug, Number(dl.part));
+      if (!dfile) return bot.sendMessage(chatId, '⚠️ Part tidak ditemukan di library.');
+      const dmedia = await getMediaBySlug(dl.media_slug);
+      const dName = dmedia?.nama || dl.media_slug.replace(/^[^:]+:/, '');
+      const dCap = `➧ Judul :- <b>${dName}</b>\n➧ Part :- <b>${dl.part}</b>`;
+      const dext = String(dfile.file_name || '').split('.').pop().toLowerCase();
+      if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].includes(dext)) {
+        return bot.sendAudio(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
+      } else if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(dext)) {
+        return bot.sendVideo(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML', supports_streaming: true });
+      }
+      return bot.sendDocument(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
     }
 
     const isAdminUser = isAdmin(msg.from.id);

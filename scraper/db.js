@@ -64,6 +64,15 @@ async function initDatabase() {
     await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS poster_file_id TEXT;`);
     await pool.query(`ALTER TABLE media ADD COLUMN IF NOT EXISTS synopsis TEXT;`);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS deeplinks (
+        code       TEXT PRIMARY KEY,
+        media_slug TEXT NOT NULL,
+        part       INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (media_slug, part)
+      );
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS bot_settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -319,6 +328,21 @@ async function getPartFileId(slug, part) {
   }
 }
 
+// ─── Deeplink web→bot (?start=dl_<code>) ─────────────────────────────────────
+// Kode pendek stabil (DB, bukan cache memori) agar link web tidak basi.
+async function resolveDeeplink(code) {
+  try {
+    const r = await pool.query(
+      'SELECT media_slug, part FROM deeplinks WHERE code = $1',
+      [String(code || '').slice(0, 16)]
+    );
+    return r.rows[0] || null;
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to resolve deeplink');
+    return null;
+  }
+}
+
 async function upsertMedia(slug, nama, totalEps, sourceUrl, sourcePattern = null, posterUrl = null, posterFileId = null, synopsis = null) {
   try {
     await pool.query(
@@ -438,6 +462,7 @@ module.exports = {
   searchDrama,
   listPartsWithFile,
   getPartFileId,
+  resolveDeeplink,
   upsertMedia,
   deletePart,
   deleteMedia,
