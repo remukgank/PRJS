@@ -178,7 +178,7 @@ export async function getTelegramParts(source, id) {
   const animeSlug = `anime:${id}`
   try {
     const res = await pool.query(
-      `SELECT p.part, p.file_id, p.file_name, p.caption
+      `SELECT p.part, p.file_id, p.file_name, p.caption, p.file_size
        FROM media_parts p
        JOIN media m ON m.slug = p.media_slug
        WHERE p.media_slug IN ($1, $2) AND p.file_id IS NOT NULL AND p.file_id <> ''
@@ -188,13 +188,21 @@ export async function getTelegramParts(source, id) {
     if (res.rows.length === 0) return { found: false }
     return {
       found: true,
-      parts: res.rows.map(r => ({
-        part: r.part,
-        fileId: r.file_id,
-        fileName: r.file_name,
-        caption: r.caption,
-        playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
-      })),
+      // playable: hanya file kecil yang lolos batas 20MB Bot API cloud.
+      // File besar (mis. part merged ratusan MB) tetap di-list tapi player
+      // disembunyikan — tonton via Telegram/Vidara.
+      parts: res.rows.map(r => {
+        const sizeMb = Number(r.file_size) / 1024 / 1024 || 0
+        return {
+          part: r.part,
+          fileId: r.file_id,
+          fileName: r.file_name,
+          caption: r.caption,
+          sizeMb: Math.round(sizeMb * 10) / 10,
+          playable: sizeMb > 0 && sizeMb <= 20,
+          playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
+        }
+      }),
     }
   } catch (e) {
     console.error('[data] getTelegramParts:', e.message)

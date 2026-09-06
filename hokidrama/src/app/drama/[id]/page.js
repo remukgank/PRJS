@@ -55,15 +55,27 @@ export default async function DramaPage({ params, searchParams }) {
             {tgPart ? `🎬 ${tgPart.fileName || `Part ${tgPart.part}`}` : `🎬 ${currentEp ? `Ep ${currentEp.episode}` : 'Pemutar Video'}`}
           </h3>
           {tgPart ? (
-            <div className="player-wrapper">
-              <video
-                key={tgPart.fileId}
-                src={tgPart.playUrl}
-                controls
-                preload="metadata"
-                style={{ width: '100%', height: '100%', background: '#000' }}
-              />
-            </div>
+            tgPart.playable ? (
+              <div className="player-wrapper">
+                <video
+                  key={tgPart.fileId}
+                  src={tgPart.playUrl}
+                  controls
+                  preload="metadata"
+                  style={{ width: '100%', height: '100%', background: '#000' }}
+                />
+              </div>
+            ) : (
+              <div className="player-wrapper" style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexDirection: 'column', gap: 12, minHeight: 200, background: '#0f172a',
+              }}>
+                <div style={{ fontSize: '2rem', opacity: 0.3 }}>📦</div>
+                <div style={{ color: '#94a3b8' }}>
+                  File {tgPart.sizeMb ? `${tgPart.sizeMb} MB ` : ''}terlalu besar untuk web player — tonton via Telegram atau Vidara
+                </div>
+              </div>
+            )
           ) : currentEp?.embedUrl ? (
             <div className="player-wrapper">
               <iframe
@@ -115,7 +127,7 @@ export default async function DramaPage({ params, searchParams }) {
                   return (
                     <a key={`${p.fileId}-${i}`} href={tgUrl}
                       className={`ep${isActive ? ' active' : ''}`}>
-                      {String(p.part).match(/^\d+$/) ? `Part ${p.part}` : p.part}
+                      {String(p.part).match(/^\d+$/) ? `Part ${p.part}` : p.part}{p.sizeMb ? ` · ${p.sizeMb} MB` : ''}
                     </a>
                   )
                 })}
