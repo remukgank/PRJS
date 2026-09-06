@@ -46,13 +46,15 @@ export default async function DramaPage({ params, searchParams }) {
         </div>
       </div>
 
-      {(hasVidara || tgPart) && (
+      {(hasVidara || hasTg) && (
         <div style={{
           background: '#1e293b', border: '1px solid #475569', borderRadius: 10,
           padding: 24,
         }}>
           <h3 style={{ marginBottom: 16, fontSize: '1.1rem' }}>
-            {tgPart ? `🎬 ${tgPart.fileName || `Part ${tgPart.part}`}` : `🎬 ${currentEp ? `Ep ${currentEp.episode}` : 'Pemutar Video'}`}
+            {tgPart
+              ? `🎬 ${tgPart.fileName || `Part ${tgPart.part}`}`
+              : currentEp ? `🎬 Ep ${currentEp.episode}` : '🎬 Pilih tontonan'}
           </h3>
           {tgPart ? (
             <div className="player-wrapper" style={{
