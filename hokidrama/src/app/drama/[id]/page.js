@@ -31,12 +31,19 @@ export default async function DramaPage({ params, searchParams }) {
         <a href={source ? `/${source}` : '/'} style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
           ← Kembali
         </a>
-        <h1 style={{ marginTop: 8 }}>{drama.title}</h1>
-        <p>
-          {drama.source} · ID: {drama.id}
-          {hasVidara ? ` · ${v.episodes.length} eps di Vidara` : ''}
-          {hasTg ? ` · ${t.parts.length} part di Telegram` : ''}
-        </p>
+        <div style={{ display: 'flex', gap: 16, marginTop: 8, alignItems: 'center' }}>
+          {drama.poster && (
+            <img src={drama.poster} alt="" style={{ width: 72, height: 108, objectFit: 'cover', borderRadius: 8, border: '1px solid #475569' }} />
+          )}
+          <div>
+            <h1 style={{ margin: 0 }}>{drama.title}</h1>
+            <p>
+              {drama.source} · ID: {drama.id}
+              {hasVidara ? ` · ${v.episodes.length} eps di Vidara` : ''}
+              {hasTg ? ` · ${t.parts.length} part di Telegram` : ''}
+            </p>
+          </div>
+        </div>
       </div>
 
       {(hasVidara || tgPart) && (

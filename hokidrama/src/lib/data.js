@@ -22,6 +22,14 @@ function parseKey(key) {
   return { source: key.slice(0, i), id: key.slice(i + 1) }
 }
 
+// Poster: file_id Telegram dulu (awet, sama seperti bot), fallback URL.
+// file_id kecil (KB) sehingga lolos batas 20MB Bot API.
+function posterFor(r) {
+  const fid = r.poster_fid || r.poster_file_id || null
+  if (fid) return `/api/file?file_id=${encodeURIComponent(fid)}`
+  return r.poster || null
+}
+
 async function queryAllDramas() {
   const { rows } = await pool.query(`
     SELECT v.drama_key,
@@ -29,7 +37,8 @@ async function queryAllDramas() {
            COUNT(*) AS eps,
            MIN(v.domain) AS domain,
            MIN(v.uploaded_at) AS first_at,
-           MIN(m.poster_url) AS poster
+           MIN(m.poster_url) AS poster,
+           MIN(m.poster_file_id) AS poster_fid
     FROM vidara_uploads v
     LEFT JOIN media m
       ON m.slug = v.drama_key
@@ -44,7 +53,7 @@ async function queryAllDramas() {
     if (!p) continue
     if (seen[p.id]) continue // avoid duplicate id across providers
     seen[p.id] = true
-    dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps), poster: r.poster || null })
+    dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps), poster: posterFor(r) })
   }
   // Tambahan: drama yang HANYA ada di library Telegram (media_parts,
   // mis. part merged) — tidak ada di vidara_uploads sehingga tak terlihat.
@@ -53,7 +62,8 @@ async function queryAllDramas() {
       SELECT m.slug AS drama_key,
              MAX(m.nama) AS title,
              COUNT(p.part) AS eps,
-             MIN(m.poster_url) AS poster
+             MIN(m.poster_url) AS poster,
+             MIN(m.poster_file_id) AS poster_fid
       FROM media m
       LEFT JOIN media_parts p ON p.media_slug = m.slug
       GROUP BY m.slug
@@ -62,7 +72,7 @@ async function queryAllDramas() {
       const p = parseKey(r.drama_key)
       if (!p || seen[p.id]) continue
       seen[p.id] = true
-      dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps) || 0, poster: r.poster || null })
+      dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps) || 0, poster: posterFor(r) })
     }
   } catch (e) {
     console.error('[data] queryAllDramas media fallback:', e.message)
