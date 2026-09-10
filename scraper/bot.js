@@ -1839,6 +1839,48 @@ function safeHandler(kind) {
   };
 }
 
+// ─── Samehadaku picker done-state ────────────────────────────────────────────
+// Slug library anime: komposisi IDENTIK dengan sisi download (sam_dl titleArg
+// = title + S + P) agar centang cocok. Gagal/c tak cocok -> picker lama.
+function samehadakuAnimeSlug(animeUrl) {
+  try {
+    const info = parseSamehadakuAnime(animeUrl);
+    if (!info) return null;
+    const base = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
+    return `anime:${sanitizeSlug(base)}`;
+  } catch { return null; }
+}
+
+// Keyboard episode + caption dgn centang ✅ utk part yg sudah ada di library.
+async function buildSamehadakuEpisodePicker(eps, animeUrl) {
+  const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
+  const done = new Set();
+  try {
+    const slug = samehadakuAnimeSlug(animeUrl);
+    if (slug) {
+      const rows = await listPartsWithFile(slug);
+      for (const r of rows || []) done.add(Number(r.part));
+    }
+  } catch (err) {
+    logger.warn({ err: err.message }, 'episode picker done-state gagal, tampil tanpa centang');
+  }
+  const keyboard = [];
+  const chunk = 5;
+  for (let i = 0; i < eps.length; i += chunk) {
+    const row = eps.slice(i, i + chunk).map((e) => {
+      const epId = hashUrl(e.url).slice(0, 8);
+      samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
+      return { text: done.has(Number(e.ep)) ? `✅ Ep ${e.ep}` : `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
+    });
+    keyboard.push(row);
+  }
+  const doneCount = eps.filter((e) => done.has(Number(e.ep))).length;
+  const caption = doneCount > 0
+    ? `📺 <b>${title}</b>\n${eps.length} episode — ${doneCount} sudah di library ✅, pilih episode:`
+    : `📺 <b>${title}</b>\n${eps.length} episode — pilih episode:`;
+  return { keyboard, caption };
+}
+
 bot.on('message', safeHandler('message')(async (msg) => {
   logger.info({ chatId: msg.chat.id, text: msg.text || msg.caption || '', from: msg.from?.username || msg.from?.id, hasMedia: !!(msg.photo || msg.video || msg.document) }, 'Message received');
   const chatId = msg.chat.id;
@@ -2596,18 +2638,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
       // Anime page: daftar episode — pakai hash (stabil) bukan cacheUrl numerik (bisa collide/expired)
       if (res.type === 'anime' && res.episodes?.length) {
         const eps = res.episodes;
-        const keyboard = [];
-        const chunk = 5;
-        for (let i = 0; i < eps.length; i += chunk) {
-          const row = eps.slice(i, i + chunk).map((e) => {
-            const epId = hashUrl(e.url).slice(0, 8);
-            samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-            return { text: `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
-          });
-          keyboard.push(row);
-        }
-        const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
-        const caption = `📺 <b>${title}</b>\n${eps.length} episode — pilih episode:`;
+        const { keyboard, caption } = await buildSamehadakuEpisodePicker(eps, text);
         if (statusMsg) {
           return bot.editMessageText(caption, {
             chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
@@ -3092,18 +3123,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const res = await resolveSamehadakuFullhd(animeUrl);
       if (res.type !== 'anime' || !res.episodes?.length) return bot.editMessageText('⚠️ Gagal load episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
       const eps = res.episodes;
-      const keyboard = [];
-      const chunk = 5;
-      for (let i = 0; i < eps.length; i += chunk) {
-        const row = eps.slice(i, i + chunk).map((e) => {
-          const epId2 = hashUrl(e.url).slice(0, 8);
-          samehadakuEpisodeMap.set(epId2, e.url);
-          return { text: `Ep ${e.ep}`, callback_data: `sam_ep:${epId2}` };
-        });
-        keyboard.push(row);
-      }
-      const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
-      return bot.editMessageText(`📺 <b>${title}</b>\n${eps.length} episode — pilih episode:`, {
+      const { keyboard, caption } = await buildSamehadakuEpisodePicker(eps, animeUrl);
+      return bot.editMessageText(caption, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => {});
     } catch (err) {
