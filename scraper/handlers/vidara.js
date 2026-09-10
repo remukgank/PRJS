@@ -5,7 +5,7 @@ const { logger } = require('../logger');
 const { getVideoUrl, destroySession } = require('../index');
 const { getVideoUrlReelFren } = require('../providers/reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
-const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat } = require('../services/vidaraService');
+const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat, providerDownSig, pushStreak, providerDownSerialMsg } = require('../services/vidaraService');
 const { fileSizeMb, getVideoInfo } = require('../downloader');
 const V = require('../vidara-uploader');
 
@@ -169,6 +169,10 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
 
   let vidDone = 0, vidFail = 0, tgDone = 0, tgFail = 0;
   const vidFiles = {};
+  // Fail-fast antar-chunk: diisi pesan vonis bila satu chunk terbukti
+  // provider-down (3 gagal resolve berurutan, sig sama) -> chunk sisa di-skip
+  // tanpa bakar resolve-cycle. Per-run saja, tidak persist antar-run.
+  let providerDownMsg = null;
 
   try {
     for (let ci = 0; ci < chunks.length; ci++) {
@@ -180,13 +184,37 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
       fs.mkdirSync(batchWorkDir, { recursive: true });
 
       try {
+        if (providerDownMsg) {
+          // Chunk sebelumnya vonis provider down -> skip chunk ini.
+          rp.updateLabel(partLabel, 'fail', providerDownMsg.slice(0, 40));
+          rp.note(`❌ ${partLabel}: ${providerDownMsg.slice(0, 80)}`);
+          logger.warn({ chatId, part: partLabel }, 'vt_merge10 skip — provider down (chunk sebelumnya)');
+          continue;
+        }
         // 1. Download semua episode dalam batch
         rp.updateLabel(partLabel, 'download', `0/${chunk.length}`);
         const epFiles = [];
+        // Streak resolve-gagal per chunk (reset tiap chunk). Vonis hanya bila
+        // 3 berurutan dgn sig upstream sama (varian max-3, konservatif).
+        let streak = [];
         for (let j = 0; j < chunk.length; j++) {
           const epObj = chunk[j];
-          const url = await resolveVideoUrl(epObj);
-          if (!url) throw new Error(`video URL kosong Ep ${epObj.ep}`);
+          let url = null;
+          let rErr = null;
+          try {
+            url = await resolveVideoUrl(epObj);
+          } catch (e) { rErr = e; }
+          if (!url) {
+            const sig = rErr ? providerDownSig(rErr.message) : providerDownSig('video URL kosong');
+            streak = pushStreak(streak, sig);
+            if (streak.length >= 3) {
+              providerDownMsg = providerDownSerialMsg(providerLabel, sig);
+              throw new Error(providerDownMsg);
+            }
+            if (rErr) throw rErr; // perilaku lama: error asli resolve
+            throw new Error(`video URL kosong Ep ${epObj.ep}`); // perilaku lama
+          }
+          streak = [];
           const dest = path.join(batchWorkDir, `ep${String(epObj.ep).padStart(2, '0')}.mp4`);
           await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { chatId, ep: epObj.ep } });
           epFiles.push(dest);

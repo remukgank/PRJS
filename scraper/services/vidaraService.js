@@ -37,6 +37,49 @@ function isHlsUrl(url) {
   return typeof url === 'string' && /\.m3u8($|\?)/i.test(url);
 }
 
+// ─── Fail-fast provider down (insiden dramanova 502) ─────────────────────────
+// Bedakan "sebagian gagal" (retry berguna) vs "semua gagal sama" (upstream
+// down -> vonis cepat). Klasifikasi konservatif: hanya sinyal upstream yang
+// dikenal; error download/merge lokal (HLS→mp4 gagal, ffmpeg, dsb) -> null.
+function providerDownSig(msg) {
+  const m = String(msg || '').toLowerCase().replace(/ep(isode)?\s*\d+/g, '').replace(/\d+\s*ms/g, '');
+  if (/502|bad gateway/.test(m)) return 'HTTP 502';
+  if (/503|service unavailable/.test(m)) return 'HTTP 503';
+  if (/504|gateway timeout/.test(m)) return 'HTTP 504';
+  if (/invalid response/.test(m)) return 'invalid response';
+  if (/video url kosong/.test(m)) return 'video URL kosong';
+  if (/timeout|timed out|econn|eai_again|socket hang|fetch failed|request failed/.test(m)) return 'timeout/jaringan';
+  return null;
+}
+
+// Vonis batch paralel: 100% gagal + semua sig identik non-null -> Error
+// provider-down; selain itu null (jalur normal). Threshold 100% disengaja
+// (konservatif); campuran -> jalur lama.
+// Pesan dipadatkan (sig pendek) agar muat di progress-line onBatch (60 char).
+const SHORT_SIG = { 'HTTP 502': '502', 'HTTP 503': '503', 'HTTP 504': '504', 'invalid response': 'invalid', 'video URL kosong': 'URL kosong', 'timeout/jaringan': 'timeout' };
+function providerDownVerdict(errors, total, providerLabel) {
+  if (!Array.isArray(errors) || errors.length !== total || total <= 0) return null;
+  const sigs = errors.map((e) => providerDownSig(e && e.error));
+  if (!sigs[0] || !sigs.every((s) => s === sigs[0])) return null;
+  return new Error(`Provider ${providerLabel} down (${total}/${total}:${SHORT_SIG[sigs[0]] || sigs[0]}), coba lagi nanti`);
+}
+
+// Format pesan vonis serial (max-3-ep). Diekstrak agar panjangnya bisa
+// di-test (rp.note trunkasi 80 char).
+function providerDownSerialMsg(providerLabel, sig) {
+  return `Provider ${providerLabel} down (3 ep berurutan gagal: ${sig}), coba lagi nanti`;
+}
+
+// Streak serial: kembalikan array streak terbaru. Append bila sig sama dengan
+// terakhir; reset ke [sig] bila sig baru; reset ke [] bila bukan sinyal down.
+// Vonis (streak.length >= 3) diputuskan caller.
+function pushStreak(streak, sig) {
+  if (!sig) return [];
+  const last = streak.length ? streak[streak.length - 1] : null;
+  if (sig === last) return [...streak, sig];
+  return [sig];
+}
+
 // Pastikan video jadi .mp4 lokal: HLS (.m3u8) → ffmpeg stream-copy; bukan HLS → download langsung.
 // Retry + resolveFresh: backend bisa flip-flop (URL valid saat probe tapi
 // sampah saat download) — coba ulang dengan URL fresh per attempt.
@@ -98,8 +141,29 @@ function ffmpegConcat(inputs, outPath) {
 }
 
 // Upload batch: gabung BATCH_SIZE episode jadi 1 video, upload via curl-multipart (metode VDL).
-async function uploadDramaBatchesVidara(opts) {
-  const { dramaKey, title, subdomain, providerLabel, episodes, resolveVideoUrl, batchSize = 10, workers = 3, onBatch } = opts;
+// Worker-pool download per chunk (diekstrak module-level agar bisa di-test
+// tanpa side-effect fs/Vidara API; perilaku identik dengan versi nested lama).
+async function downloadChunk(chunk, resolveVideoUrl, workDir, workers = 3, logCtx = {}) {
+  const results = new Array(chunk.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < chunk.length) {
+      const j = idx++;
+      const epObj = chunk[j];
+      try {
+        const url = await resolveVideoUrl(epObj);
+        if (!url) throw new Error('video URL kosong');
+        const dest = path.join(workDir, `ep${pad(j + 1)}-${pad(Number(epObj.ep) || j + 1)}.mp4`);
+        await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { ...logCtx, ep: epObj.ep } });
+        results[j] = dest;
+      } catch (e) { results[j] = { error: e.message || String(e) }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(workers, chunk.length) }, worker));
+  return results;
+}
+
+async function uploadDramaBatchesVidara(opts) {  const { dramaKey, title, subdomain, providerLabel, episodes, resolveVideoUrl, batchSize = 10, workers = 3, onBatch } = opts;
 
   const dirKey = String(subdomain || providerLabel || 'misc').replace(/^reelfren_/, '');
   const safeTitle = V.sanitizeDir(title || dirKey);
@@ -125,23 +189,7 @@ async function uploadDramaBatchesVidara(opts) {
   const files = {};
 
   async function downloadAll(chunk) {
-    const results = new Array(chunk.length);
-    let idx = 0;
-    async function worker() {
-      while (idx < chunk.length) {
-        const j = idx++;
-        const epObj = chunk[j];
-        try {
-          const url = await resolveVideoUrl(epObj);
-          if (!url) throw new Error('video URL kosong');
-          const dest = path.join(workDir, `ep${pad(j + 1)}-${pad(Number(epObj.ep) || j + 1)}.mp4`);
-          await ensureMp4(url, dest, { resolveFresh: () => resolveVideoUrl(epObj), logCtx: { ep: epObj.ep } });
-          results[j] = dest;
-        } catch (e) { results[j] = { error: e.message || String(e) }; }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(workers, chunk.length) }, worker));
-    return results;
+    return downloadChunk(chunk, resolveVideoUrl, workDir, workers);
   }
 
   for (let ci = 0; ci < chunks.length; ci++) {
@@ -165,7 +213,9 @@ async function uploadDramaBatchesVidara(opts) {
       const ok = filesPaths.filter((f) => typeof f === 'string');
       const errors = filesPaths.filter((f) => typeof f !== 'string');
       if (ok.length !== chunk.length) {
-        throw new Error(`download gagal ${errors.length}/${chunk.length} (${errors[0]?.error || '?'})`);
+        // Fail-fast: 100% gagal + error identik upstream -> vonis provider down.
+        const verdict = providerDownVerdict(errors, chunk.length, providerLabel);
+        throw verdict || new Error(`download gagal ${errors.length}/${chunk.length} (${errors[0]?.error || '?'})`);
       }
 
       const merged = path.join(workDir, `${safeTitle} — Ep ${label}.mp4`);
@@ -280,4 +330,4 @@ async function uploadToVidara(opts) {
   return { done, fail, skipped, total, filecodes, fldId, folderName, subDir };
 }
 
-module.exports = { uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl };
+module.exports = { uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, downloadChunk };
