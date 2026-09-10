@@ -21,6 +21,12 @@
 //   (d) kiriman file_id (server-side Telegram, NOL beban lokal);
 //   (e) upload HTTP ke CDN Vidara (bukan antrian Telegram; disk ketutup `du`).
 //
+// KETERBATASAN (a): counter pendingUploads/activePaths in-memory PER PROSES.
+// bot.js dan batch-download.js jalan sebagai proses terpisah -> masing-masing
+// punya cap MAX_PENDING_UPLOADS sendiri (worst case 10+10), bukan global.
+// Cap disk (du) tetap global karena ukur folder yang sama. Untuk skala ini
+// (2 proses) diterima; bila proses bertambah, pindahkan counter ke DB.
+//
 // Tidak require bot/telegram (anti circular). notify() di-inject via init().
 
 const fs = require('fs');
@@ -93,17 +99,27 @@ function sleep(ms) {
 
 // ─── Upload accounting ───────────────────────────────────────────────────────
 function uploadStart(filePath) {
+  if (!isLocalFileRef(filePath)) return; // file_id/URL: NOL beban, jangan hitung
   _pendingUploads += 1;
   if (filePath) _activePaths.add(String(filePath));
 }
 
 function uploadDone(filePath) {
+  if (!isLocalFileRef(filePath)) return; // simetris dengan uploadStart
   _pendingUploads = Math.max(0, _pendingUploads - 1);
   if (filePath) _activePaths.delete(String(filePath));
 }
 
+// file_id/URL tidak makan disk/bandwidth lokal -> jangan hitung (c).
+// Path lokal di kode ini selalu absolut (ada '/'); file_id tidak punya '/'.
+function isLocalFileRef(ref) {
+  const s = String(ref || '');
+  return s.includes('/') || s.includes('\\');
+}
+
 // Bungkus promise kirim: hitung akurat tanpa ubah logic pengiriman.
 function track(promise, filePath) {
+  if (!isLocalFileRef(filePath)) return promise;
   uploadStart(filePath);
   return promise.then(
     (v) => { uploadDone(filePath); return v; },
@@ -167,6 +183,8 @@ function freeBytes() {
 // Hapus file umur >24 jam di folder kerja. File in-flight aman otomatis karena
 // mtime-nya fresh; activePaths = sabuk ganda untuk file tua yang masih
 // ditunggu upload (kasus stall >24 jam).
+// (b) REKURSIF ke subfolder (file saja, direktori tak pernah dihapus).
+// Symlink ke-skip (isFile false) agar tak hapus target luar folder kerja.
 function emergencyCleanup() {
   const cfg = getConfig();
   const cutoff = Date.now() - 24 * 3600 * 1000;
@@ -174,22 +192,27 @@ function emergencyCleanup() {
   let freed = 0;
   const sample = [];
   for (const dir of watchDirs()) {
-    let ents;
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-    for (const e of ents) {
-      if (!e.isFile()) continue;
-      const p = path.join(dir, e.name);
-      if (_activePaths.has(p)) continue;
-      let st;
-      try { st = fs.statSync(p); } catch { continue; }
-      if (st.mtimeMs > cutoff) continue;
-      try {
-        fs.unlinkSync(p);
-        removed += 1;
-        freed += st.size;
-        if (sample.length < 5) sample.push(e.name);
-      } catch (err) {
-        logger.warn({ file: e.name, err: err.message }, 'backpressure cleanup gagal hapus');
+    const stack = [dir];
+    while (stack.length) {
+      const cur = stack.pop();
+      let ents;
+      try { ents = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+      for (const e of ents) {
+        const p = path.join(cur, e.name);
+        if (e.isDirectory()) { stack.push(p); continue; }
+        if (!e.isFile()) continue;
+        if (_activePaths.has(p)) continue;
+        let st;
+        try { st = fs.statSync(p); } catch { continue; }
+        if (st.mtimeMs > cutoff) continue;
+        try {
+          fs.unlinkSync(p);
+          removed += 1;
+          freed += st.size;
+          if (sample.length < 5) sample.push(path.relative(dir, p));
+        } catch (err) {
+          logger.warn({ file: e.name, err: err.message }, 'backpressure cleanup gagal hapus');
+        }
       }
     }
   }

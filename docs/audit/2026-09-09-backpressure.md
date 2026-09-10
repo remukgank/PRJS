@@ -28,3 +28,30 @@
 - Functional terisolasi 14/14 (counter, pause/resume dua lapis, notif
   sekali, dry-run, cleanup selektif, kill-switch).
 - `require lib/telegram` tetap hanya dari `bot.js` + tests.
+
+## Commit + rollout (approve tercatat)
+- Commit `c9c3111` -> main (+375/-34, 6 file). Approve tercatat user.
+- Rollout (user eksekusi): restart workflow Telegram Bot manual dengan
+  `BACKPRESSURE_DRY_RUN=1` dulu, pantau `[dry-run] would pause` +
+  `pendingUploads`/du beberapa jam, baru enforce (`=0`/unset + restart).
+
+## Follow-up 3 syarat review (commit terpisah, bukan blocker, tanpa revert)
+Verifikasi `git show c9c3111`: (a) komentar per-proses BELUM ada (0 hit);
+(b) `emergencyCleanup` top-level-only, tak ada pernyataan by-design;
+(c) skip file_id hanya tertulis di doc, belum ada guard kode.
+- (a) Komentar KETERBATASAN per-proses ditambahkan di header modul
+  (cap pending per proses, cap disk global via du).
+- (b) `emergencyCleanup` dibuat REKURSIF (file saja, direktori tak pernah
+  dihapus, symlink ke-skip). Test: file tua subdir terhapus, file aktif
+  aman, direktori utuh.
+- (c) `track()` skip non-path lokal (`isLocalFileRef`: hitung hanya bila
+  ada `/` atau `\`) — file_id/URL return promise apa adanya. Test:
+  file_id & URL tak dihitung, path lokal tetap dihitung.
+- (c2) Verifikasi independen menemukan lubang: guard hanya di `track()`,
+  sementara batch memanggil `uploadStart()` langsung. Perbaikan: guard
+  dipindah simetris ke `uploadStart`/`uploadDone` sehingga SEMUA entry
+  tertutup. Audit: satu-satunya pemanggil langsung (batch, 2 situs)
+  terbukti oper path lokal (tempPath + merge output, dicek existsSync/
+  fileSizeMb) — tak ada file_id yang mengalir hari ini, dan kalaupun ada
+  esok, guard menahannya. Test 6/6 (track+direct × fid/path).
+- Verifikasi follow-up: `node --check` OK, ESLint 0, 6/6 test terarah.
