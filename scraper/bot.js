@@ -1870,7 +1870,7 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl) {
     const row = eps.slice(i, i + chunk).map((e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-      return { text: done.has(Number(e.ep)) ? `✅ Ep ${e.ep}` : `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
+      return { text: done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
     });
     keyboard.push(row);
   }
