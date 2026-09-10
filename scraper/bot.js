@@ -143,7 +143,8 @@ async function sendToProviderTopic(provider, caption, posterPath) {
     const threadId = await getOrCreateTopic(provider);
     const base = { message_thread_id: threadId, parse_mode: 'HTML' };
     if (posterPath) {
-      await bot.sendPhoto(RF_GROUP_ID, posterPath, { ...base, caption });
+      // Via sender (terhitung pendingUploads); message_thread_id didukung sender.
+      await sendPhoto(RF_GROUP_ID, posterPath, { ...base, caption });
     } else {
       await bot.sendMessage(RF_GROUP_ID, caption, base);
     }
@@ -153,7 +154,7 @@ async function sendToProviderTopic(provider, caption, posterPath) {
       try {
         const newThreadId = await getOrCreateTopic(provider);
         const base2 = { message_thread_id: newThreadId, parse_mode: 'HTML' };
-        if (posterPath) await bot.sendPhoto(RF_GROUP_ID, posterPath, { ...base2, caption });
+        if (posterPath) await sendPhoto(RF_GROUP_ID, posterPath, { ...base2, caption });
         else await bot.sendMessage(RF_GROUP_ID, caption, base2);
         return;
       } catch (err2) {
@@ -238,6 +239,15 @@ _libraryHandlers.initLibrary({ bot, isAdmin });
 // E5c: wire handlers/admin via ctx injection
 const _adminHandlers = require('./handlers/admin');
 _adminHandlers.initAdmin({ bot, config: { ADMIN_IDS, STAR_PRICE, LOCAL_API_PORT, TOKEN } });
+
+// Backpressure 2 lapis: notif pause/resume ke admin pertama (DM, bukan grup).
+const backpressure = require('./lib/backpressure');
+backpressure.init({
+  notify: (msg) => {
+    if (!ADMIN_IDS.length) return;
+    bot.sendMessage(ADMIN_IDS[0], msg).catch((err) => logger.warn({ err: err.message }, 'backpressure notify gagal'));
+  },
+});
 
 const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan) — dideklarasikan di atas wiring agar initVidara tidak TDZ
 // ─── Download + kirim 1 file ──────────────────────────────────────────────────

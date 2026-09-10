@@ -12,6 +12,7 @@ const os = require('os');
 const axios = require('axios');
 
 const { logger: appLogger, ffmpegLogger } = require('./logger');
+const backpressure = require('./lib/backpressure'); // lapis 1+2 gate sebelum tiap download
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 const TMP_DIR = path.join(os.homedir(), 'workspace', 'downloads');
 
@@ -68,6 +69,9 @@ async function downloadStream(streamUrl, outPath, onLog, subtitleUrl, opts = {})
     appLogger.warn({ file: fileName }, 'File exists but corrupted — re-downloading');
     fs.unlinkSync(outPath);
   }
+
+  // Lapis 1+2: pause bila folder kerja/antrian penuh atau disk kritis.
+  await backpressure.checkBeforeDownload();
 
   let subtitlePath = null;
   if (subtitleUrl) {
@@ -266,7 +270,10 @@ function calcAria2cTimeout(fileSizeBytes) {
 }
 
 function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
-  return new Promise((resolve, reject) => {
+  // Lapis 1+2 gate dulu (bungkus async-IIFE agar signature sync->Promise tetap).
+  return (async () => {
+    await backpressure.checkBeforeDownload();
+    return new Promise((resolve, reject) => {
     if (fs.existsSync(outPath) && fs.statSync(outPath).size > 1024 * 1024) {
       appLogger.info({ file: path.basename(outPath) }, 'Skip download — already exists');
       if (onLog) onLog('skip: sudah ada');
@@ -361,7 +368,8 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
       appLogger.error({ file: fileName, err: err.message }, 'aria2c error');
       reject(err);
     });
-  });
+    });
+  })();
 }
 
 /**

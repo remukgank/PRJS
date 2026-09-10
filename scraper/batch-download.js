@@ -11,6 +11,7 @@ const { pool, initDatabase, savePartFileId, getSetting } = require('./db');
 const { getVideoUrl, getAllEpisodes } = require('./index');
 const { createSession, destroySession } = require('./providers/dramafren');
 const { downloadStream, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb } = require('./downloader');
+const backpressure = require('./lib/backpressure'); // upload accounting lapis 1 (track minimal)
 
 const CHANNEL_ID = process.env.CHANNEL_ID || '';
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -148,42 +149,55 @@ async function ensureLocalApi() {
 }
 
 async function sendVideoToChannel(chatId, filePath, opts = {}) {
-  const { caption, supports_streaming, duration, width, height } = opts;
-  const sizeMb = fileSizeMb(filePath);
+  // track() MINIMAL (keputusan terkunci): hanya hitung upload, TANPA ubah
+  // logic pengiriman/branching CLOUD_LIMIT_MB. Blast radius kecil.
+  backpressure.uploadStart(filePath);
+  try {
+    const { caption, supports_streaming, duration, width, height } = opts;
+    const sizeMb = fileSizeMb(filePath);
 
-  if (sizeMb <= CLOUD_LIMIT_MB) {
-    return bot.sendVideo(chatId, filePath, {
+    if (sizeMb <= CLOUD_LIMIT_MB) {
+      return await bot.sendVideo(chatId, filePath, {
+        caption, parse_mode: 'HTML',
+        supports_streaming: supports_streaming ?? true,
+        ...(duration && { duration }),
+        ...(width && { width }),
+        ...(height && { height }),
+      });
+    }
+
+    await ensureLocalApi();
+    return await tgApi('sendVideo', {
+      chat_id: chatId,
+      video: `file://${filePath}`,
       caption, parse_mode: 'HTML',
       supports_streaming: supports_streaming ?? true,
       ...(duration && { duration }),
       ...(width && { width }),
       ...(height && { height }),
     });
+  } finally {
+    backpressure.uploadDone(filePath);
   }
-
-  await ensureLocalApi();
-  return tgApi('sendVideo', {
-    chat_id: chatId,
-    video: `file://${filePath}`,
-    caption, parse_mode: 'HTML',
-    supports_streaming: supports_streaming ?? true,
-    ...(duration && { duration }),
-    ...(width && { width }),
-    ...(height && { height }),
-  });
 }
 
 async function sendPhotoToChannel(chatId, photoPath, caption) {
-  const sizeMb = fileSizeMb(photoPath);
-  if (sizeMb <= CLOUD_LIMIT_MB) {
-    return bot.sendPhoto(chatId, photoPath, { caption, parse_mode: 'HTML' });
+  // track() minimal, sama seperti sendVideoToChannel di atas.
+  backpressure.uploadStart(photoPath);
+  try {
+    const sizeMb = fileSizeMb(photoPath);
+    if (sizeMb <= CLOUD_LIMIT_MB) {
+      return await bot.sendPhoto(chatId, photoPath, { caption, parse_mode: 'HTML' });
+    }
+    await ensureLocalApi();
+    return await tgApi('sendPhoto', {
+      chat_id: chatId,
+      photo: `file://${photoPath}`,
+      caption, parse_mode: 'HTML',
+    });
+  } finally {
+    backpressure.uploadDone(photoPath);
   }
-  await ensureLocalApi();
-  return tgApi('sendPhoto', {
-    chat_id: chatId,
-    photo: `file://${photoPath}`,
-    caption, parse_mode: 'HTML',
-  });
 }
 
 function checkTelegram() {
@@ -832,6 +846,8 @@ async function processDrama(url, index, total, mode, chunkSize, epDelay, outputD
 async function runBatch(urls, mode, chunkSize, epDelay, dramaDelay, outputDir, channelId, concurrency, refresh) {
   fs.mkdirSync(outputDir, { recursive: true });
   await initDatabase();
+  // Notifier batch = log konsol saja (jangan spam channel drama).
+  backpressure.init({ notify: (msg) => console.log(`[backpressure] ${msg}`) });
 
   const t0 = Date.now();
   let totalDone = 0, totalFail = 0, totalEps = 0, totalBytes = 0, dramaDone = 0, dramaFail = 0;

@@ -1,4 +1,5 @@
 const { logger } = require('../logger');
+const backpressure = require('./backpressure'); // upload accounting lapis 1
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -181,7 +182,7 @@ async function sendDocument(chatId, filePath, opts = {}, cacheInfo = null) {
 
 async function sendPhoto(chatId, filePath, opts = {}) {
   ensureSender('sendPhoto');
-  const { caption } = opts;
+  const { caption, message_thread_id } = opts;
   const cap = caption ? caption.slice(0, 1024) : undefined;
   return _config.LOCAL_API_PORT
     ? await apiPost('sendPhoto', {
@@ -189,8 +190,13 @@ async function sendPhoto(chatId, filePath, opts = {}) {
         photo: `file://${filePath}`,
         caption: cap,
         parse_mode: 'HTML',
+        ...(message_thread_id && { message_thread_id }),
       })
-    : await _bot.sendPhoto(chatId, filePath, { caption: cap, parse_mode: 'HTML' });
+    : await _bot.sendPhoto(chatId, filePath, {
+        caption: cap,
+        parse_mode: 'HTML',
+        ...(message_thread_id && { message_thread_id }),
+      });
 }
 
 module.exports = {
@@ -199,8 +205,10 @@ module.exports = {
   wrapAnswerCallbackQuery,
   initTelegram,
   apiPost,
-  sendVideo,
-  sendAudio,
-  sendDocument,
-  sendPhoto,
+  // Upload accounting: semua kiriman file lokal lewat sini (lihat
+  // lib/backpressure.js §cakupan). track() hanya hitung, tak ubah logic.
+  sendVideo: (chatId, filePath, opts, cacheInfo) => backpressure.track(sendVideo(chatId, filePath, opts, cacheInfo), filePath),
+  sendAudio: (chatId, filePath, opts, cacheInfo) => backpressure.track(sendAudio(chatId, filePath, opts, cacheInfo), filePath),
+  sendDocument: (chatId, filePath, opts, cacheInfo) => backpressure.track(sendDocument(chatId, filePath, opts, cacheInfo), filePath),
+  sendPhoto: (chatId, filePath, opts) => backpressure.track(sendPhoto(chatId, filePath, opts), filePath),
 };
