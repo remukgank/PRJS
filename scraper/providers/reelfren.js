@@ -44,7 +44,9 @@ const PROBE_BACKOFF_MS = 2000;
  * @returns {{ provider: string, id: string, fullId: string, slug: string, ep: number, lang: string } | null}
  */
 function parseReelFrenUrl(text) {
-  const m = text.match(/reelfren\.dramafren\.org\/(drama|watch)\/([^/]+)\/([^?&\s]+)/i);
+  // Domain: reelfren.dramafren.org (lama) + reelfren.com (baru). Grup
+  // non-capturing agar indeks m[1..3] tidak bergeser.
+  const m = text.match(/(?:reelfren\.dramafren\.org|reelfren\.com)\/(drama|watch)\/([^/]+)\/([^?&\s]+)/i);
   if (!m) return null;
 
   const provider = m[2];
