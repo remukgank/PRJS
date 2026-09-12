@@ -14,6 +14,9 @@ const axios = require('axios');
 const { logger: appLogger, ffmpegLogger } = require('./logger');
 const backpressure = require('./lib/backpressure'); // lapis 1+2 gate sebelum tiap download
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
+// UA browser penuh (bukan "Mozilla/5.0" saja): CDN galak (farsunpteltd dkk)
+// menolak request ffmpeg default/Lavf maupun UA terpotong -> 403.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
 const TMP_DIR = path.join(os.homedir(), 'workspace', 'downloads');
 
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -91,7 +94,7 @@ async function downloadStream(streamUrl, outPath, onLog, subtitleUrl, opts = {})
   return new Promise((resolve, reject) => {
     const args = [
       '-y',
-      '-headers', 'User-Agent: Mozilla/5.0',
+      '-headers', `User-Agent: ${BROWSER_UA}`,
       '-i', streamUrl,
     ];
     if (subtitlePath) {

@@ -9,6 +9,9 @@ const V = require('../vidara-uploader');
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// UA browser penuh, sama seperti downloader.js (CDN galak block UA default).
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
+
 function rangeLabel(a, b) { return `${pad(a)}-${pad(b)}`; }
 
 async function downloadTo(url, destPath) {
@@ -80,6 +83,21 @@ function pushStreak(streak, sig) {
   return [sig];
 }
 
+// Kumpulkan vonis dari kegagalan per-ep jalan paralel (Hook 1 & Hook 3).
+// failedEps: array ep gagal; resolveErrors: Map/obj ep -> pesan error FASE
+// RESOLVE. Ep tanpa catatan resolve (gagal di download/ffmpeg) -> null
+// (jalur normal): vonis butuh bukti resolve 100%, bukan asumsi.
+function collectVerdict(failedEps, resolveErrors, chunkLength, providerLabel) {
+  if (!Array.isArray(failedEps) || failedEps.length !== chunkLength || chunkLength <= 0) return null;
+  const errs = [];
+  for (const ep of failedEps) {
+    const msg = resolveErrors instanceof Map ? resolveErrors.get(ep) : resolveErrors?.[ep];
+    if (msg == null) return null;
+    errs.push({ error: msg });
+  }
+  return providerDownVerdict(errs, chunkLength, providerLabel);
+}
+
 // Pastikan video jadi .mp4 lokal: HLS (.m3u8) → ffmpeg stream-copy; bukan HLS → download langsung.
 // Retry + resolveFresh: backend bisa flip-flop (URL valid saat probe tapi
 // sampah saat download) — coba ulang dengan URL fresh per attempt.
@@ -94,7 +112,8 @@ async function ensureMp4(url, destPath, opts = {}) {
     try {
       if (isHlsUrl(url)) {
         await new Promise((resolve, reject) => {
-          execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', url, '-c', 'copy', destPath], { timeout: 3600000 }, (err) => {
+          // UA browser penuh: CDN galak menolak UA default ffmpeg (Lavf) -> 403.
+          execFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-user_agent', BROWSER_UA, '-y', '-i', url, '-c', 'copy', destPath], { timeout: 3600000 }, (err) => {
             if (err) return reject(new Error(`HLS→mp4 gagal: ${err.message}`));
             resolve(destPath);
           });
@@ -330,4 +349,4 @@ async function uploadToVidara(opts) {
   return { done, fail, skipped, total, filecodes, fldId, folderName, subDir };
 }
 
-module.exports = { uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, downloadChunk };
+module.exports = { uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };
