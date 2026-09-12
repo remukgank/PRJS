@@ -10,7 +10,7 @@
  *   https://{subdomain}.dramafren.org/index.php?page=watch&id=...&ep=...&sv=1&lang=id
  */
 
-const { interceptVideoUrl, destroySession, decodeHtmlEntities } = require('./providers/dramafren');
+const { interceptVideoUrl, destroySession, decodeHtmlEntities, getVideoUrlViaWatchStream } = require('./providers/dramafren');
 const axios = require('axios');
 const https = require('https');
 const { logger } = require('./logger');
@@ -84,6 +84,10 @@ function buildDetailUrl(subdomain, id, slug, lang = 'id') {
 const VIDEO_SERVER_API_HOSTS = {
   shortmax: ['cdn-shortmaxv3.dramafren.org', 'cdn-shortmax.dramafren.org'],
 };
+
+// Subdomain yg endpoint watch_stream-nya sudah terbukti (tahap 1: idrama;
+// generalisasi tahap 2 setelah proven produksi).
+const WATCH_STREAM_SUBDOMAINS = ['idrama'];
 
 /**
  * Resolve a video URL via the subdomain's direct video_server JSON API.
@@ -167,6 +171,15 @@ async function getVideoUrl(subdomain, id, slug, ep, sv = 1, lang = 'id', session
 
   for (const s of [1, 2, 3]) {
     if (bestServer) break;
+    // Interleave (a): watch_stream JSON dulu (murah & presisi); gagal -> intercept lama.
+    if (WATCH_STREAM_SUBDOMAINS.includes(subdomain)) {
+      const ws = await getVideoUrlViaWatchStream(subdomain, id, ep, s, lang).catch(() => null);
+      if (ws?.videoUrl) {
+        result = ws;
+        bestServer = ws.server || s;
+        continue;
+      }
+    }
     const url = buildWatchUrl(subdomain, id, slug, ep, s, lang);
     const r = await interceptVideoUrl(url, { session });
     if (r.videoUrl) {

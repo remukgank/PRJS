@@ -285,4 +285,41 @@ async function interceptVideoUrl(watchUrl, { timeoutMs = 60_000, _isRetry = fals
   return result;
 }
 
-module.exports = { interceptVideoUrl, createSession, destroySession, cleanupStaleSessions, decodeHtmlEntities };
+// ─── watch_stream JSON API ───────────────────────────────────────────────────
+// Endpoint AJAX pemutar: /index.php?action=watch_stream&id=&ep=&server=&lang=
+// mengembalikan URL video FRESH (ts/secret expiring) — jauh lebih presisi
+// daripada intercept HTML. Terbukti di idrama (server 1-3 ok). Direct curl
+// kena CF 403 -> wajib via FlareSolverr (sessionless, pola intercept).
+// Scope tahap 1: idrama saja (lihat WATCH_STREAM_SUBDOMAINS di index.js).
+async function getVideoUrlViaWatchStream(subdomain, id, ep, server = 1, lang = 'id') {
+  const result = { videoUrl: null, subtitleUrl: null, title: null };
+  const streamUrl = `https://${subdomain}.dramafren.org/index.php?action=watch_stream&id=${encodeURIComponent(id)}&ep=${encodeURIComponent(ep)}&server=${server}&lang=${lang}`;
+  let resp;
+  try {
+    resp = await axios.post(`${FLARESOLVERR_URL}/v1`, {
+      cmd: 'request.get',
+      url: streamUrl,
+      maxTimeout: 60000,
+    }, { timeout: 90000 });
+  } catch (err) {
+    logger.warn({ subdomain, id, ep, server, err: err.message }, 'watch_stream fetch gagal');
+    return result;
+  }
+  if (resp.data?.status !== 'ok') return result;
+  const html = resp.data.solution?.response || '';
+  const m = html.match(/<pre>([\s\S]*?)<\/pre>/i);
+  let j;
+  try {
+    j = JSON.parse(decodeHtmlEntities(m ? m[1] : html));
+  } catch { return result; }
+  if (!j || j.ok !== true || !j.video_url) return result;
+  result.videoUrl = j.video_url;
+  result.server = j.server_no || server;
+  if (Array.isArray(j.subs)) {
+    const sub = j.subs.find((s) => s && s.url);
+    if (sub) result.subtitleUrl = sub.url;
+  }
+  return result;
+}
+
+module.exports = { interceptVideoUrl, createSession, destroySession, cleanupStaleSessions, decodeHtmlEntities, getVideoUrlViaWatchStream };
