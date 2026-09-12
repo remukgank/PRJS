@@ -313,12 +313,15 @@ const outPath = tempPath(`ep${ep}.mp4`);
         ...(info.height && { height: info.height }),
       };
       const session = sessions.get(String(chatId));
-      const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+      // Tahap 1: mirror per-provider untuk SEMUA subdomain (reelfren_*
+      // maupun bare seperti idrama/stardusttv). topicProvider tak pernah null.
+      const topicProvider = (provider || subdomain || '').replace(/^reelfren_/, '');
+      const mirrorToTopic = !!topicProvider && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
       if (mirrorToTopic) {
-        const sent = await sendToTopicVideo(provider, outPath, opts);
+        const sent = await sendToTopicVideo(topicProvider, outPath, opts);
         if (sent) {
           logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent to topic');
-          await p.done(`Ep ${ep} — terkirim ke topic <b>${provider}</b> di grup`);
+          await p.done(`Ep ${ep} — terkirim ke topic <b>${topicProvider}</b> di grup`);
         } else {
           await sendVideo(chatId, outPath, opts);
           logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent (fallback chat)');
