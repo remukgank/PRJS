@@ -1856,7 +1856,13 @@ function samehadakuAnimeSlug(animeUrl) {
 
 // Keyboard episode + caption dgn centang ✅ utk part yg sudah ada di library.
 async function buildSamehadakuEpisodePicker(eps, animeUrl) {
-  const title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
+  // Judul dari URL anime (deterministik) — data worker cuma berisi nomor ep.
+  let title = 'Samehadaku';
+  try {
+    const info = parseSamehadakuAnime(animeUrl);
+    if (info?.title) title = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
+  } catch {}
+  if (title === 'Samehadaku') title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
   const done = new Set();
   try {
     const slug = samehadakuAnimeSlug(animeUrl);
@@ -1878,9 +1884,16 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl) {
     keyboard.push(row);
   }
   const doneCount = eps.filter((e) => done.has(Number(e.ep))).length;
-  const caption = doneCount > 0
-    ? `📺 <b>${title}</b>\n${eps.length} episode — ${doneCount} sudah di library ✅, pilih episode:`
-    : `📺 <b>${title}</b>\n${eps.length} episode — pilih episode:`;
+  const total = eps.length;
+  let caption;
+  if (doneCount > 0) {
+    const filled = Math.round((doneCount / total) * 10);
+    const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
+    const pct = Math.round((doneCount / total) * 100);
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nPilih episode:`;
+  } else {
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode — pilih episode:`;
+  }
   return { keyboard, caption };
 }
 
@@ -2915,7 +2928,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
 
   const params = parseDramaUrl(text);
   if (!params || !params.id) {
-    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>mega.nz</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>reelfren.com</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>mega.nz</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
   }
 
   // Dramafren scraper — admin only
