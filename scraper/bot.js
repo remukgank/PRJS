@@ -1669,9 +1669,11 @@ async function actionMerge10(chatId, session) {
               ...(subInfo.height && { height: subInfo.height }),
             };
             let subResult = null;
-            const subMirror = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+            // Tahap 2: pola yang sama untuk sub-merge pecah 5+5.
+            const subTopicProvider = (provider || subdomain || '').replace(/^reelfren_/, '');
+            const subMirror = !!subTopicProvider && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
             if (subMirror) {
-              subResult = await sendToTopicVideo(provider, subFinal, subOpts);
+              subResult = await sendToTopicVideo(subTopicProvider, subFinal, subOpts);
               if (subResult) {
                 logger.info({ chatId, part: subLabel, sizeMb: subSizeMb.toFixed(1) }, 'Sub-merge part sent to topic');
               } else {
@@ -1679,6 +1681,7 @@ async function actionMerge10(chatId, session) {
                 logger.info({ chatId, part: subLabel, sizeMb: subSizeMb.toFixed(1) }, 'Sub-merge part sent (fallback chat)');
               }
             } else {
+              if (RF_GROUP_ENABLED && RF_GROUP_ID && subTopicProvider && session && !isAdmin(session?.userId)) logger.warn({ chatId, part: subLabel, userId: session?.userId ?? null }, 'mirror dilewati: session tanpa userId admin');
               subResult = await sendVideo(chatId, subFinal, subOpts);
               logger.info({ chatId, part: subLabel, sizeMb: subSizeMb.toFixed(1) }, 'Sub-merge part sent');
             }
@@ -1764,17 +1767,20 @@ async function actionMerge10(chatId, session) {
           ...(info.height && { height: info.height }),
         };
         let sendResult = null;
-        const mirrorToTopic = isReelFren && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
+        // Tahap 2: mirror per-provider untuk SEMUA subdomain (pola gate 317).
+        const topicProvider = (provider || subdomain || '').replace(/^reelfren_/, '');
+        const mirrorToTopic = !!topicProvider && isAdmin(session?.userId) && RF_GROUP_ENABLED && RF_GROUP_ID;
         if (mirrorToTopic) {
-          sendResult = await sendToTopicVideo(provider, finalFile, opts);
+          sendResult = await sendToTopicVideo(topicProvider, finalFile, opts);
           if (sendResult) {
             logger.info({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1) }, 'Merge part sent to topic');
-            sentNote = `📤 ${partLabel} — terkirim ke topic <b>${provider}</b> di grup`;
+            sentNote = `📤 ${partLabel} — terkirim ke topic <b>${topicProvider}</b> di grup`;
           } else {
             sendResult = await sendVideo(chatId, finalFile, opts);
             logger.info({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1) }, 'Merge part sent (fallback chat)');
           }
         } else {
+          if (RF_GROUP_ENABLED && RF_GROUP_ID && topicProvider && session && !isAdmin(session?.userId)) logger.warn({ chatId, part: partLabel, userId: session?.userId ?? null }, 'mirror dilewati: session tanpa userId admin');
           sendResult = await sendVideo(chatId, finalFile, opts);
           logger.info({ chatId, part: partLabel, sizeMb: sizeMb.toFixed(1) }, 'Merge part sent');
         }
