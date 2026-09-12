@@ -275,6 +275,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
                 tgDone++;
               }
             } else {
+              if (isReelFren && RF_GROUP_ENABLED && RF_GROUP_ID && session && !_ctx.isAdmin?.(session?.userId)) logger.warn({ chatId, part: partLabel, userId: session?.userId ?? null }, 'mirror dilewati: session tanpa userId admin');
               await _ctx.sendVideo(chatId, mergedFile, options);
               tgDone++;
             }

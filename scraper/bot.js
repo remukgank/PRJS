@@ -322,9 +322,10 @@ const outPath = tempPath(`ep${ep}.mp4`);
         if (sent) {
           logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent to topic');
           await p.done(`Ep ${ep} — terkirim ke topic <b>${topicProvider}</b> di grup`);
-        } else {
-          await sendVideo(chatId, outPath, opts);
-          logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent (fallback chat)');
+      } else {
+        if (RF_GROUP_ENABLED && RF_GROUP_ID && topicProvider && session && !isAdmin(session?.userId)) logger.warn({ chatId, ep, userId: session?.userId ?? null }, 'mirror dilewati: session tanpa userId admin');
+        await sendVideo(chatId, outPath, opts);
+        logger.info({ chatId, episode: ep, sizeMb: sizeMb.toFixed(1) }, 'Video sent (fallback chat)');
           await p.done(`Ep ${ep} — selesai (${sizeMb.toFixed(1)} MB)`);
         }
       } else {
