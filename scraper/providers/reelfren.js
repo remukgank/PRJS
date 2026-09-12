@@ -1,13 +1,13 @@
 /**
  * reelfren.js
- * Scrapes video URLs from reelfren.dramafren.org (multi-provider aggregator).
+ * Scrapes video URLs from reelfren.com (multi-provider aggregator).
  *
  * ReelFren aggregates drama from 16+ providers via a clean JSON API.
- * The API lives on api.dramafren.org (NOT reelfren.dramafren.org).
+ * The API lives on api.reelfren.com (fallback 1x: api.dramafren.org).
  * Instead of scraping HTML watch pages, we call /api/video directly.
  *
  * API flow:
- *   1. GET https://api.dramafren.org/api/video?provider={p}&id={id}&ep={ep}&lang={lang}&server={sv}&cv=v21
+ *   1. GET https://api.reelfren.com/api/video?provider={p}&id={id}&ep={ep}&lang={lang}&server={sv}&cv=v21
  *      - id = SHORT ID (without slug), e.g. "xvP6Va" not "xvP6Va-wukong-kembali"
  *   2. Response: { videoUrl, qualityList[], totalEpisodes, locked, sourceServer }
  *   3. videoUrl may be proxied: /api/proxy/{provider}?url={encoded_url}
@@ -22,8 +22,9 @@ const axios = require('axios');
 const { execFile } = require('child_process');
 const { logger } = require('../logger');
 
-const API_BASE = 'https://api.dramafren.org';
-const WEB_BASE = 'https://reelfren.dramafren.org';
+const API_BASE = 'https://api.reelfren.com'; // migrasi dari api.dramafren.org (503 permanen)
+const API_BASE_LEGACY = 'https://api.dramafren.org'; // fallback 1x bila primer 5xx/network
+const WEB_BASE = 'https://reelfren.com';
 const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191';
 
 // Validasi stream: probe cepat via ffprobe sebelum download full.
@@ -38,8 +39,8 @@ const PROBE_BACKOFF_MS = 2000;
 /**
  * Parse a ReelFren drama URL into its components.
  * Supported formats:
- *   https://reelfren.dramafren.org/drama/{provider}/{id}-{slug}?lang=id
- *   https://reelfren.dramafren.org/watch/{provider}/{id}-{slug}?ep=1&lang=id
+ *   https://reelfren.com/drama/{provider}/{id}-{slug}?lang=id
+ *   https://reelfren.com/watch/{provider}/{id}-{slug}?ep=1&lang=id
  *
  * @returns {{ provider: string, id: string, fullId: string, slug: string, ep: number, lang: string } | null}
  */
@@ -51,7 +52,7 @@ function parseReelFrenUrl(text) {
 
   const provider = m[2];
   const idSlug = m[3];
-  const url = new URL(text.includes('http') ? text : `https://reelfren.dramafren.org${m[0]}`);
+  const url = new URL(text.includes('http') ? text : `https://reelfren.com${m[0]}`);
 
   const dashIdx = idSlug.indexOf('-');
   const id = dashIdx > 0 ? idSlug.substring(0, dashIdx) : idSlug;
@@ -161,7 +162,7 @@ async function getReelFrenVideo(provider, fullId, ep, lang = 'id', server = 1, o
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
-          'Origin': 'https://reelfren.dramafren.org',
+          'Origin': 'https://reelfren.com',
         },
         timeout: 20000,
         validateStatus: (s) => s < 500, // 502/503 jangan throw, handle retry di loop
@@ -180,6 +181,28 @@ async function getReelFrenVideo(provider, fullId, ep, lang = 'id', server = 1, o
       }
       logger.warn({ provider, fullId, ep, attempt, server, err: err.message }, `ReelFren API retry ${attempt}/${MAX_AXIOS_RETRY}`);
       await new Promise(r => setTimeout(r, 1200 * attempt)); // backoff 1.2s, 2.4s, 3.6s
+    }
+  }
+
+  if (!data) {
+    // Fallback satu arah: host lama 1x (murah, sebelum FlareSolverr yg berat).
+    try {
+      const legacyUrl = `${API_BASE_LEGACY}/api/video?${params}`;
+      const legacyResp = await axios.get(legacyUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+          'Origin': 'https://reelfren.dramafren.org',
+        },
+        timeout: 15000,
+        validateStatus: (s) => s < 500,
+      });
+      if (legacyResp.status < 500 && legacyResp.data && typeof legacyResp.data === 'object') {
+        data = legacyResp.data;
+        logger.info({ provider, fullId, ep }, 'ReelFren API legacy fallback OK');
+      }
+    } catch (errLegacy) {
+      logger.warn({ provider, fullId, ep, err: errLegacy.message }, 'ReelFren API legacy fallback gagal');
     }
   }
 
@@ -315,7 +338,7 @@ async function getVideoUrlReelFren(provider, fullId, ep, lang = 'id', opts = {})
 }
 
 /**
- * Fetch drama metadata via the API (api.dramafren.org/api/detail) — no Cloudflare,
+ * Fetch drama metadata via the API (api.reelfren.com/api/detail) — no Cloudflare,
  * no FlareSolverr needed. Returns title, cover, intro, episode list.
  *
  * @returns {Promise<{ title: string|null, synopsis: string|null, poster: string|null, totalEpisodes: number, videos: Array }>}
@@ -332,7 +355,7 @@ async function getDramaDetail(provider, fullId, lang = 'id', opts = {}) {
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
-          'Origin': 'https://reelfren.dramafren.org',
+          'Origin': 'https://reelfren.com',
         },
         timeout: 20000,
         validateStatus: (s) => s < 500, // 502/503 jangan throw langsung, handle retry di bawah
@@ -359,6 +382,29 @@ async function getDramaDetail(provider, fullId, lang = 'id', opts = {}) {
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
+      // Fallback satu arah: host lama 1x sebelum FlareSolverr yg berat.
+      try {
+        const legacyResp = await axios.get(`${API_BASE_LEGACY}/api/detail?${params}`, {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+            'Origin': 'https://reelfren.dramafren.org',
+          },
+          timeout: 15000,
+          validateStatus: (s) => s < 500,
+        });
+        const ld = legacyResp.data;
+        if (legacyResp.status < 500 && ld && typeof ld === 'object') {
+          logger.info({ provider, fullId }, 'Detail API legacy fallback OK');
+          return {
+            title: ld.title || null,
+            synopsis: ld.intro || null,
+            poster: ld.cover || null,
+            totalEpisodes: Number(ld.episodes) || 0,
+            videos: Array.isArray(ld.videos) ? ld.videos : [],
+          };
+        }
+      } catch {}
       // Fallback via FlareSolverr sebelum menyerah (API kadang butuh bypass CF)
       try {
         const html = await flareGet(apiUrl, opts.session, 20000);
