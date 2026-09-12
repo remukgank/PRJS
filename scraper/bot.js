@@ -2972,6 +2972,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
       lang: params.lang,
       episodes,
       meta,
+      userId: msg.from.id, // stempel actor: gate mirror isAdmin(session.userId)
     });
     logger.info({ chatId, subdomain: params.subdomain, id: params.id, totalEp: episodes.length }, 'Session created');
 
@@ -3628,7 +3629,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       await bot.sendMessage(chatId, 'Pilih aksi:', { reply_markup: mainActionKeyboard() });
     } else if (pending.type === 'dramafren') {
       const { params, episodes, meta } = pending;
-      sessions.set(String(chatId), { subdomain: params.subdomain, id: params.id, slug: params.slug, lang: params.lang, episodes, meta });
+      sessions.set(String(chatId), { subdomain: params.subdomain, id: params.id, slug: params.slug, lang: params.lang, episodes, meta, userId: query.from.id });
       const epFirst = episodes[0].ep;
       const epLast = episodes[episodes.length - 1].ep;
       let posterPath2 = null;
