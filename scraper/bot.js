@@ -28,6 +28,7 @@ const fs = require('fs');
 const axios = require('axios');
 const { logger } = require('./logger');
 const { stripHtml, truncateText, cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename, buildChunks } = require('./lib/parser');
+const { buildAnimeSender, ANIME_TOPIC_KEY } = require('./lib/animeTopic');
 const { detectTitleFromFilename } = require('./lib/titleDetect');
 const { sleep, floodRetryMs, initTelegram, apiPost } = require('./lib/telegram');
 const { initProgress, Progress, RichProgress } = require('./lib/progress');
@@ -89,8 +90,8 @@ const { VIP_PACKAGES, VIP_STAR_PRICES, VIP_PACKAGE_ORDER } = require('./services
 // ─── ReelFren group topic mirror (optional) ──────────────────────────────────
 const RF_GROUP_ID = process.env.RF_GROUP_ID ? Number(process.env.RF_GROUP_ID) : null;
 const RF_GROUP_ENABLED = (process.env.RF_GROUP_ENABLED || 'false') === 'true';
-// Topic anime (single-file: gofile/pixeldrain/filedon/mega/gdrive/uc) — grup sama, thread tetap
-const ANIME_TOPIC_ID = process.env.ANIME_TOPIC_ID ? Number(process.env.ANIME_TOPIC_ID) : 655;
+// Topic anime (single-file: gofile/pixeldrain/filedon/mega/gdrive/uc) — resolved via getOrCreateTopic('anime'),
+// tanpa hardcode ID (infra yang sama dgn topic provider reelfren/dramafren). Grup = RF_GROUP_ID.
 // Provider yang subtitlenya di-burn-in (hardcode) ke video, mis. cubetv
 const BURN_SUBTITLE_PROVIDERS = (process.env.BURN_SUBTITLE_PROVIDERS || 'cubetv').split(',').map(s => s.trim()).filter(Boolean);
 const RF_TOPICS_FILE = path.join(__dirname, '..', 'data', 'reelfren_topics.json');
@@ -193,29 +194,22 @@ async function sendToTopicVideo(provider, filePath, opts = {}) {
   }
 }
 
-// ─── Anime topic mirror (single-file) ────────────────────────────────────────
-// Kirim kopian file anime ke thread tetap ANIME_TOPIC_ID di grup yang sama.
-// Gagal mirror tidak boleh menggagalkan kirim utama (return null).
-async function sendToAnimeTopic(filePath, opts = {}) {
-  if (!RF_GROUP_ENABLED || !RF_GROUP_ID || !ANIME_TOPIC_ID) return null;
+// ─── Anime topic router (single-file) ──────────────────────────────────────────
+// Kirim SEKALI per file: ke topic getOrCreateTopic('anime') saat RF aktif; fallback ke chat asal kalau tidak.
+// Stale thread → evict + recreate sekali. Gagal resolve → fallback chat (file tidak hilang).
+async function resolveAnimeThread() {
+  if (!RF_GROUP_ENABLED || !RF_GROUP_ID) return null;
   try {
-    const base = { ...opts, message_thread_id: ANIME_TOPIC_ID };
-    const ext = String(filePath || '').split('.').pop().toLowerCase();
-    let result;
-    if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].includes(ext)) {
-      result = await sendAudio(RF_GROUP_ID, filePath, { caption: base.caption });
-    } else if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(ext)) {
-      result = await sendVideo(RF_GROUP_ID, filePath, { ...base, supports_streaming: true });
-    } else {
-      result = await sendDocument(RF_GROUP_ID, filePath, { caption: base.caption });
-    }
-    logger.info({ threadId: ANIME_TOPIC_ID }, 'File anime terkirim ke topic grup');
-    return result;
+    return await getOrCreateTopic(ANIME_TOPIC_KEY);
   } catch (err) {
-    logger.warn({ err: err.message }, 'Kirim file anime ke topic grup gagal');
-    return null;
+    if (isStaleTopicError(err)) {
+      evictStaleTopic(ANIME_TOPIC_KEY);
+      return getOrCreateTopic(ANIME_TOPIC_KEY);
+    }
+    throw err;
   }
 }
+const sendAnimeMedia = buildAnimeSender({ sendVideo, sendAudio, sendDocument }, resolveAnimeThread);
 
 loadReelfrenTopics();
 const bot = new TelegramBot(TOKEN, botOptions);
@@ -228,7 +222,7 @@ _downloadHandlers.initDownload({
   bot,
   config: { MAX_UPLOAD_MB },
   samehadakuEpisodeMap,
-  sendVideo, sendAudio, sendDocument, sendRichMessage, sendToAnimeTopic,
+  sendVideo, sendAudio, sendDocument, sendRichMessage, sendAnimeMedia,
   Progress, RichProgress,
 });
 

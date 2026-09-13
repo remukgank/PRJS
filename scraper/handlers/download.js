@@ -17,9 +17,6 @@ const { detectTitleFromFilename } = require('../lib/titleDetect');
 // sendVideo/sendAudio/sendDocument injected via ctx (masih di bot.js, belum E3)
 const { getPartFileId, savePartFileId, upsertMedia, getSetting, findMediaByPattern } = require('../db');
 
-const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm']);
-const AUDIO_EXTS = new Set(['.mp3', '.aac', '.ogg', '.m4a', '.wav']);
-
 function hashUrl(url) {
   return require('crypto').createHash('md5').update(url).digest('hex');
 }
@@ -38,16 +35,6 @@ function initDownload(ctx) {
 }
 function ensureCtx(caller) {
   if (!_ctx || !_ctx.bot) throw new Error(`handlers/download belum di-init — panggil initDownload({ bot, config, samehadakuEpisodeMap, ... }) dulu (dari ${caller})`);
-}
-
-// Mirror kopian file anime ke topic grup (thread tetap). Gagal mirror = warn saja.
-async function mirrorAnimeToTopic(outPath, caption) {
-  try {
-    if (!outPath || typeof _ctx.sendToAnimeTopic !== 'function') return;
-    await _ctx.sendToAnimeTopic(outPath, { caption });
-  } catch (err) {
-    logger.warn({ err: err.message }, 'Mirror anime ke topic gagal');
-  }
 }
 
 async function handleGofileUrl(chatId, url, customTitle = null) {
@@ -139,19 +126,13 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
         }
       }
 
-      if (VIDEO_EXTS.has(ext)) {
-        sendResult = await _ctx.sendVideo(chatId, outPath, {
-          caption: finalCap,
-          supports_streaming: true,
-          ...(info.duration && { duration: info.duration }),
-          ...(info.width && { width: info.width }),
-          ...(info.height && { height: info.height }),
-        }, cacheInfo);
-      } else if (AUDIO_EXTS.has(ext)) {
-        await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
-      } else {
-        await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
-      }
+      sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
+        caption: finalCap,
+        supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
       // Simpan ke library jika custom title
       if (customTitle && sendResult?.video?.file_id) {
         const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
@@ -165,7 +146,6 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           await savePartFileId(slug, goPart, sendResult.video.file_id, Math.round(sizeMb * 1024 * 1024), fileName, finalCap);
         }
       }
-      await mirrorAnimeToTopic(outPath, finalCap);
       rp.updateEpisode(capWithEp, 'done', `${sizeMb.toFixed(1)} MB`);
       rp.done();
     } catch (err) {
@@ -251,19 +231,13 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       }
     }
 
-    if (VIDEO_EXTS.has(fext)) {
-      sendResult = await _ctx.sendVideo(chatId, outPath, {
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap,
         supports_streaming: true,
         ...(info.duration && { duration: info.duration }),
         ...(info.width && { width: info.width }),
         ...(info.height && { height: info.height }),
       }, cacheInfo);
-    } else if (AUDIO_EXTS.has(fext)) {
-      await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
-    } else {
-      await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
-    }
     // Simpan ke library jika custom title
     if (customTitle && sendResult?.video?.file_id) {
       const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
@@ -277,7 +251,6 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           await savePartFileId(slug, batchPart, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), file.name, finalCap);
       }
     }
-    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -337,20 +310,13 @@ async function handleGofileBatch(chatId, urls) {
       const caption = `${epLabel} — ${cap}`;
       const info = await getVideoInfo(outPath).catch(() => ({}));
       const ext = path.extname(outPath).toLowerCase();
-      if (VIDEO_EXTS.has(ext)) {
-        await _ctx.sendVideo(chatId, outPath, {
-          caption,
-          supports_streaming: true,
-          ...(info.duration && { duration: info.duration }),
-          ...(info.width && { width: info.width }),
-          ...(info.height && { height: info.height }),
-        }, cacheInfo);
-      } else if (AUDIO_EXTS.has(ext)) {
-        await _ctx.sendAudio(chatId, outPath, { caption }, cacheInfo);
-      } else {
-        await _ctx.sendDocument(chatId, outPath, { caption }, cacheInfo);
-      }
-      await mirrorAnimeToTopic(outPath, caption);
+      await _ctx.sendAnimeMedia(chatId, outPath, {
+        caption,
+        supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
       rp.updateEpisode(ep.ep, 'done', `${sizeMb.toFixed(1)} MB`);
       done++;
     } catch (err) {
@@ -415,14 +381,13 @@ async function handleUcDriveUrl(chatId, text) {
       try {
         const cap = cleanCaption(path.basename(f));
         const info = await getVideoInfo(f).catch(() => ({}));
-        await _ctx.sendVideo(chatId, f, {
+        await _ctx.sendAnimeMedia(chatId, f, {
           caption: cap, supports_streaming: true,
           ...(info.duration && { duration: info.duration }),
           ...(info.width && { width: info.width }),
           ...(info.height && { height: info.height }),
         });
         sent++;
-        await mirrorAnimeToTopic(f, cap);
       } catch (e) {
         fail++;
         logger.error({ file: path.basename(f), err: e.message }, 'sendVideo failed');
@@ -546,19 +511,13 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     const vinfo = await getVideoInfo(outPath).catch(() => ({}));
     const fext = path.extname(outPath).toLowerCase();
     let sendResult = null;
-    if (VIDEO_EXTS.has(fext)) {
-      sendResult = await _ctx.sendVideo(chatId, outPath, {
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap,
         supports_streaming: true,
         ...(vinfo.duration && { duration: vinfo.duration }),
         ...(vinfo.width && { width: vinfo.width }),
         ...(vinfo.height && { height: vinfo.height }),
       }, cacheInfo);
-    } else if (AUDIO_EXTS.has(fext)) {
-      await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
-    } else {
-      await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
-    }
     // Simpan ke library jika custom title
     if (customTitle && sendResult?.video?.file_id) {
       const cleanTitle = customTitle.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
@@ -572,7 +531,6 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, part, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), info.name, finalCap);
       }
     }
-    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -658,14 +616,12 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
       ].join('\n');
     }
     let sendResult = null;
-    if (VIDEO_EXTS.has(fext)) {
-      sendResult = await _ctx.sendVideo(chatId, outPath, {
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap, supports_streaming: true,
         ...(info.duration && { duration: info.duration }),
         ...(info.width && { width: info.width }),
         ...(info.height && { height: info.height }),
       }, cacheInfo);
-    } else await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
     if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
       const slug = `anime:${sanitizeSlug(title)}`;
       const existing = await getPartFileId(slug, partN);
@@ -674,7 +630,6 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fdName, finalCap);
       }
     }
-    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -739,16 +694,12 @@ async function handleMegaUrl(chatId, url, customTitle = null) {
       ].join('\n');
     }
     let sendResult = null;
-    if (VIDEO_EXTS.has(fext)) {
-      sendResult = await _ctx.sendVideo(chatId, outPath, {
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap, supports_streaming: true,
         ...(info.duration && { duration: info.duration }),
         ...(info.width && { width: info.width }),
         ...(info.height && { height: info.height }),
       }, cacheInfo);
-    } else if (AUDIO_EXTS.has(fext)) {
-      await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
-    } else await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
     if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
       const slug = `anime:${sanitizeSlug(title)}`;
       const existing = await getPartFileId(slug, partN);
@@ -757,7 +708,6 @@ async function handleMegaUrl(chatId, url, customTitle = null) {
         await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), mfName, finalCap);
       }
     }
-    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
@@ -842,19 +792,13 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
       ].join('\n');
     }
     let sendResult = null;
-    if (VIDEO_EXTS.has(fext)) {
-      sendResult = await _ctx.sendVideo(chatId, outPath, {
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap,
         supports_streaming: true,
         ...(info.duration && { duration: info.duration }),
         ...(info.width && { width: info.width }),
         ...(info.height && { height: info.height }),
       }, cacheInfo);
-    } else if (AUDIO_EXTS.has(fext)) {
-      await _ctx.sendAudio(chatId, outPath, { caption: finalCap }, cacheInfo);
-    } else {
-      await _ctx.sendDocument(chatId, outPath, { caption: finalCap }, cacheInfo);
-    }
     if (titleForMedia && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
       const slug = `anime:${sanitizeSlug(titleForMedia)}`;
       const epNum = gdSame?.episode ?? extractPartFromFilename(fileName);
@@ -864,7 +808,6 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
         await savePartFileId(slug, epNum, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), fileName, finalCap);
       }
     }
-    await mirrorAnimeToTopic(outPath, finalCap);
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
   } catch (err) {
