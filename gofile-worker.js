@@ -111,6 +111,21 @@ export default {
             const title = m2[3].trim().replace(/\s+/g, " ");
             if (!episodes.find((e) => e.ep === num)) episodes.push({ ep: num, url: href.startsWith("http") ? href : new URL(href, target).href, title });
           }
+          // Samehadaku: ep 1 kadang di-link ke <slug>/ (tanpa pola -episode-N), mis. Isekai Mokushiroku Mynoghra.
+          // Hanya diproses bila setidaknya ada satu link -episode-N lain (judul multi-episode), sehingga
+          // halaman movie/single (tanpa link -episode-N) tetap jatuh ke parse download blocks di bawah.
+          if (episodes.length) {
+            const ep1Re = /<span class="lchx"><a[^>]+href="([^"]+)"[^>]*>\s*([^<]*?Episode\s*1\b[^<]*?)\s*<\/a><\/span>/gi;
+            let m3;
+            while ((m3 = ep1Re.exec(html))) {
+              const href = m3[1].trim();
+              if (/-episode-|エピソード/i.test(href)) continue;
+              if (episodes.find((e) => e.ep === 1)) continue;
+              const title = m3[2].trim().replace(/\s+/g, " ");
+              const num = parseInt((title.match(/Episode\s*(\d+)/i) || [])[1] || "0", 10);
+              if (num === 1) episodes.push({ ep: 1, url: href.startsWith("http") ? href : new URL(href, target).href, title });
+            }
+          }
           episodes.sort((a, b) => a.ep - b.ep);
           if (episodes.length) {
             return new Response(JSON.stringify({ ok: true, type: "anime", episodes }), {
