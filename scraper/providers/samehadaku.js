@@ -32,14 +32,20 @@ function isSamehadakuUrl(url) {
   try { return /samehadaku\.how$/i.test(new URL(url).hostname) || url.includes('samehadaku.how'); } catch { return false; }
 }
 
+// Flag ringkasan yg bukan daftar episode — movie/single jangan dikira ep 1.
+const SUMMARY_FLAG_RE = /-(movie|movie-seasons|ova|ona|special|end|batch)[\w-]*$/i;
+
 function parseSamehadakuEpisode(url) {
   try {
     const u = new URL(url);
     const path = decodeURIComponent(u.pathname);
-    const m = path.match(/\/([^\/]+?)(?:-episode-|-エピソード-|-episode)(\d+)\/?$/i);
-    if (!m) return null;
-    const fullSlug = m[1];
-    const ep = parseInt(m[2], 10);
+    // Kasus normal: ...-episode-N/ (termasuk -end/-END, sejajar pola worker epRe)
+    const m = path.match(/\/([^\/]+?)(?:-episode-|-エピソード-|-episode)(\d+)(?:-?(?:end|END|End))?\/?$/i);
+    // Kasus ep 1: halaman /<slug>/ tanpa prefix /anime/ dan tanpa -episode-N
+    const slugM = !m && !/\/anime\//i.test(path) ? path.match(/^\/([^\/]+)\/?$/) : null;
+    const fullSlug = m ? m[1] : (slugM && !SUMMARY_FLAG_RE.test(slugM[1]) ? slugM[1] : null);
+    if (!fullSlug) return null;
+    const ep = m ? parseInt(m[2], 10) : 1;
     const seasonMatch = fullSlug.match(/-season-(\d+)(?:-part-\d+)?$/i);
     const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
     const partMatch = fullSlug.match(/-part-(\d+)$/i);
