@@ -16,6 +16,14 @@ function floodRetryMs(err) {
   return m ? Number(m[1]) * 1000 : 0;
 }
 
+// Retry untuk error transient upload Telegram (bukan flood): error 500-inside TM
+// semacam "Bad Request: internal Server Error during file upload" biasanya hilang
+// sendiri; backoff tetap 3 s, kuota retry terpisah (max 2) dari flood.
+function transientRetryMs(err) {
+  const msg = err?.message?.description || err?.message || String(err || '');
+  return /internal server error/i.test(msg) ? 3000 : 0;
+}
+
 // Config holder untuk apiPost + sender — di-init sekali dari bot.js facade
 let _config = null;
 let _bot = null;
@@ -56,6 +64,31 @@ function initTelegram(config) {
 }
 function ensureSender(caller) {
   if (!_config || !_bot) throw new Error(`lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, ..., bot }) dulu (dari ${caller})`);
+}
+
+// Retry upload media: flood 429 pakai kuota API_MAX_RETRY; transient (internal
+// server error) kuota tetap 2. Non-retryable error langsung di-throw.
+async function withUploadRetry(label, sendFn) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await sendFn();
+    } catch (err) {
+      let waitMs = floodRetryMs(err);
+      let maxAttempt = _config.API_MAX_RETRY || 0;
+      if (!waitMs) {
+        waitMs = transientRetryMs(err);
+        maxAttempt = 2;
+      }
+      if (waitMs > 0 && attempt < maxAttempt) {
+        attempt += 1;
+        logger.warn({ retryMs: waitMs, attempt, err: err.message }, `${label} upload — retry`);
+        await sleep(waitMs + 500);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // Kirim via apiPost dengan retry saat flood 429 (tunggu retry_after lalu ulang).
@@ -100,43 +133,29 @@ async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
   ensureSender('sendVideo');
   const { caption, supports_streaming, duration, width, height, message_thread_id, parse_mode } = opts;
   const cap = caption ? caption.slice(0, 1024) : undefined;
-  let result;
-  let attempt = 0;
-  for (;;) {
-    try {
-      result = _config.LOCAL_API_PORT
-        ? await apiPost('sendVideo', {
-            chat_id: chatId,
-            video: `file://${filePath}`,
-            caption: cap,
-            parse_mode,
-            supports_streaming,
-            ...(message_thread_id && { message_thread_id }),
-            ...(duration && { duration }),
-            ...(width && { width }),
-            ...(height && { height }),
-          })
-        : await _bot.sendVideo(chatId, filePath, {
-            caption: cap,
-            parse_mode,
-            supports_streaming,
-            ...(message_thread_id && { message_thread_id }),
-            ...(duration && { duration }),
-            ...(width && { width }),
-            ...(height && { height }),
-          });
-      break;
-    } catch (err) {
-      const waitMs = floodRetryMs(err);
-      if (waitMs > 0 && attempt < _config.API_MAX_RETRY) {
-        attempt += 1;
-        logger.warn({ chatId, retryAfterMs: waitMs, attempt, err: err.message }, 'sendVideo flood — retry');
-        await sleep(waitMs + 500);
-        continue;
-      }
-      throw err;
-    }
-  }
+  const result = await withUploadRetry('sendVideo', () =>
+    _config.LOCAL_API_PORT
+      ? apiPost('sendVideo', {
+          chat_id: chatId,
+          video: `file://${filePath}`,
+          caption: cap,
+          parse_mode,
+          supports_streaming,
+          ...(message_thread_id && { message_thread_id }),
+          ...(duration && { duration }),
+          ...(width && { width }),
+          ...(height && { height }),
+        })
+      : _bot.sendVideo(chatId, filePath, {
+          caption: cap,
+          parse_mode,
+          supports_streaming,
+          ...(message_thread_id && { message_thread_id }),
+          ...(duration && { duration }),
+          ...(width && { width }),
+          ...(height && { height }),
+        })
+  );
   if (cacheInfo) {
     const fileId = result?.video?.file_id;
     if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'video', cacheInfo.fileName).catch(() => {});
@@ -148,13 +167,15 @@ async function sendAudio(chatId, filePath, opts = {}, cacheInfo = null) {
   ensureSender('sendAudio');
   const { caption } = opts;
   const cap = caption ? caption.slice(0, 1024) : undefined;
-  const result = _config.LOCAL_API_PORT
-    ? await apiPost('sendAudio', {
-        chat_id: chatId,
-        audio: `file://${filePath}`,
-        caption: cap,
-      })
-    : await _bot.sendAudio(chatId, filePath, { caption: cap });
+  const result = await withUploadRetry('sendAudio', () =>
+    _config.LOCAL_API_PORT
+      ? apiPost('sendAudio', {
+          chat_id: chatId,
+          audio: `file://${filePath}`,
+          caption: cap,
+        })
+      : _bot.sendAudio(chatId, filePath, { caption: cap })
+  );
   if (cacheInfo) {
     const fileId = result?.audio?.file_id;
     if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'audio', cacheInfo.fileName).catch(() => {});
@@ -166,13 +187,15 @@ async function sendDocument(chatId, filePath, opts = {}, cacheInfo = null) {
   ensureSender('sendDocument');
   const { caption } = opts;
   const cap = caption ? caption.slice(0, 1024) : undefined;
-  const result = _config.LOCAL_API_PORT
-    ? await apiPost('sendDocument', {
-        chat_id: chatId,
-        document: `file://${filePath}`,
-        caption: cap,
-      })
-    : await _bot.sendDocument(chatId, filePath, { caption: cap });
+  const result = await withUploadRetry('sendDocument', () =>
+    _config.LOCAL_API_PORT
+      ? apiPost('sendDocument', {
+          chat_id: chatId,
+          document: `file://${filePath}`,
+          caption: cap,
+        })
+      : _bot.sendDocument(chatId, filePath, { caption: cap })
+  );
   if (cacheInfo) {
     const fileId = result?.document?.file_id;
     if (fileId) _setCachedFileId(cacheInfo.urlHash, cacheInfo.source, fileId, 'document', cacheInfo.fileName).catch(() => {});
@@ -202,6 +225,7 @@ async function sendPhoto(chatId, filePath, opts = {}) {
 module.exports = {
   sleep,
   floodRetryMs,
+  transientRetryMs,
   wrapAnswerCallbackQuery,
   initTelegram,
   apiPost,
