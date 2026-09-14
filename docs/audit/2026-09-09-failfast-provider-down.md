@@ -29,7 +29,24 @@ tetap benar untuk jalur batch, tapi bukan spek harfiah insiden ini.
   merge/concat/upload. Out-of-scope: actionVidaraPerEp/
   actionVidaraAndTelegramPerEp (tanpa chunk).
 
-## Verifikasi
+## Hook 3 — actionMerge10, bot.js (temuan 1-tap proof)
+Bukti 1-tap domain fix menunjukkan run masuk **jalur merge KETIGA**
+(`actionMerge10`, bot.js:1486 — paralel 10-wide + retry serial per-ep)
+yang belum di-hook Hook 1/2: 6 part × full cycle 503, 429 dtk, done 0/6.
+- `processEpisode` catat error **fase resolve** per ep ke Map (throw resolve
+  maupun null→'video URL kosong'); error download/ffmpeg tidak dicatat.
+- Pasca-paralel: `collectVerdict(failedEps, resolveErrors, N, label)` —
+  100% + semua ada catatan resolve + sig identik -> vonis (reuse
+  `providerDownVerdict`); ep tanpa catatan resolve (gagal download) ->
+  null (jalur lama). Threshold 100%, pesan ≤80 char (di-test).
+- Vonis -> skip retry serial + flag `providerDownMsg` -> part sisa skip
+  (continue dalam loop, cleanup per-ep sudah jalan). Gagal sebagian ->
+  retry serial tidak berubah.
+- Verifikasi: checks + lint + `collectVerdict` 6 case (10/10 identik Map &
+  object-throw, 9/10, campuran, 1 ep gagal-download) + full suite 32/32
+  tanpa live. Wiring loop verifikasi review + check (jujur scope).
+
+## Verifikasi (Hook 1+2, sesi sebelumnya)
 - `node --check` + ESLint 0 (2 file impl + 1 file test).
 - `scraper/tests/test-failfast-provider-down.js` 26/26 tanpa live:
   sig (10), streak (5), verdict T1/T2/T3 + tepi (6), serial msg (2),

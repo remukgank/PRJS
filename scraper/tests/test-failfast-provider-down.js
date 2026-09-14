@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, downloadChunk,
+  providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk,
 } = require('../services/vidaraService');
 
 let pass = 0, fail = 0;
@@ -70,6 +70,25 @@ function ok(cond, name) {
   const v = providerDownVerdict(errors, chunk.length, 'dramanova');
   ok(v instanceof Error && v.message.includes('Provider dramanova down'), 'hook vonis di ujung fase paralel');
   fs.rmSync(stubDir, { recursive: true, force: true });
+
+  console.log('== collectVerdict (Hook 3) ==');
+  const mkMap = (pairs) => new Map(pairs);
+  // 10/10 identik fase resolve (Map) -> vonis
+  const c1 = collectVerdict([1,2,3,4,5,6,7,8,9,10], mkMap([[1,'video URL kosong'],[2,'video URL kosong'],[3,'video URL kosong'],[4,'video URL kosong'],[5,'video URL kosong'],[6,'video URL kosong'],[7,'video URL kosong'],[8,'video URL kosong'],[9,'video URL kosong'],[10,'video URL kosong']]), 10, 'freereels');
+  ok(c1 instanceof Error && /Provider freereels down \(10\/10:URL kosong\)/.test(c1.message), 'Hook3 10/10 identik -> vonis');
+  ok(c1 && c1.message.length <= 80, `Hook3 pesan <=80 char (${c1.message.length})`);
+  // 9/10 -> null (retry serial tetap jalan)
+  ok(collectVerdict([1,2,3,4,5,6,7,8,9], mkMap([[1,'video URL kosong'],[2,'video URL kosong'],[3,'video URL kosong'],[4,'video URL kosong'],[5,'video URL kosong'],[6,'video URL kosong'],[7,'video URL kosong'],[8,'video URL kosong'],[9,'video URL kosong']]), 10, 'freereels') === null, 'Hook3 9/10 -> null');
+  // 10/10 campuran resolve -> null
+  const c3map = mkMap([[1,'video URL kosong'],[2,'video URL kosong'],[3,'video URL kosong'],[4,'video URL kosong'],[5,'video URL kosong'],[6,'video URL kosong'],[7,'video URL kosong'],[8,'video URL kosong'],[9,'video URL kosong'],[10,'timeout of 20000ms exceeded']]);
+  ok(collectVerdict([1,2,3,4,5,6,7,8,9,10], c3map, 10, 'freereels') === null, 'Hook3 campuran -> null');
+  // 10 gagal tapi 1 tanpa catatan resolve (gagal di download) -> null
+  const c4map = mkMap([[1,'video URL kosong'],[2,'video URL kosong'],[3,'video URL kosong'],[4,'video URL kosong'],[5,'video URL kosong'],[6,'video URL kosong'],[7,'video URL kosong'],[8,'video URL kosong'],[9,'video URL kosong']]);
+  ok(collectVerdict([1,2,3,4,5,6,7,8,9,10], c4map, 10, 'freereels') === null, 'Hook3 1 ep gagal-download -> null');
+  // varian object biasa + throw-503 identik -> vonis
+  const c5obj = {}; for (let i = 1; i <= 10; i++) c5obj[i] = 'Request failed with status code 503';
+  const c5 = collectVerdict([1,2,3,4,5,6,7,8,9,10], c5obj, 10, 'freereels');
+  ok(c5 instanceof Error && /\(10\/10:503\)/.test(c5.message), 'Hook3 throw-503 identik -> vonis 503');
 
   console.log(`\nHASIL: ${pass} pass, ${fail} fail`);
   process.exit(fail ? 1 : 0);

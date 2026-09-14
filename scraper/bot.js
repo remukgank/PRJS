@@ -77,6 +77,7 @@ const PART_SEND_DELAY_MS = Number(process.env.PART_SEND_DELAY_MS) || 8000; // je
 
 
 const { sendVideo, sendAudio, sendDocument, sendPhoto } = require('./lib/telegram'); // E6: sender pindah ke lib
+const { collectVerdict } = require('./services/vidaraService'); // Hook 3 fail-fast (tanpa cycle: vidaraService tak require bot)
 
 const MAX_UPLOAD_MB = LOCAL_API_PORT ? 2000 : 49;
 
@@ -1500,6 +1501,11 @@ async function actionMerge10(chatId, session) {
   rp.totalEpisodes = episodes.length;
   logger.info({ chatId, subdomain, totalParts, totalEp: episodes.length }, 'Starting merge10 batch');
 
+  // Fail-fast Hook 3 antar-part: diisi pesan vonis bila satu part terbukti
+  // provider-down (100% gagal resolve, sig sama) -> part sisa di-skip.
+  // Per-run saja, tidak persist antar-run.
+  let providerDownMsg = null;
+
   for (let part = 0; part < totalParts; part++) {
     const chunk = chunks[part];
     const epStart = chunk[0].ep;
@@ -1507,11 +1513,20 @@ async function actionMerge10(chatId, session) {
     const partLabel = `Part ${part + 1} (Ep ${epStart}–${epEnd})`;
     let sentNote = '';
 
+    if (providerDownMsg) {
+      // Part sebelumnya vonis provider down -> skip tanpa bakar resolve-cycle.
+      rp.updateLabel(partLabel, 'fail', providerDownMsg.slice(0, 30));
+      rp.note(`❌ ${partLabel}: ${providerDownMsg.slice(0, 80)}`);
+      logger.warn({ chatId, part: partLabel }, 'merge10 skip — provider down (part sebelumnya)');
+      continue;
+    }
+
     logger.info({ chatId, subdomain, part: partLabel, episodes: chunk.length }, 'Starting part download');
 
     const downloaded = [];
     const downloadedByEp = new Map();
     const failedEps = [];
+    const resolveErrors = new Map(); // Hook 3: ep -> pesan error FASE RESOLVE saja
     let doneCount = 0; // episode sukses download di part ini
     const processEpisode = async ({ ep, urlEp }, progressLabel, attempt = 1) => {
       rp.updateLabel(partLabel, 'scrape', attempt > 1 ? `retry ${attempt}` : progressLabel);
@@ -1520,15 +1535,19 @@ async function actionMerge10(chatId, session) {
         const provider = subdomain.replace('reelfren_', '');
         result = await getVideoUrlReelFren(provider, id, urlEp, lang).catch((err) => {
           logger.error({ chatId, episode: ep, subdomain, err: { message: err.message, stack: err.stack } }, 'getVideoUrlReelFren in merge failed');
+          resolveErrors.set(ep, err.message || String(err)); // Hook 3: catat throw resolve
           return null;
         });
       } else {
         result = await getVideoUrl(subdomain, id, slug, urlEp, 1, lang).catch((err) => {
           logger.error({ chatId, episode: ep, subdomain, err: { message: err.message, stack: err.stack } }, 'getVideoUrl in merge failed');
+          resolveErrors.set(ep, err.message || String(err)); // Hook 3: catat throw resolve
           return null;
         });
       }
       if (!result?.videoUrl) {
+        // Hook 3: resolve null (tanpa throw) = sinyal 'video URL kosong'.
+        if (!resolveErrors.has(ep)) resolveErrors.set(ep, 'video URL kosong');
         rp.updateLabel(partLabel, 'scrape', `${progressLabel} · URL tdk ditemukan`);
         return null;
       }
@@ -1570,6 +1589,20 @@ async function actionMerge10(chatId, session) {
       }
     });
     await Promise.all(workers);
+
+    // Fail-fast Hook 3: 100% gagal + semua error FASE RESOLVE bersig sama ->
+    // vonis provider down: skip retry serial + flag skip part sisa.
+    // Gagal sebagian / error download -> jalur lama di bawah (retry serial).
+    if (failedEps.length === chunk.length && chunk.length > 0) {
+      const verdict = collectVerdict(failedEps, resolveErrors, chunk.length, provider || subdomain);
+      if (verdict) {
+        providerDownMsg = verdict.message;
+        rp.updateLabel(partLabel, 'fail', providerDownMsg.slice(0, 30));
+        rp.note(`❌ ${partLabel}: ${providerDownMsg.slice(0, 80)}`);
+        logger.warn({ chatId, part: partLabel }, 'merge10 fail-fast — provider down');
+        continue;
+      }
+    }
 
     if (failedEps.length) {
       const retryEps = [...failedEps];
