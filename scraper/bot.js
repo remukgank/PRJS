@@ -76,7 +76,7 @@ const PART_SEND_DELAY_MS = Number(process.env.PART_SEND_DELAY_MS) || 8000; // je
 
 
 
-const { sendVideo, sendAudio, sendDocument, sendPhoto } = require('./lib/telegram'); // E6: sender pindah ke lib
+const { sendVideo, sendAudio, sendDocument, sendPhoto, toLocalFileRef } = require('./lib/telegram'); // E6: sender pindah ke lib
 const { collectVerdict } = require('./services/vidaraService'); // Hook 3 fail-fast (tanpa cycle: vidaraService tak require bot)
 
 const MAX_UPLOAD_MB = LOCAL_API_PORT ? 2000 : 49;
@@ -1259,7 +1259,7 @@ async function sendPaidMediaVideo(chatId, media, opts = {}) {
     star_count: starCount,
     media: [{
       type: 'video',
-      media: isFilePath ? `file://${media.replace(/^file:\/\//, '')}` : media,
+      media: toLocalFileRef(media),
       supports_streaming: supports_streaming ?? true,
       ...(duration && { duration }),
       ...(width && { width }),
@@ -2445,7 +2445,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
         `➧ ${unit} :- <b>${unit} ${part}</b>`,
         `➧ Provider :- <tg-spoiler>${extractProvider(file.file_name || '')}</tg-spoiler>`,
       ].join('\n');
-      return bot.sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      return sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
     }
 
     // Deep link dari web: /start dl_<code> (minta file per part)
@@ -2472,11 +2472,11 @@ bot.on('message', safeHandler('message')(async (msg) => {
       const dCap = `➧ Judul :- <b>${dName}</b>\n➧ Part :- <b>${dl.part}</b>`;
       const dext = String(dfile.file_name || '').split('.').pop().toLowerCase();
       if (['mp3', 'aac', 'ogg', 'm4a', 'wav'].includes(dext)) {
-        return bot.sendAudio(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
+        return sendAudio(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
       } else if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(dext)) {
-        return bot.sendVideo(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML', supports_streaming: true });
+        return sendVideo(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML', supports_streaming: true });
       }
-      return bot.sendDocument(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
+      return sendDocument(chatId, dfile.file_id, { caption: dCap, parse_mode: 'HTML' });
     }
 
     const isAdminUser = isAdmin(msg.from.id);
@@ -3497,7 +3497,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           logger.warn({ slug, poster: media.poster_url }, 'Library poster gagal dikirim');
         }
       }
-      await bot.sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      await sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
     } catch (err) {
       logger.error({ chatId, slug, part, err: err.message }, 'Library send failed');
       await bot.sendMessage(chatId, `❌ Gagal kirim ${unit} ${part}: ${err.message.slice(0, 100)}`);

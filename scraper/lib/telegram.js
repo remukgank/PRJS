@@ -24,6 +24,17 @@ function transientRetryMs(err) {
   return /internal server error/i.test(msg) ? 3000 : 0;
 }
 
+// Ref file lokal untuk Local Bot API Server. Path/lokasi → prefiks `file://`;
+// file_id Telegram / URL (http[s]) / attach:// dibiarkan apa adanya (jangan
+// di-prefix — itu akan merusak file_id). Satu definisi, dipakai semua sender.
+function toLocalFileRef(filePath) {
+  if (typeof filePath !== 'string' || !filePath) return filePath;
+  if (/^file:\/\//i.test(filePath)) return filePath;
+  if (/^(https?:|attach:)/i.test(filePath)) return filePath;
+  if (/^[/\\]|^\.{1,2}[/\\]/.test(filePath)) return `file://${filePath}`;
+  return filePath; // sisanya dianggap file_id Telegram
+}
+
 // Config holder untuk apiPost + sender — di-init sekali dari bot.js facade
 let _config = null;
 let _bot = null;
@@ -91,11 +102,13 @@ async function withUploadRetry(label, sendFn) {
   }
 }
 
-// Kirim via apiPost dengan retry saat flood 429 (tunggu retry_after lalu ulang).
-function apiPost(method, payload, _retry) {
+// Kirim via apiPost dengan retry: flood 429 (retry_after) atau transient
+// (internal server error). Kuota terpisah: flood ~ API_MAX_RETRY, transient ~ 2.
+function apiPost(method, payload, _retry, _transient) {
   if (!_config) throw new Error('lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, API_HTTP, API_MAX_RETRY }) dulu');
   const { TOKEN, API_BASE, API_HTTP, API_MAX_RETRY } = _config;
   if (_retry === undefined) _retry = API_MAX_RETRY;
+  if (_transient === undefined) _transient = 2;
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
     const url = `${API_BASE}/bot${TOKEN}/${method}`;
@@ -111,11 +124,16 @@ function apiPost(method, payload, _retry) {
           if (json.ok) resolve(json.result);
           else {
             const err = new Error(json.description || `${method} failed`);
-            const waitMs = floodRetryMs(err);
-            if (waitMs > 0 && _retry > 0) {
-              logger.warn({ method, retryAfterMs: waitMs, remaining: _retry, err: err.message }, 'apiPost flood — retry');
-              await sleep(waitMs + 500);
-              resolve(await apiPost(method, payload, _retry - 1));
+            const floodMs = floodRetryMs(err);
+            const transientMs = floodMs ? 0 : transientRetryMs(err);
+            if (floodMs > 0 && _retry > 0) {
+              logger.warn({ method, retryAfterMs: floodMs, remaining: _retry, err: err.message }, 'apiPost flood — retry');
+              await sleep(floodMs + 500);
+              resolve(await apiPost(method, payload, _retry - 1, _transient));
+            } else if (transientMs > 0 && _transient > 0) {
+              logger.warn({ method, retryMs: transientMs, remaining: _transient, err: err.message }, 'apiPost transient — retry');
+              await sleep(transientMs + 500);
+              resolve(await apiPost(method, payload, _retry, _transient - 1));
             } else {
               reject(err);
             }
@@ -137,7 +155,7 @@ async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
     _config.LOCAL_API_PORT
       ? apiPost('sendVideo', {
           chat_id: chatId,
-          video: `file://${filePath}`,
+          video: toLocalFileRef(filePath),
           caption: cap,
           parse_mode,
           supports_streaming,
@@ -171,7 +189,7 @@ async function sendAudio(chatId, filePath, opts = {}, cacheInfo = null) {
     _config.LOCAL_API_PORT
       ? apiPost('sendAudio', {
           chat_id: chatId,
-          audio: `file://${filePath}`,
+          audio: toLocalFileRef(filePath),
           caption: cap,
         })
       : _bot.sendAudio(chatId, filePath, { caption: cap })
@@ -191,7 +209,7 @@ async function sendDocument(chatId, filePath, opts = {}, cacheInfo = null) {
     _config.LOCAL_API_PORT
       ? apiPost('sendDocument', {
           chat_id: chatId,
-          document: `file://${filePath}`,
+          document: toLocalFileRef(filePath),
           caption: cap,
         })
       : _bot.sendDocument(chatId, filePath, { caption: cap })
@@ -208,10 +226,10 @@ async function sendPhoto(chatId, filePath, opts = {}) {
   const { caption, message_thread_id } = opts;
   const cap = caption ? caption.slice(0, 1024) : undefined;
   return _config.LOCAL_API_PORT
-    ? await apiPost('sendPhoto', {
-        chat_id: chatId,
-        photo: `file://${filePath}`,
-        caption: cap,
+? await apiPost('sendPhoto', {
+          chat_id: chatId,
+          photo: toLocalFileRef(filePath),
+          caption: cap,
         parse_mode: 'HTML',
         ...(message_thread_id && { message_thread_id }),
       })
@@ -226,6 +244,7 @@ module.exports = {
   sleep,
   floodRetryMs,
   transientRetryMs,
+  toLocalFileRef,
   wrapAnswerCallbackQuery,
   initTelegram,
   apiPost,
