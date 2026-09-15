@@ -126,7 +126,18 @@ Tanpa `x-authorization`/`cf-response` — hanya butuh session cookie browser.
 - **Kesimpulan FINAL**: bukan menyebabkan widget; Cloudflare menolak dari sisi server di IP datacenter Replit (34.47.206.162). Token tidak akan keluar di lingkungan ini apa pun strateginya. Opsi lanjut: (a) worker dipindah ke mesin ber-IP non-datacenter + hubungkan bot via `BAGIBAGI_WORKER_URL` (Cloudflare Tunnel/cloudflared gratis; CF Workers tidak cocok — tidak bisa jalankan Chromium/Selenium); (b) jadikan QRIS/Saweria (yang jalan normal di IP ini) jalur utama, BagiBagi di-hold.
 - **Terbukti dari live test 02:33**: paket **Rp 3.000 lolos form** sampai dialog verifikasi → "Min: 10.000" BUKAN blocker submit, hanya info/hint (record body page). Catatan "Min: 10.000 memblokir paket kecil" di bawah DICABUT.
 
-### Belum bisa diverifikasi di sandbox (butuh live test user)
+### Sesi Saran #3 (2026-09-15) — BagiBagi disembunyikan total, QRIS/Saweria jadi jalur utama
+- Setelah pembuktian Saran #1 (IP Replit ditolak CF selamanya), user pilih Saran #3: **tombol BagiBagi disembunyikan total**, QRIS/Stars jadi satu-satunya jalur pembayaran.
+- Implementasi `scraper/handlers/admin.js`:
+  - `handleVip`: tombol `🟦 BagiBagi` dihapus (baris QRIS + Stars berjajar); teks "Pilih paket → QRIS / Stars"; hint "Bayar persis nominal QRIS".
+  - `handleSelectPayment`: `select_payment_bagibagi` → `answerCallbackQuery` alert `"🟦 BagiBagi sedang maintenance, silakan pakai QRIS / Stars"` (BUKAN daftar paket).
+  - `bagibagi_pkg_*` / `bagibagi_cancel_*` callback lama tidak dihapus (tetap di guard `handlePaymentAction`) agar tak memecah arsip.
+  - `Message` "Perpanjang VIP" (admin.js:148) tetap `act:select_payment_qris` (tidak diubah).
+- **Live test user (06:43, Replit, bot PM2)**: `/start` → `act:vip` → menu **tanpa BagiBagi** ✅; `act:select_payment_qris` → paket → `Saweria payment started ... donationId` ✅; `act:select_payment_stars` → `stars_pkg_3/1` callback jalan ✅.
+- **Temuan baru (luar scope, jadi task terpisah)**: polling status Saweria terkena CF challenge — log berulang `Saweria retry N/5 ... Non-JSON response: Just a moment...` (06:43:30-37). QRIS **start** tetap jalan; yang gagal = **cek status** donasi. Opsi: arahkan polling Saweria ke FlareSolverr/solver (`.solver`), jangan dicampur ke commit ini.
+- Commit: (hash di bawah) — hanya `admin.js` + audit doc; `saweriaService.js` & solver **tidak** disentuh.
+
+## Belum bisa diverifikasi di sandbox (butuh live test user)
 - Konteks CF tidak menyelesaikan managed challenge di IP sandbox ⇒ alur donasi penuh (form → QR keluar) & pembayaran tidak bisa di-test end-to-end di sini. Turnstile tidak akan resolve di IP Replit sebagaimana dibuktikan Saran #1.
 - Live test (tangan user): `POST /create` → QR muncul → bayar dengan m-banking/e-wallet nominal terendah → bot auto-aktifkan VIP + messsage sukses + record `payments` (`method='bagibagi_qris'`). Hanya valid di IP non-datacenter.
 

@@ -140,10 +140,9 @@ async function handleVip({ chatId, msgId, query, mainMenuKeyboard }) {
   const statusText = info
     ? `✅ <b>Status:</b> VIP aktif — sisa <b>${info.daysLeft} hari</b> (s/d ${info.expireDate})\n\n`
     : '';
-  const msg = `💎 <b>VIP MEMBERSHIP</b>\n\n${statusText}<b>💰 Paket:</b>\n${pricing}\n\n<b>🛒 Cara:</b>\n1. Pilih paket → QRIS / BagiBagi / Stars\n2. Bayar sesuai nominal\n3. VIP aktif otomatis\n\n<i>⚠️ Bayar persis nominal QRIS/BagiBagi.</i>`;
+  const msg = `💎 <b>VIP MEMBERSHIP</b>\n\n${statusText}<b>💰 Paket:</b>\n${pricing}\n\n<b>🛒 Cara:</b>\n1. Pilih paket → QRIS / Stars\n2. Bayar sesuai nominal\n3. VIP aktif otomatis\n\n<i>⚠️ Bayar persis nominal QRIS.</i>`;
   const rows = [
-    [{ text: '⬛ QRIS', callback_data: 'act:select_payment_qris' }, { text: '🟦 BagiBagi', callback_data: 'act:select_payment_bagibagi' }],
-    [{ text: '⭐ Stars', callback_data: 'act:select_payment_stars' }],
+    [{ text: '⬛ QRIS', callback_data: 'act:select_payment_qris' }, { text: '⭐ Stars', callback_data: 'act:select_payment_stars' }],
   ];
   if (info) rows.push([{ text: '➕ Perpanjang VIP', callback_data: 'act:select_payment_qris' }]);
   rows.push([{ text: '🔙 Kembali', callback_data: 'act:main_menu' }]);
@@ -164,11 +163,7 @@ async function handleSelectPayment({ chatId, msgId, query, act }) {
     return bot.editMessageText('⬛ <b>QRIS Payment (Saweria)</b>\n\nPilih paket (nominal kelipatan Rp 1.000):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
   }
   if (act === 'select_payment_bagibagi') {
-    if (!process.env.BAGIBAGI_RECEIVER_USERNAME) {
-      return bot.answerCallbackQuery(query.id, { text: 'BagiBagi belum dikonfigurasi, hubungi admin', show_alert: true });
-    }
-    const rows = Object.keys(VIP_PACKAGES).map((d) => [{ text: `🟦 ${VIP_PACKAGES[d].label} — Rp ${VIP_PACKAGES[d].price.toLocaleString('id-ID')}`, callback_data: `bagibagi_pkg_${d}` }]);
-    return bot.editMessageText('🟦 <b>BagiBagi Payment</b>\n\nPilih paket (bayar via QRIS BagiBagi):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+    return bot.answerCallbackQuery(query.id, { text: '🟦 BagiBagi sedang maintenance, silakan pakai QRIS / Stars', show_alert: true });
   }
   const rows = Object.keys(VIP_PACKAGES).map((d) => [{ text: `⭐ ${VIP_PACKAGES[d].label} — ${VIP_STAR_PRICES[d]}⭐`, callback_data: `stars_pkg_${d}` }]);
   return bot.editMessageText('⭐ <b>Stars Payment</b>\n\nPilih paket (dibayar via Telegram Stars):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
