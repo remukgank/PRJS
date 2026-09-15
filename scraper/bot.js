@@ -902,7 +902,7 @@ function mainMenuKeyboard(isAdminUser = false) {
   const buttons = [
     [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
     [{ text: '🎬 Drama', callback_data: 'act:lib_list_c:drama:1' }, { text: '🎌 Anime', callback_data: 'act:lib_list_c:anime:1' }],
-    [{ text: '💬 Live Chat', callback_data: 'act:ai' }],
+    [{ text: '💎 VIP', callback_data: 'act:vip' }, { text: '💬 Live Chat', callback_data: 'act:ai' }],
     [{ text: '❓ Bantuan', callback_data: 'act:help' }],
   ];
   if (isAdminUser) {
@@ -3076,6 +3076,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   const chatId = query.message.chat.id;
   const msgId = query.message.message_id;
   const data = query.data || '';
+  logger.info({ chatId, data: data.slice(0, 40), from: query.from?.username || query.from?.id }, 'Callback received');
 
   await bot.answerCallbackQuery(query.id).catch(() => {});
 
@@ -3507,7 +3508,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
   if (data === 'noop') return bot.answerCallbackQuery(query.id);
 
-  if (!data.startsWith('act:')) return;
+  if (!data.startsWith('act:')) {
+    if (/^(stars_pkg_|qris_pkg_|bagibagi_pkg_|saweria_cancel_|bagibagi_cancel_)/.test(data)) {
+      return _adminHandlers.handlePaymentAction({ chatId, msgId, query, act: data, mainMenuKeyboard, isAdminUser: isAdmin(query.from.id) });
+    }
+    return;
+  }
   const act = data.slice(4);
 
   if (act === 'back') {
@@ -3845,11 +3851,11 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     return _adminHandlers.handleVip({ chatId, msgId, query, mainMenuKeyboard });
   }
 
-  if (act === 'select_payment_qris' || act === 'select_payment_stars') {
+  if (act === 'select_payment_qris' || act === 'select_payment_bagibagi' || act === 'select_payment_stars') {
     return _adminHandlers.handleSelectPayment({ chatId, msgId, query, act });
   }
 
-  if (act.startsWith('stars_pkg_') || act.startsWith('qris_pkg_') || act.startsWith('saweria_cancel_')) {
+  if (act.startsWith('stars_pkg_') || act.startsWith('qris_pkg_') || act.startsWith('bagibagi_pkg_') || act.startsWith('saweria_cancel_') || act.startsWith('bagibagi_cancel_')) {
     return _adminHandlers.handlePaymentAction({ chatId, msgId, query, act, mainMenuKeyboard, isAdminUser: isAdmin(query.from.id) });
   }
 

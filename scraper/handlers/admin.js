@@ -140,8 +140,11 @@ async function handleVip({ chatId, msgId, query, mainMenuKeyboard }) {
   const statusText = info
     ? `✅ <b>Status:</b> VIP aktif — sisa <b>${info.daysLeft} hari</b> (s/d ${info.expireDate})\n\n`
     : '';
-  const msg = `💎 <b>VIP MEMBERSHIP</b>\n\n${statusText}<b>💰 Paket:</b>\n${pricing}\n\n<b>🛒 Cara:</b>\n1. Pilih paket → QRIS / Stars\n2. Bayar sesuai nominal\n3. VIP aktif otomatis\n\n<i>⚠️ Bayar persis nominal QRIS.</i>`;
-  const rows = [[{ text: '⬛ QRIS', callback_data: 'act:select_payment_qris' }, { text: '⭐ Stars', callback_data: 'act:select_payment_stars' }]];
+  const msg = `💎 <b>VIP MEMBERSHIP</b>\n\n${statusText}<b>💰 Paket:</b>\n${pricing}\n\n<b>🛒 Cara:</b>\n1. Pilih paket → QRIS / BagiBagi / Stars\n2. Bayar sesuai nominal\n3. VIP aktif otomatis\n\n<i>⚠️ Bayar persis nominal QRIS/BagiBagi.</i>`;
+  const rows = [
+    [{ text: '⬛ QRIS', callback_data: 'act:select_payment_qris' }, { text: '🟦 BagiBagi', callback_data: 'act:select_payment_bagibagi' }],
+    [{ text: '⭐ Stars', callback_data: 'act:select_payment_stars' }],
+  ];
   if (info) rows.push([{ text: '➕ Perpanjang VIP', callback_data: 'act:select_payment_qris' }]);
   rows.push([{ text: '🔙 Kembali', callback_data: 'act:main_menu' }]);
   const kb = { inline_keyboard: rows };
@@ -153,12 +156,19 @@ async function handleSelectPayment({ chatId, msgId, query, act }) {
   ensureCtx('handleSelectPayment');
   const { bot, config } = _ctx;
   const { STAR_PRICE } = config;
-  if (act === 'act:select_payment_qris') {
+  if (act === 'select_payment_qris') {
     if (!process.env.SAWERIA_USERNAME || !process.env.SAWERIA_USER_ID) {
       return bot.answerCallbackQuery(query.id, { text: 'QRIS belum dikonfigurasi, hubungi admin', show_alert: true });
     }
     const rows = Object.keys(VIP_PACKAGES).map((d) => [{ text: `⬛ ${VIP_PACKAGES[d].label} — Rp ${VIP_PACKAGES[d].price.toLocaleString('id-ID')}`, callback_data: `qris_pkg_${d}` }]);
-    return bot.editMessageText('⬛ <b>QRIS Payment</b>\n\nPilih paket (nominal kelipatan Rp 1.000):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+    return bot.editMessageText('⬛ <b>QRIS Payment (Saweria)</b>\n\nPilih paket (nominal kelipatan Rp 1.000):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
+  }
+  if (act === 'select_payment_bagibagi') {
+    if (!process.env.BAGIBAGI_RECEIVER_USERNAME) {
+      return bot.answerCallbackQuery(query.id, { text: 'BagiBagi belum dikonfigurasi, hubungi admin', show_alert: true });
+    }
+    const rows = Object.keys(VIP_PACKAGES).map((d) => [{ text: `🟦 ${VIP_PACKAGES[d].label} — Rp ${VIP_PACKAGES[d].price.toLocaleString('id-ID')}`, callback_data: `bagibagi_pkg_${d}` }]);
+    return bot.editMessageText('🟦 <b>BagiBagi Payment</b>\n\nPilih paket (bayar via QRIS BagiBagi):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
   }
   const rows = Object.keys(VIP_PACKAGES).map((d) => [{ text: `⭐ ${VIP_PACKAGES[d].label} — ${VIP_STAR_PRICES[d]}⭐`, callback_data: `stars_pkg_${d}` }]);
   return bot.editMessageText('⭐ <b>Stars Payment</b>\n\nPilih paket (dibayar via Telegram Stars):', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: rows } });
@@ -169,6 +179,21 @@ async function handlePaymentAction({ chatId, msgId, query, act, mainMenuKeyboard
   ensureCtx('handlePaymentAction');
   const { bot, config } = _ctx;
   const { STAR_PRICE } = config;
+  const paymentCtx = (query, chatId) => ({
+    from: query.from,
+    chat: { id: chatId },
+    reply: (html, opts) => bot.sendMessage(chatId, html, opts),
+    answerCbQuery: (text, opts) => text
+      ? bot.answerCallbackQuery(query.id, Object.assign({ text, show_alert: !!opts?.show_alert }, opts))
+      : bot.answerCallbackQuery(query.id),
+    replyWithPhoto: (photo, opts) => bot.sendPhoto(chatId, photo, opts),
+    telegram: {
+      deleteMessage: (cid, mid) => bot.deleteMessage(cid, mid),
+      editMessageText: (cid, mid, _inlineId, html, opts) => bot.editMessageText(html, Object.assign({ chat_id: cid, message_id: mid }, opts)),
+      sendMessage: (cid, html, opts) => bot.sendMessage(cid, html, opts),
+    },
+    notify: (html) => _ctx.config.ADMIN_IDS?.length ? bot.sendMessage(_ctx.config.ADMIN_IDS[0], html, { parse_mode: 'HTML' }) : Promise.resolve(),
+  });
   if (act.startsWith('stars_pkg_')) {
     const days = parseInt(act.split('_')[2]);
     const stars = VIP_STAR_PRICES[days];
@@ -184,24 +209,38 @@ async function handlePaymentAction({ chatId, msgId, query, act, mainMenuKeyboard
     if (!VIP_PACKAGES[days]) return bot.answerCallbackQuery(query.id, { text: 'Paket tidak valid', show_alert: true });
     try {
       const saweriaService = require('../services/saweriaService');
-      const ctx = {
-        from: query.from,
-        chat: { id: chatId },
-        answerCbQuery: (text, opts) => text
-          ? bot.answerCallbackQuery(query.id, Object.assign({ text, show_alert: !!opts?.show_alert }, opts))
-          : bot.answerCallbackQuery(query.id),
-        replyWithPhoto: (photo, opts) => bot.sendPhoto(chatId, photo, opts),
-        telegram: {
-          deleteMessage: (cid, mid) => bot.deleteMessage(cid, mid),
-          editMessageText: (cid, mid, _inlineId, html, opts) => bot.editMessageText(html, Object.assign({ chat_id: cid, message_id: mid }, opts)),
-          sendMessage: (cid, html, opts) => bot.sendMessage(cid, html, opts),
-        },
-        notify: (html) => _ctx.config.ADMIN_IDS?.length ? bot.sendMessage(_ctx.config.ADMIN_IDS[0], html, { parse_mode: 'HTML' }) : Promise.resolve(),
-      };
-      await saweriaService.startPayment(ctx, query.from.id, days);
+      await saweriaService.startPayment(paymentCtx(query, chatId), query.from.id, days);
     } catch (e) {
       logger.error({ err: e.message }, 'QRIS start failed');
       return bot.sendMessage(chatId, `QRIS ${days} hari — hubungi admin untuk aktivasi.`);
+    }
+    return;
+  }
+  if (act.startsWith('bagibagi_pkg_')) {
+    const days = parseInt(act.split('_')[2]);
+    if (!process.env.BAGIBAGI_RECEIVER_USERNAME) {
+      return bot.answerCallbackQuery(query.id, { text: 'BagiBagi belum dikonfigurasi, hubungi admin', show_alert: true });
+    }
+    if (!VIP_PACKAGES[days]) return bot.answerCallbackQuery(query.id, { text: 'Paket tidak valid', show_alert: true });
+    try {
+      const bagibagiService = require('../services/bagibagiService');
+      await bagibagiService.startPayment(paymentCtx(query, chatId), query.from.id, days);
+    } catch (e) {
+      logger.error({ err: e.message }, 'BagiBagi start failed');
+      return bot.sendMessage(chatId, `BagiBagi ${days} hari — hubungi admin untuk aktivasi.`);
+    }
+    return;
+  }
+  if (act.startsWith('bagibagi_cancel_')) {
+    const donationId = act.replace('bagibagi_cancel_', '');
+    try {
+      const bagibagiService = require('../services/bagibagiService');
+      await bagibagiService.cancelAndCleanup({
+        telegram: { deleteMessage: (cid, mid) => bot.deleteMessage(cid, mid) },
+      }, donationId);
+      await bot.sendMessage(chatId, '❌ Pembayaran dibatalkan.', { reply_markup: { inline_keyboard: [[{ text: '💎 Menu VIP', callback_data: 'act:vip' }]] } });
+    } catch (e) {
+      logger.warn({ err: e.message }, 'bagibagi cancel failed');
     }
     return;
   }
