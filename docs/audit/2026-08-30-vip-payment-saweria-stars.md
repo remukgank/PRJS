@@ -53,3 +53,31 @@ aktivasi otomatis via polling, audit payments).
 - `logger` di service wajib destructure `{ logger }` dari `./logger` (pola file lain).
 - Tabrakan: PRJS hanya punya 1 DB (helium) — tabel baru `vip_users` + `payments` dibuat otomatis
   oleh `loadVipCache()` saat bot start.
+## Lanjutan 2 (15 Sep 2026) — fix live: Stars invoice hang → timeout + observability
+
+Diagnosis live (Replit): tap `stars_pkg_*` menghasilkan `Callback received` saja — TANPA log
+ikutannya, TANPA invoice tampil, TANPA error. Berbeda dengan QRIS (yang setelah fix 14 Sep 2025
+pasti log `sendMessage`/invoice). Akar: `makePostRequest` di `bot.js` & `handlers/admin.js`
+**tanpa timeout** — `sendInvoice` ke Local Bot API yang menggantung membuat promise **tidak pernah
+settle** (bukan reject), sehingga `safeHandler` A TIGA-TIGA tak log apa pun & user tak dapat apa-apa.
+
+### Perubahan (commit ea71c79)
+| File | Perubahan |
+|------|-----------|
+| `scraper/handlers/admin.js` | `makePostRequest(urlPath, payload, timeoutMs = 20000)`: pasang `req.setTimeout(timeoutMs, () => { err.code='ETIMEDOUT'; req.destroy(err); })` → request yang menggantung kini **reject ETIMEDOUT setelah 20 s** (bukan hang); `req.on('error')` masih reject; ekspor tak berubah. Branch `stars_pkg_*` (850-860) pakai `logger.info(requested)` + `logger.info(sent, { invoiceId })` + catch → `logger.warn(failed)` + kirim `❌ Gagal kirim invoice Stars: <msg.slice(0,150)>` + tombol kembali VIP. |
+| `scraper/bot.js` | `makePostRequest` salin identik (713-739): timeout 20 s + `req.destroy(err)` → `ETIMEDOUT`. |
+
+### Verifikasi live (log Replit 15 Sep 2026, fragment)
+```
+INFO: Stars invoice requested  chatId: 5652862834  days: 7  stars: 1
+INFO: Stars invoice sent       chatId: 5652862834  invoiceId: 852
+```
+Baris `requested`→`sent` (dengan `invoiceId`) TIDAK PERNAH muncul sebelum patch — ini tanda
+observability bekerja & invoice benar-benar terkirim (bukan hanya diklaim).
+
+### Keputusan yang belum diambil (proposal menunggu)
+- Test observability map (21.09.2026) menunaikan: tak perlu di-dual-kan dengan file test ad-hoc yang
+  tsb (hari-2). File unit `scraper/tests/*` lama milik workstream lain — TIDAK disentuh (per instruksi).
+- Lihat langkah berikutnya: Stars invoice KINI terkirim → lanjut cek apakah `pre_checkout` +
+  `successful_payment` Stars mengaktifkan VIP otomatis 1× (trace `handlePreCheckout`/`answerPreCheckoutQuery`),
+  atau status Stars `PENDING` di stripe balance (tidak bisa dibuktikan dari log saja — butuh tes live penuh).
