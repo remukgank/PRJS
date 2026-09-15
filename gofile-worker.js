@@ -99,17 +99,65 @@ export default {
             headers: { "Content-Type": "application/json", ...cors },
           });
         }
-        // Anime page: list episode <a href="...-episode-N/"> (class lstepsiode) — termasuk -end/-END (episode terakhir)
+        // Anime page: list episode (class lstepsiode) — termasuk -end/-END (episode terakhir).
         const isAnime = /\/anime\//i.test(target);
         if (isAnime) {
           const epRe = /<a[^>]+href="([^"]+(?:-episode-|-エピソード-)(\d+)(?:-?(?:end|END|End))?\/?)"[^>]*>([^<]+)<\/a>/gi;
           const episodes = [];
+          const epByNum = new Map();
           let m2;
           while ((m2 = epRe.exec(html))) {
             const href = m2[1].trim();
             const num = parseInt(m2[2], 10);
             const title = m2[3].trim().replace(/\s+/g, " ");
-            if (!episodes.find((e) => e.ep === num)) episodes.push({ ep: num, url: href.startsWith("http") ? href : new URL(href, target).href, title });
+            const prev = epByNum.get(num);
+            // Prefer anchor judul (bukan anchor angka di header), biar title jujur non-numerik.
+            if (!prev || (!/^\d+$/.test(title) && /^\d+$/.test(prev.title))) {
+              epByNum.set(num, { url: href.startsWith("http") ? href : new URL(href, target).href, title });
+            }
+          }
+          for (const [num, { url, title }] of epByNum) {
+            episodes.push({ ep: num, url, title: /^[\d\s\-]+$/.test(title) ? `Episode ${num}` : title });
+          }
+          // Samehadaku kadang me-list episode dengan href /<slug>-<N>/ (tanpa -episode-), mis.
+          // Dragon Ball Heroes: ep 20-42 = /super-dragon-ball-heroes-31/ dst. Pola slug-angka ini
+          // WAJIB disaring dalam scope blok <div class="lstepsiode"> saja (pagar #1), supaya link
+          // lain di halaman (menu, anime lain, pagination) tak ikut tertangkap sebagai episode.
+          const listRe = /<div[^>]*class=["'][^"']*lstepsiode[^"']*["'][^>]*>([\s\S]*?)<\/ul>/gi;
+          const listM = listRe.exec(html);
+          if (listM && listM[1]) {
+            const listHtml = listM[1];
+            const bareRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
+            const bareByEp = new Map();
+            let bm;
+            while ((bm = bareRe.exec(listHtml))) {
+              const href = bm[1].trim();
+              let seg;
+              try {
+                seg = (new URL(href, target).pathname || "").replace(/\/+$/, "").split("/").pop() || "";
+              } catch { continue; }
+              // Lewati yang sudah ditangani epRe (-episode- atau -エピソード-) dan flag ringkasan
+              // atau penanda angka yang bukan nomor episode (season/part/movie/ova/dll).
+              if (/-episode-|-エピソード-/i.test(seg)) continue;
+              if (/-(?:season|part|movie|ova|ona|special|batch|end)-\d+$/i.test(seg)) continue;
+              const tm = seg.match(/^(.+?)-(\d+)$/);
+              if (!tm) continue;
+              const num = parseInt(tm[2], 10);
+              const title = bm[2].trim().replace(/\s+/g, " ");
+              const prev = bareByEp.get(num);
+              // Prefer anchor judul (bukan yang isinya cuma angka), biar title tak jadi "31".
+              if (!prev || (!/^\d+$/.test(title) && /^\d+$/.test(prev.title))) {
+                bareByEp.set(num, { href, title });
+              }
+            }
+            for (const [num, v] of bareByEp) {
+              if (episodes.find((e) => e.ep === num)) continue;
+              episodes.push({
+                ep: num,
+                url: v.href.startsWith("http") ? v.href : new URL(v.href, target).href,
+                title: /^[\d\s\-]+$/.test(v.title) ? `Episode ${num}` : v.title,
+              });
+            }
           }
           // Samehadaku: ep 1 kadang di-link ke <slug>/ (tanpa pola -episode-N), mis. Isekai Mokushiroku Mynoghra.
           // Hanya diproses bila setidaknya ada satu link -episode-N lain (judul multi-episode), sehingga
@@ -135,7 +183,7 @@ export default {
           // Movie/single — no episode links, fall through to parse download blocks below
         }
         // Episode page: Parse download-eps blocks: <li><strong>FULLHD</strong> <span><a href="...gofile...">...</a>
-        const qualityOrder = ["4K", "FULLHD", "MP4HD", "480p", "360p"];
+        const qualityOrder = ["4K", "FULLHD", "MP4HD", "720p", "480p", "360p"];
         const blocks = {};
         const liRe = /<li[^>]*>\s*<strong[^>]*>([^<]+)<\/strong>([\s\S]*?)<\/li>/gi;
         let m;
@@ -149,9 +197,10 @@ export default {
             const href = h[1].trim();
             const name = (h[2] || '').trim().toLowerCase();
             // Generic: slug = hostname .split interdip dari href (bukan hardcode nama server)
+            // Buff www86.zippyshare.com → zippyshare (buang awalan www<angka>.)
             let key = null;
             try {
-              const host = new URL(href).hostname.replace(/^www\./, '').split('.')[0];
+              const host = new URL(href).hostname.replace(/^www(?:\d+)\./i, '').replace(/^www\./, '').split('.')[0];
               if (host) key = host.toLowerCase();
             } catch {}
             if (!key && name) key = name.replace(/\s+/g, '');
@@ -159,9 +208,18 @@ export default {
           }
           if (Object.keys(servers).length) blocks[q] = servers;
         }
-        // Prefer 4K > FULLHD > MP4HD (4K if exists, FULLHD otherwise)
-        const preferred = blocks["4K"] || blocks.FULLHD || blocks.MP4HD || null;
-        const chosenQ = blocks["4K"] ? "4K" : blocks.FULLHD ? "FULLHD" : "MP4HD";
+        // Prefer kualitas tertinggi yang tersedia, scan qualityOrder penuh (4K → 360p).
+        // Pagar #2: kalau semua kualitas baku absen (mis. cuma SD/1080p), pakai blok pertama
+        // yang ADA dengan label kualitas JUJUR dari tag <strong> halaman (bukan asumsi).
+        let chosenQ = qualityOrder.find((q) => blocks[q]) || null;
+        let preferred = chosenQ ? blocks[chosenQ] : null;
+        if (!preferred) {
+          const available = Object.keys(blocks).filter((q) => blocks[q]);
+          if (available.length) {
+            chosenQ = available[0];
+            preferred = blocks[chosenQ];
+          }
+        }
         if (!preferred) {
           return new Response(JSON.stringify({ ok: false, message: "no FULLHD/4K servers found", blocks }), {
             status: 404,
