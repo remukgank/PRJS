@@ -710,7 +710,7 @@ function isAdmin(userId) {
   return ADMIN_IDS.includes(Number(userId));
 }
 
-function makePostRequest(urlPath, payload) {
+function makePostRequest(urlPath, payload, timeoutMs = 20000) {
   const baseUrl = LOCAL_API_PORT
     ? `http://127.0.0.1:${LOCAL_API_PORT}`
     : 'https://api.telegram.org';
@@ -731,6 +731,11 @@ function makePostRequest(urlPath, payload) {
           else reject(new Error(json.description || `${urlPath} failed`));
         } catch (e) { reject(e); }
       });
+    });
+    req.setTimeout(timeoutMs, () => {
+      const err = new Error(`timeout after ${timeoutMs}ms: ${urlPath}`);
+      err.code = 'ETIMEDOUT';
+      req.destroy(err);
     });
     req.on('error', reject);
     req.write(data);
@@ -3766,22 +3771,32 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       ? `\n\n**📋 Subdomain Drama:**\n` +
         `\`shortmax, flickreels, goodshort, dramawave, dramabox, starshort, dramapops, stardusttv, microdrama, reelshort, flextv, dramabite, netshort, kalostv, tvseries, moboreels, idrama, reelfren, shortwave\``
       : '';
+    const howToUse = isAdminUser
+      ? `**📖 Cara Pakai:**\n` +
+        `1. Kirim link drama atau file\n` +
+        `2. Pilih episode (untuk drama)\n` +
+        `3. Download gratis ${FREE_DOWNLOAD_LIMIT}x/hari atau bayar Stars\n` +
+        `4. File dikirim ke chat\n\n`
+      : `**📖 Cara Pakai:**\n` +
+        `1. Cari drama di 📚 Katalog atau \`/cari nama drama\`\n` +
+        `2. Tap Part/Episode yang mau ditonton\n` +
+        `3. Video langsung dikirim ke chat\n\n` +
+        `<i>Punya link drama/file baru? Minta admin untuk menambahkannya ke koleksi.</i>\n\n`;
+    const supportedLinks = isAdminUser
+      ? `**🔗 Link yang didukung:**\n` +
+        `- **dramafren.org** → drama serial\n` +
+        `- **gofile.io** → file sharing\n` +
+        `- **pixeldrain.com** → file sharing\n` +
+        `- **uc-share.com** → video share\n\n`
+      : '';
     return sendRichMessage(
       chatId,
       `**❓ Bantuan**\n\n` +
-      `**📖 Cara Pakai:**\n` +
-      `1. Kirim link drama atau file\n` +
-      `2. Pilih episode (untuk drama)\n` +
-      `3. Download gratis ${FREE_DOWNLOAD_LIMIT}x/hari atau bayar Stars\n` +
-      `4. File dikirim ke chat\n\n` +
+      howToUse +
       `**📚 Library:**\n` +
       `- \`/cari nama drama\` → cari di koleksi\n` +
       `- Tap Part → video instan dari Telegram\n\n` +
-      `**🔗 Link yang didukung:**\n` +
-      `- **dramafren.org** → drama serial\n` +
-      `- **gofile.io** → file sharing\n` +
-      `- **pixeldrain.com** → file sharing\n` +
-      `- **uc-share.com** → video share\n\n` +
+      supportedLinks +
       `${limit}` +
       paymentInfo +
       subdomainInfo,

@@ -57,7 +57,7 @@ function vipPaymentRows(kind) {
   return rows;
 }
 
-function makePostRequest(urlPath, payload) {
+function makePostRequest(urlPath, payload, timeoutMs = 20000) {
   ensureCtx('makePostRequest');
   const { LOCAL_API_PORT, TOKEN } = _ctx.config;
   const baseUrl = LOCAL_API_PORT
@@ -80,6 +80,11 @@ function makePostRequest(urlPath, payload) {
           else reject(new Error(json.description || `${urlPath} failed`));
         } catch (e) { reject(e); }
       });
+    });
+    req.setTimeout(timeoutMs, () => {
+      const err = new Error(`timeout after ${timeoutMs}ms: ${urlPath}`);
+      err.code = 'ETIMEDOUT';
+      req.destroy(err);
     });
     req.on('error', reject);
     req.write(data);
@@ -194,7 +199,15 @@ async function handlePaymentAction({ chatId, msgId, query, act, mainMenuKeyboard
     const stars = VIP_STAR_PRICES[days];
     const pkg = VIP_PACKAGES[days];
     if (!stars || !pkg) return bot.answerCallbackQuery(query.id, { text: 'Paket tidak valid', show_alert: true });
-    return sendInvoice(chatId, `💎 VIP ${pkg.label}`, `VIP ${days} hari — aktif otomatis setelah bayar`, `vip:${days}:${query.from.id}`, stars, `VIP ${days} hari`);
+    logger.info({ chatId, days, stars, userId: query.from.id }, 'Stars invoice requested');
+    try {
+      const invoice = await sendInvoice(chatId, `💎 VIP ${pkg.label}`, `VIP ${days} hari — aktif otomatis setelah bayar`, `vip:${days}:${query.from.id}`, stars, `VIP ${days} hari`);
+      logger.info({ chatId, days, invoiceId: invoice?.message_id }, 'Stars invoice sent');
+      return invoice;
+    } catch (err) {
+      logger.error({ chatId, days, err: err.message, code: err.code }, 'Stars invoice failed');
+      return bot.sendMessage(chatId, `❌ Gagal kirim invoice Stars: ${String(err.message).slice(0, 150)}`, { reply_markup: { inline_keyboard: [[{ text: '💎 Menu VIP', callback_data: 'act:vip' }]] } });
+    }
   }
   if (act.startsWith('qris_pkg_')) {
     const days = parseInt(act.split('_')[2]);
