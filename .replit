@@ -22,6 +22,17 @@ env = { "CI" = "true" }
 runButton = "PRJS"
 
 [[workflows.workflow]]
+name = "BagiBagi Worker"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/start-bagibagi-worker.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
 name = "FlareSolverr"
 author = "agent"
 
@@ -42,7 +53,6 @@ args = "source /run/replit/env/latest && bash scraper/start-local-api.sh"
 
 [workflows.workflow.metadata]
 outputType = "console"
-
 
 [[workflows.workflow]]
 name = "9router"
@@ -126,7 +136,15 @@ args = "FlareSolverr"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
+args = "BagiBagi Worker"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
 args = "Telegram Local API"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Hermes Agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -146,6 +164,11 @@ externalPort = 3001
 [[ports]]
 localPort = 8191
 externalPort = 3002
+
+[[ports]]
+localPort = 8192
+externalPort = 3003
+exposeLocalhost = true
 
 [[ports]]
 localPort = 9091
