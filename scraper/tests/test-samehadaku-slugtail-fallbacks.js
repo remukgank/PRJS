@@ -83,10 +83,14 @@ function ok(cond, name) {
   const b = await rB.json();
   ok(b.ok === true && b.type === 'episode', 'type=episode untuk halaman ep1');
   ok(b.quality === '720p', `quality jujur = 720p (${b.quality}) — bukan FULLHD bohongan`);
-  ok(b.servers && Object.keys(b.servers).length >= 2, `servers non-empty (${Object.keys(b.servers || {}).join(',')})`);
+  ok(b.servers && Object.keys(b.servers).length >= 1, `servers non-empty (${Object.keys(b.servers || {}).join(',')})`);
   ok(b.blocks?.['720p'] && Object.keys(b.blocks['720p']).length, 'blocks[720p] terisi');
-  ok(b.blocks?.['360p'] && Object.keys(b.blocks['360p']).length, 'blocks[360p] terisi');
-  ok(b.servers?.zippyshare || Object.keys(b.servers || {}).some((k) => k.includes('zippy')), 'zippyshare tertangkap (hostname slug)');
+  // blocks[360p] dulu cuma berisi zippyshare+racaty → setelah filter blok jadi absen (bukan null).
+  ok(('360p' in (b.blocks || {})) === false, 'blocks[360p] absen (server bawaannya mati/anti-bot)');
+  const serverKeysB = Object.keys(b.servers || {});
+  ok(!!b.servers.gdriveplayer, 'gdriveplayer tertangkap (hostname slug)');
+  ok(!serverKeysB.some((k) => /zippy/.test(k)), 'zippyshare difilter (layanan mati)');
+  ok(!serverKeysB.some((k) => /racaty/.test(k)), 'racaty difilter (anti-bot JS, bukan curl-scrapeable)');
 
   console.log('== C. regresi: FULLHD tetap diprioritaskan saat ada ==');
   const rC = await freshWorkerFetch(worker, loadFixture('mynoghra-ep1.html'), 'https://v2.samehadaku.how/dragon-ball-heroes-episode-1/');

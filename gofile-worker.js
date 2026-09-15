@@ -204,6 +204,10 @@ export default {
               if (host) key = host.toLowerCase();
             } catch {}
             if (!key && name) key = name.replace(/\s+/g, '');
+            // Server mati/anti-bot tak disajikan: Zippyshare tutup (302 ke homepage), Racaty
+            // pakai anti-bot JS chain (butuh headless, bukan curl). Hanya server scrapeable
+            // (Gofile/Pixeldrain/Filedon/GDrivePlayer) yang dibuka ke bot.
+            if (key && /^(?:zipps?yshare|racaty)$/i.test(key)) continue;
             if (key) servers[key] = href;
           }
           if (Object.keys(servers).length) blocks[q] = servers;
