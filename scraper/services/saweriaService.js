@@ -13,6 +13,9 @@ const CHECK_INTERVAL_MS = 7000;
 const MAX_WAIT_MINUTES = 15;
 const MAX_CONSECUTIVE_ERRORS = 5;
 const ZOMBIE_TTL_MS = (MAX_WAIT_MINUTES + 2) * 60 * 1000;
+const SAWERIA_COOKIE_JAR = '/tmp/saweria.cookies';
+const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || 'http://127.0.0.1:8191';
+const FLARE_ESCALATE_TIMEOUT_MS = 20000;
 
 const SUPPORT_MESSAGES = [
   'gas min, semangat',
@@ -42,6 +45,10 @@ const CURL_HEADERS = [
   '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
 ];
 
+function isChallengeResponse(text) {
+  return /just a moment|attention required|cf-challenge|cf_chl|checking your browser|__cf_chl|managed challenge|cf-please-wait/i.test(text || '');
+}
+
 function curlPost(url, body) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -49,6 +56,8 @@ function curlPost(url, body) {
       '-X', 'POST', url,
       '-H', 'Content-Type: application/json',
       ...CURL_HEADERS,
+      '-b', SAWERIA_COOKIE_JAR,
+      '-c', SAWERIA_COOKIE_JAR,
       '-d', JSON.stringify(body),
     ];
     execFile('curl', args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
@@ -56,7 +65,9 @@ function curlPost(url, body) {
       try {
         resolve(JSON.parse(stdout));
       } catch (e) {
-        reject(new Error(`Saweria API returned non-JSON: ${stdout.slice(0, 200)}`));
+        const err2 = new Error(`Saweria API returned non-JSON: ${stdout.slice(0, 200)}`);
+        err2.challenge = isChallengeResponse(stdout);
+        reject(err2);
       }
     });
   });
@@ -65,20 +76,63 @@ function curlPost(url, body) {
 function curlGet(url) {
   return new Promise((resolve, reject) => {
     const args = [
-      '-s', '--compressed', '-m', '30',
+      '-s', '--compressed', '-m', '30', '-w', '\n%{http_code}',
       url,
-      '-H', 'Referer: https://saweria.co/',
-      '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+      ...CURL_HEADERS,
+      '-H', 'Accept: application/json',
+      '-b', SAWERIA_COOKIE_JAR,
+      '-c', SAWERIA_COOKIE_JAR,
     ];
     execFile('curl', args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
       if (err) return reject(new Error(`curl error: ${err.message}`));
+      const text = String(stdout || '');
+      const lastNl = text.lastIndexOf('\n');
+      const body = lastNl >= 0 ? text.slice(0, lastNl) : text;
+      const status = lastNl >= 0 ? parseInt(String(text.slice(lastNl + 1)).trim(), 10) : 0;
+      if (/^[45]\d\d$/.test(String(status)) || isChallengeResponse(body)) {
+        const httpErr = new Error(`Saweria HTTP ${status}: ${body.slice(0, 200)}`);
+        httpErr.status = status;
+        httpErr.challenge = isChallengeResponse(body);
+        return reject(httpErr);
+      }
       try {
-        resolve(JSON.parse(stdout));
+        resolve(JSON.parse(body));
       } catch (e) {
-        reject(new Error(`Non-JSON response: ${stdout.slice(0, 200)}`));
+        const jsonErr = new Error(`Non-JSON response: ${body.slice(0, 200)}`);
+        jsonErr.challenge = isChallengeResponse(body);
+        jsonErr.status = status;
+        reject(jsonErr);
       }
     });
   });
+}
+
+async function fetchViaFlareSolverr(url, donationId) {
+  const axios = require('axios');
+  try {
+    const resp = await axios.post(
+      `${FLARESOLVERR_URL}/v1`,
+      { cmd: 'request.get', url, maxTimeout: 120000 },
+      { timeout: FLARE_ESCALATE_TIMEOUT_MS }
+    );
+    if (resp.data?.status === 'ok' && resp.data?.solution?.response) {
+      try {
+        return JSON.parse(resp.data.solution.response);
+      } catch (e) {
+        const jErr = new Error('FlareSolverr passthrough bukan JSON');
+        jErr.challenge = true;
+        throw jErr;
+      }
+    }
+    throw new Error(resp.data?.message || 'FlareSolverr: invalid response');
+  } catch (err) {
+    if (!err.challenge) {
+      const fsErr = new Error(`FlareSolverr fail-fast (${err.message})`);
+      fsErr.failFast = true;
+      throw fsErr;
+    }
+    throw err;
+  }
 }
 
 async function withRetry(fn, retries = 3, delayMs = 2000) {
@@ -150,16 +204,25 @@ async function createDonation(amount, email, name, message) {
 }
 
 async function checkPaymentStatus(donationId) {
-  return withRetry(async () => {
-    const res = await curlGet(`${SAWERIA_API}/donations/qris/snap/${donationId}`);
-    const d = res?.data;
-    if (!d) return null;
-    if (typeof d.id !== 'string' || typeof d.transaction_status !== 'string' || typeof d.amount_raw !== 'number') {
-      logger.error({ msg: 'checkPaymentStatus: invalid response structure', id: typeof d.id, status: typeof d.transaction_status, amount: typeof d.amount_raw });
-      return null;
+  const url = `${SAWERIA_API}/donations/qris/snap/${donationId}`;
+  let res;
+  try {
+    res = await curlGet(url);
+  } catch (err) {
+    if (err.challenge) {
+      logger.warn({ donationId }, 'Saweria direct poll kena challenge, escalate via FlareSolverr');
+      res = await fetchViaFlareSolverr(url, donationId);
+    } else {
+      throw err;
     }
-    return { id: d.id, status: d.transaction_status, amount: d.amount_raw, created_at: d.created_at };
-  }, 5, 1000);
+  }
+  const d = res?.data;
+  if (!d) return null;
+  if (typeof d.id !== 'string' || typeof d.transaction_status !== 'string' || typeof d.amount_raw !== 'number') {
+    logger.error({ msg: 'checkPaymentStatus: invalid response structure', id: typeof d.id, status: typeof d.transaction_status, amount: typeof d.amount_raw });
+    return null;
+  }
+  return { id: d.id, status: d.transaction_status, amount: d.amount_raw, created_at: d.created_at };
 }
 
 function deleteQRFile(donationId) {
@@ -581,4 +644,5 @@ module.exports = {
   cleanupProcessingPayment,
   cancelAndCleanup,
   activeIntervals,
+  _internal: { curlGet, curlPost, checkPaymentStatus, fetchViaFlareSolverr, isChallengeResponse },
 };
