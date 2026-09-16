@@ -81,3 +81,27 @@ observability bekerja & invoice benar-benar terkirim (bukan hanya diklaim).
 - Lihat langkah berikutnya: Stars invoice KINI terkirim → lanjut cek apakah `pre_checkout` +
   `successful_payment` Stars mengaktifkan VIP otomatis 1× (trace `handlePreCheckout`/`answerPreCheckoutQuery`),
   atau status Stars `PENDING` di stripe balance (tidak bisa dibuktikan dari log saja — butuh tes live penuh).
+
+## Lanjutan 3 (16 Sep 2026) — fix live: polling Saweria escape CF (QRIS VIP otomatis aktif)
+
+**Bukti live (16 Sep, saweria):** start `POST backend.saweria.co/donations/qris/snap/...` → **201 Created**
+(QR string penuh + `amount 5036`); polling status kemudian lolos & VIP QRIS **aktif otomatis**
+(setelah bayar) — konfirmasi user. Sebelum patch: polling kena CF challenge ("Just a moment" →
+non-JSON → retry ×5 → status tak terpantau → VIP QRIS perlu aktivasi manual).
+
+**Root cause:** polling `curlGet` lama hanya 2 header (UA + Accept) + tanpa cookie jar → fingerprint
+bot, CF kasih challenge. Start (`curlPost`, 15 header penuh) sukses karena browser-like lengkap.
+
+**Patch (commit `5433012`):**
+- `scraper/services/saweriaService.js` — polling sekarang pakai **15 header CF-fingerprint penuh**
+  (UA Chrome 153 + sec-ch-ua* + Sec-Fetch-* + Origin/Referer saweria.co + Accept br) + **cookie jar
+  SHARED** antara start & polling (`-b`/`-c /tmp/saweria.cookies`). Deteksi `isChallengeResponse`
+  (`/just a moment|cf_chl|cf-challenge|__cf_chl|managed challenge|checking your browser|Attention Required|challenge-platform/i`).
+- Kena challenge → **eskalasi 1× via FlareSolverr** (`http://127.0.0.1:8191`, request.get++, timeout 20s).
+- FlareSolverr down/fail-fast → reject cepat (5 ms, bukan hang) → masuk `consecutiveErrors`;
+  round berikut polling langsung lagi (lapis bawah tetap hidup) — bot tak pernah menunggu selamanya.
+- `scraper/tests/test-saweria-cf.js` (BARU) — **19/19 pass**: direct → 200 OK polls; 403
+  challenge → escalation FlareSolverr OK (resolve status asli); FlareSolverr down → reject 5ms
+  (bukan hang); cookie jar r+w konsisten; isChallengeResponse mendeteksi semua varian CF.
+
+**Verifikasi:** live Replit — QRIS afford start + polling lolos CF → VIP otomatis aktif setelah bayar.
