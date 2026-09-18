@@ -435,9 +435,19 @@ async function getDramaDetail(provider, fullId, lang = 'id', opts = {}) {
  *
  * @returns {Promise<{ title: string|null, synopsis: string|null, poster: string|null }>}
  */
+/**
+ * Detect placeholder titles returned by the detail API (e.g. "MoboReels 37637414")
+ * instead of the real drama name. When the API only has generic data it falls
+ * back to the drama page scrape for the real title/synopsis/poster.
+ */
+function isReelFrenPlaceholderTitle(title) {
+  if (!title) return false;
+  return /^(?:MoboReels|ReelFren|DramaFren)\s+\d+$/i.test(title);
+}
+
 async function getDramaMeta(provider, fullId, lang = 'id', opts = {}) {
   const detail = await getDramaDetail(provider, fullId, lang, opts);
-  if (detail.title) return detail;
+  if (detail.title && !isReelFrenPlaceholderTitle(detail.title)) return detail;
   return scrapeDramaPage(provider, fullId, lang, opts);
 }
 
@@ -550,13 +560,25 @@ async function getAllEpisodesReelFren(provider, fullId, lang = 'id', opts = {}) 
   // Enrich metadata only when it has not already been fetched as part of a
   // fallback. If both APIs are down, calling /api/detail again only repeats
   // the same 502s and delays the useful failure message.
-  const dramaMeta = detailMeta || watchFallbackMeta
+  let dramaMeta = detailMeta || watchFallbackMeta
     ? {
         ...(detailMeta || {}),
         ...(watchFallbackMeta || {}),
         title: watchFallbackMeta?.title || detailMeta?.title || result.title || null,
       }
     : await getDramaMeta(provider, fullId, lang, opts);
+
+  // If poster, synopsis, or title is still placeholder after fallback, scrape the
+  // drama page directly via FlareSolverr — this adds poster+synopsis+real title
+  // that the watch page scrape cannot provide, without repeating failing API calls.
+  if (!dramaMeta.poster || !dramaMeta.synopsis || isReelFrenPlaceholderTitle(dramaMeta.title)) {
+    try {
+      const enrich = await scrapeDramaPage(provider, fullId, lang, opts);
+      if (!dramaMeta.poster && enrich.poster) dramaMeta.poster = enrich.poster;
+      if (!dramaMeta.synopsis && enrich.synopsis) dramaMeta.synopsis = enrich.synopsis;
+      if ((!dramaMeta.title || isReelFrenPlaceholderTitle(dramaMeta.title)) && enrich.title) dramaMeta.title = enrich.title;
+    } catch {}
+  }
 
   return {
     episodes,
@@ -591,6 +613,21 @@ async function scrapeWatchPage(provider, fullId, lang = 'id', opts = {}) {
   // Extract title from <title> tag
   const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
   const title = titleMatch?.[1]?.replace(/\s*\|.*$/, '').trim() || null;
+
+  // Extract poster and synopsis from watch page elements (same selectors as drama page)
+  const posterImg = html.match(/<div class="detail-poster[^"]*">\s*<img[^>]*src="([^"]+)"/i);
+  const synopsisP = html.match(/<div class="detail-copy[^"]*">[\s\S]*?<p>([\s\S]*?)<\/p>/i);
+  // Fallback: og tags
+  const ogDesc = html.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i);
+  const ogImage = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i);
+
+  const decode = (s) => s
+    ? s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
+    : null;
+
+  const synopsis = decode(synopsisP?.[1] || ogDesc?.[1]) || null;
+  const poster = posterImg?.[1] || ogImage?.[1] || null;
 
   // Extract totalEpisodes from initialVideo config
   const totalMatch = u.match(/"totalEpisodes":(\d+)/);
@@ -632,7 +669,7 @@ async function scrapeWatchPage(provider, fullId, lang = 'id', opts = {}) {
           url: `${WEB_BASE}/watch/${provider}/${fullId}?ep=${i + 1}&lang=${lang}`,
         }))
       : []),
-    meta: { title, totalEpisodes: totalEpisodes || episodes.length },
+    meta: { title, synopsis, poster, totalEpisodes: totalEpisodes || episodes.length },
   };
 }
 

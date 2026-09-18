@@ -38,6 +38,9 @@ async function resolveGdrivePlayerFile(url, { timeoutMs = GPLAYER_TIMEOUT_MS } =
   } finally {
     clearTimeout(timer);
   }
+  // Capture cookies dari response (diperlukan utk authorize download)
+  const setCookies = res.headers.getSetCookie?.() || [];
+  const cookieStr = setCookies.map(c => c.split(';')[0]).join('; ');
   const html = await res.text().catch(() => '');
   const href = html.match(/(?:href|url)[=:]?\s*["']?(https:\/\/download\.[^"')\s]+)/i)?.[1] || null;
   if (!href) throw new Error(`GDrivePlayer: link download tidak ditemukan (http ${res.status})`);
@@ -49,6 +52,7 @@ async function resolveGdrivePlayerFile(url, { timeoutMs = GPLAYER_TIMEOUT_MS } =
     fileUrl: href,
     fileName,
     quality,
+    cookies: cookieStr || null,
   };
 }
 

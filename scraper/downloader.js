@@ -239,21 +239,34 @@ async function remuxToMp4(inputPath, onLog = null) {
   if (ext === '.mp4') return inputPath; // sudah mp4 — skip
   const ob = FFMPEG;
   const outPath = tempPath(path.basename(inputPath).replace(/\.[^.]+$/, '') + '_remux.mp4');
-  return new Promise((resolve) => {
-    const args = ['-y', '-i', inputPath, '-c', 'copy', '-movflags', '+faststart', outPath];
-    const proc = execFile(ob, args, { maxBuffer: 100 * 1024 * 1024 });
-    proc.on('error', () => resolve(inputPath)); // ffmpeg tak ada → biarkan asli
-    proc.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outPath)) {
-        cleanupFiles(inputPath);
-        if (onLog) onLog('remux: mkv→mp4 done');
-        resolve(outPath);
-      } else {
-        cleanupFiles(outPath); // codec tak compatible container → fallback asli
-        resolve(inputPath);
-      }
+
+  function runFfmpeg(args) {
+    return new Promise((resolve) => {
+      const proc = execFile(ob, args, { maxBuffer: 100 * 1024 * 1024 });
+      proc.on('error', () => resolve({ ok: false }));
+      proc.on('close', (code) => resolve({ ok: code === 0 && fs.existsSync(outPath) }));
     });
-  });
+  }
+
+  // Pass 1: stream copy (cepat)
+  let r = await runFfmpeg(['-y', '-i', inputPath, '-c', 'copy', '-movflags', '+faststart', outPath]);
+  if (r.ok) {
+    cleanupFiles(inputPath);
+    if (onLog) onLog('remux: mkv→mp4 done (copy)');
+    return outPath;
+  }
+  // Pass 2: re-encode h264+aac (iOS/Safari compatible)
+  cleanupFiles(outPath);
+  if (onLog) onLog('remux: copy gagal, re-encode h264+aac...');
+  r = await runFfmpeg(['-y', '-i', inputPath, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outPath]);
+  if (r.ok) {
+    cleanupFiles(inputPath);
+    if (onLog) onLog('remux: mkv→mp4 done (re-encode)');
+    return outPath;
+  }
+  // Gagal total → biarkan asli
+  cleanupFiles(outPath);
+  return inputPath;
 }
 
 /**

@@ -8,6 +8,7 @@ const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('../
 const { isFiledonUrl, resolveFiledonFile } = require('../providers/filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../providers/gdrive');
 const { isMegaUrl, resolveMegaFile, downloadMegaFile } = require('../providers/mega');
+const { isGdrivePlayerUrl, resolveGdrivePlayerFile, GPLAYER_UA, GPLAYER_REF } = require('../providers/gdriveplayer');
 const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive');
 const axios = require('axios');
 const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, remuxToMp4 } = require('../downloader');
@@ -834,6 +835,69 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
     if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
     if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg);
     if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg);
+    if (isGdrivePlayerUrl(url)) {
+      const gp = await resolveGdrivePlayerFile(url);
+      const gpBase = gp.fileName || `gdriveplayer_${Date.now()}`;
+      const gpName = /\.ts$/i.test(gpBase) ? gpBase : `${gpBase}.ts`;
+      const gpSame = parseSamehadakuFilename(gpName);
+      const gpPart = sameInfo?.episode ?? gpSame?.episode ?? extractPartFromFilename(gpName);
+      const gpTitle = titleArg || cleanCaption(gpName);
+      const gpCap = titleArg
+        ? [
+            `➧ Judul :- ${titleArg}`,
+            gpSame?.season
+              ? `➧ Season :- ${gpSame.season}${gpSame.part ? ` Part ${gpSame.part}` : ''} Episode ${gpPart}`
+              : `➧ Episode :- ${gpPart}`,
+            `➧ Provider :- samehadaku`,
+          ].join('\n')
+        : gpTitle;
+      const gpCacheInfo = { urlHash: hashUrl(url), source: 'gdriveplayer', fileName: gpName };
+      const rp = await new _ctx.RichProgress(chatId, gpTitle, [{ ep: titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle }]).start();
+      let outPath = tempPath(gpName);
+      try {
+        rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'download');
+        await downloadWithAria2c(gp.fileUrl, outPath, (log) => {
+          if (log.includes('progress:')) rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'download', log.split('progress: ')[1]);
+          else if (log.startsWith('DL:')) rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'download', log);
+        }, { 'User-Agent': GPLAYER_UA, 'Referer': GPLAYER_REF, ...(gp.cookies ? { 'Cookie': gp.cookies } : {}) });
+        // remux ts → mp4 utk iOS/Safari (gdriveplayer serve .ts MPEG-TS)
+        logger.info({ chatId, file: gpName, ext: path.extname(outPath) }, 'GDrivePlayer remux start');
+        if (/\.ts$/i.test(outPath)) outPath = await remuxToMp4(outPath, (m) => logger.info({ chatId }, `GDrivePlayer remux: ${m}`));
+        logger.info({ chatId, outExt: path.extname(outPath), outSize: fileSizeMb(outPath).toFixed(1) }, 'GDrivePlayer remux done');
+        const gpSizeMb = fileSizeMb(outPath);
+        logger.info({ chatId, file: gpName, sizeMb: gpSizeMb.toFixed(1) }, 'GDrivePlayer download selesai');
+        if (gpSizeMb > _ctx.config.MAX_UPLOAD_MB) {
+          rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'fail', `${gpSizeMb.toFixed(1)} MB > limit`);
+          return;
+        }
+        rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'upload', `${gpSizeMb.toFixed(1)} MB`);
+        const gpInfo = await getVideoInfo(outPath).catch(() => ({}));
+        const sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
+          caption: gpCap, supports_streaming: true,
+          ...(gpInfo.duration && { duration: gpInfo.duration }),
+          ...(gpInfo.width && { width: gpInfo.width }),
+          ...(gpInfo.height && { height: gpInfo.height }),
+        }, gpCacheInfo);
+        if (titleArg && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+          const cleanTitle = titleArg.replace(/\s*(?:Episode|Ep|Part|E)\s*\d+\s*/gi, ' ').trim();
+          const slug = `anime:${sanitizeSlug(cleanTitle || titleArg)}`;
+          const existing = await getPartFileId(slug, gpPart);
+          if (!existing) {
+            await upsertMedia(slug, cleanTitle || titleArg, 0, url, extractSourcePattern(gpName));
+            await savePartFileId(slug, gpPart, sendResult.video.file_id, Math.round(gpSizeMb * 1024 * 1024), gpName, gpCap);
+          }
+        }
+        rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'done', `${gpSizeMb.toFixed(1)} MB`);
+        rp.done();
+      } catch (err) {
+        logger.error({ chatId, file: gpName, err: err.message }, 'GDrivePlayer gagal');
+        rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'fail', err.message.slice(0, 30));
+        rp.done().catch(() => {});
+      } finally {
+        cleanupFiles(outPath);
+      }
+      return;
+    }
     return _ctx.bot.sendMessage(chatId, `⚠️ Server ${server} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
   } catch (err) {
     logger.warn({ server, err: err.message }, 'sam server gagal — tidak auto-coba lain (hormat pilihan user)');
