@@ -136,10 +136,6 @@ args = "FlareSolverr"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "BagiBagi Worker"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Telegram Local API"
 
 [[workflows.workflow.tasks]]

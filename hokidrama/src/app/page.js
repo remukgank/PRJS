@@ -55,7 +55,7 @@ export default async function HomePage({ searchParams }) {
         </div>
       ) : (
         <div className="drama-grid">
-          {dramas.map(d => <DramaCard key={`${d.source}-${d.id}`} drama={d} />)}
+          {dramas.map(d => <DramaCard key={`${d.source}-${d.id}`} drama={d} query={query} />)}
         </div>
       )}
     </>

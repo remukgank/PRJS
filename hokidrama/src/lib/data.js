@@ -57,30 +57,6 @@ async function queryAllDramas() {
     seen[p.id] = true
     dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps), poster: posterFor(r) })
   }
-  // Tambahan: drama yang HANYA ada di library Telegram (media_parts,
-  // mis. part merged) — tidak ada di vidara_uploads sehingga tak terlihat.
-  try {
-    const { rows: mrows } = await pool.query(`
-      SELECT m.slug AS drama_key,
-             MAX(m.nama) AS title,
-             COUNT(p.part) AS eps,
-             MIN(m.poster_url) AS poster,
-             MIN(m.poster_file_id) AS poster_fid
-      FROM media m
-      LEFT JOIN media_parts p ON p.media_slug = m.slug
-      GROUP BY m.slug
-    `)
-    for (const r of mrows) {
-      const p = parseKey(r.drama_key)
-      if (!p || seen[p.id]) continue
-      // Sembunyikan cangkang kosong: ada poster/judul tapi nol video.
-      if (Number(r.eps) === 0) continue
-      seen[p.id] = true
-      dramas.push({ id: p.id, title: r.title || p.id, source: p.source, eps: Number(r.eps) || 0, poster: posterFor(r) })
-    }
-  } catch (e) {
-    console.error('[data] queryAllDramas media fallback:', e.message)
-  }
   return dramas
 }
 
@@ -167,71 +143,35 @@ export async function getVidaraEpisodes(source, id) {
       filecode: r.filecode,
       embedUrl: `https://${domain}/e/${r.filecode}`,
     }))
-    return { found: true, episodes, info: { title: res.rows[0].title || id } }
+    // Batch upload menyimpan ~10 row episode per 1 file merge — group by
+    // filecode (urut by ep terkecil) supaya UI render 1 tombol per file.
+    const parts = []
+    const byFc = new Map()
+    for (const e of episodes) {
+      if (!byFc.has(e.filecode)) {
+        const g = { filecode: e.filecode, embedUrl: e.embedUrl, eps: [e.episode] }
+        byFc.set(e.filecode, g)
+        parts.push(g)
+      } else {
+        byFc.get(e.filecode).eps.push(e.episode)
+      }
+    }
+    for (const g of parts) {
+      const nums = g.eps.filter(n => typeof n === 'number')
+      const lo = nums.length ? Math.min(...nums) : g.eps[0]
+      const hi = nums.length ? Math.max(...nums) : g.eps[g.eps.length - 1]
+      g.epStart = lo
+      g.epEnd = hi
+      g.count = g.eps.length
+      g.label = lo === hi ? `Ep ${lo}` : `Ep ${lo}–${hi}`
+    }
+    parts.sort((a, b) => (Number(a.epStart) || 0) - (Number(b.epStart) || 0))
+    return { found: true, episodes, parts, info: { title: res.rows[0].title || id } }
   } catch (e) {
     console.error('[data] getVidaraEpisodes:', e.message)
     return { found: false }
   }
 }
 
-// Kode deeplink stabil untuk tombol "Tonton di Telegram" (?start=dl_<code>).
-async function mintDeeplink(slug, part) {
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO deeplinks(code, media_slug, part)
-       VALUES (substr(md5(random()::text || clock_timestamp()::text), 1, 10), $1, $2)
-       ON CONFLICT (media_slug, part) DO NOTHING
-       RETURNING code`,
-      [slug, part]
-    )
-    if (rows[0]?.code) return rows[0].code
-    const existing = await pool.query(
-      'SELECT code FROM deeplinks WHERE media_slug = $1 AND part = $2',
-      [slug, part]
-    )
-    return existing.rows[0]?.code || null
-  } catch (e) {
-    console.error('[data] mintDeeplink:', e.message)
-    return null
-  }
-}
-
-const BOT_USERNAME = process.env.BOT_USERNAME || 'freedramashortbot'
-
-// Parts dari library Telegram (media_parts) — termasuk part MERGED (1 file
-// untuk banyak episode) yang tidak ada di vidara_uploads. Playback via
-// /api/file?file_id= (proxy Bot API, token tidak bocor ke client).
-export async function getTelegramParts(source, id) {
-  const slug = `${source}:${id}`
-  const animeSlug = `anime:${id}`
-  try {
-    const res = await pool.query(
-      `SELECT p.part, p.file_id, p.file_name, p.caption, p.file_size, p.media_slug
-       FROM media_parts p
-       JOIN media m ON m.slug = p.media_slug
-       WHERE p.media_slug IN ($1, $2) AND p.file_id IS NOT NULL AND p.file_id <> ''
-       ORDER BY p.part`,
-      [slug, animeSlug]
-    )
-    if (res.rows.length === 0) return { found: false }
-    const parts = []
-    for (const r of res.rows) {
-      const sizeMb = Number(r.file_size) / 1024 / 1024 || 0
-      const code = await mintDeeplink(r.media_slug, r.part)
-      parts.push({
-        part: r.part,
-        fileId: r.file_id,
-        fileName: r.file_name,
-        caption: r.caption,
-        sizeMb: Math.round(sizeMb * 10) / 10,
-        playable: sizeMb > 0 && sizeMb <= 20,
-        playUrl: `/api/file?file_id=${encodeURIComponent(r.file_id)}`,
-        tgUrl: code ? `https://t.me/${BOT_USERNAME}?start=dl_${code}` : null,
-      })
-    }
-    return { found: true, parts }
-  } catch (e) {
-    console.error('[data] getTelegramParts:', e.message)
-    return { found: false }
-  }
-}
+// Web hanya menampilkan yang ada di Vidara. Telegram-only = urusan bot,
+// bukan web — tidak ada fallback/listing Telegram di sini.

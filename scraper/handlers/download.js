@@ -893,6 +893,7 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
         logger.error({ chatId, file: gpName, err: err.message }, 'GDrivePlayer gagal');
         rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'fail', err.message.slice(0, 30));
         rp.done().catch(() => {});
+        _ctx.bot.sendMessage(chatId, `⚠️ GDrivePlayer gagal: ${err.message.slice(0, 120)}\nServer GDrivePlayer lambat/error — ulangi lagi nanti ⏳, atau pilih host lain dari ⬅️ pilihan server.`, { reply_markup: backKb }).catch(() => {});
       } finally {
         cleanupFiles(outPath);
       }

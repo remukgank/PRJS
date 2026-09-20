@@ -1,9 +1,10 @@
-export default function DramaCard({ drama }) {
-  const href = `/drama/${drama.id}?source=${drama.source}`
+export default function DramaCard({ drama, query }) {
+  const q = query ? `&q=${encodeURIComponent(query)}` : ''
+  const href = `/drama/${drama.id}?source=${drama.source}${q}`
   return (
     <article className="drama-card">
       <a href={href}>
-        <div className="poster-frame scanline">
+        <div className="poster-frame">
           {drama.poster ? (
             <img src={drama.poster} alt={`Poster ${drama.title}`} loading="lazy" decoding="async" />
           ) : (

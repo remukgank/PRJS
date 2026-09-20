@@ -1402,7 +1402,7 @@ async function downloadAndSendPaidMedia(chatId, url, source, fileName, userId) {
       fileSize = file.size;
     }
 
-    await downloadWithAria2c(downloadUrl, outPath, () => {}, extraHeaders, fileSize);
+    await downloadWithAria2c(downloadUrl, outPath, () => {}, extraHeaders, { fileSize, disableSpeedFloor: true });
 
     const sizeMb = fileSizeMb(outPath);
     if (sizeMb > MAX_UPLOAD_MB) {

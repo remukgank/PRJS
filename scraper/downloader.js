@@ -285,7 +285,31 @@ function calcAria2cTimeout(fileSizeBytes) {
   return Math.max(MIN_TIMEOUT, Math.min(needMs, MAX_TIMEOUT));
 }
 
-function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
+// ─── Watchdog download (stall + speed floor) ─────────────────────────────────
+// Sumber progres = downloaded bytes dari readout aria2c ([#gid xMiB/0B ...]),
+// bukan ukuran file: dengan --file-allocation=none + koneksi paralel, ukuran file
+// bisa "loncat" penuh duluan (segmen terakhir ditulis lebih dulu) di host yang
+// support Range, sehingga watch berbasis statSync akan salah-positif.
+const ARIA2C_WATCHDOG_MS = 15000;               // interval cek progres
+const ARIA2C_STALL_MIN_RUN_MS = 30000;          // abaikan stall sebelum 30s jalan
+const ARIA2C_STALL_FREEZE_MS = 90000;           // nol pertumbuhan downloaded => stuck
+const ARIA2C_SPEED_MIN_RUN_MS = 90000;          // evaluasi speed floor setelah 90s
+const ARIA2C_SPEED_MIN_BYTES = 5 * 1024 * 1024; // minimal downloaded sebelum eval
+const ARIA2C_SPEED_WINDOW_MS = 90000;           // jendela trailing rata-rata
+const ARIA2C_SPEED_FLOOR_BPS = 70 * 1024;       // 70 KiB/s
+
+function aria2SizeToBytes(numStr, unitStr) {
+  const units = { '': 1, K: 1024, M: 1024 * 1024, G: 1024 ** 3, T: 1024 ** 4 };
+  return Math.round(parseFloat(numStr) * (units[(unitStr || '').toUpperCase()] || 1));
+}
+
+function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSizeOrOpts = {}) {
+  // Arg ke-5: bisa opts object {fileSize, disableSpeedFloor} atau angka legacy fileSize.
+  const opts = typeof fileSizeOrOpts === 'object' && fileSizeOrOpts !== null
+    ? fileSizeOrOpts
+    : { fileSize: fileSizeOrOpts };
+  const fileSize = opts.fileSize;
+  const disableSpeedFloor = opts.disableSpeedFloor === true;
   // Lapis 1+2 gate dulu (bungkus async-IIFE agar signature sync->Promise tetap).
   return (async () => {
     await backpressure.checkBeforeDownload();
@@ -304,6 +328,7 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
       '--max-tries', '5',
       '--connect-timeout=15',
       '--timeout=30',
+      '--summary-interval=10',
       '--console-log-level=notice',
       '--auto-file-renaming=false',
       '--allow-overwrite=true',
@@ -318,45 +343,100 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
 
     const fileName = path.basename(outPath);
     const proc = execFile('aria2c', args, { maxBuffer: 1024 * 1024 });
+    const startAt = Date.now();
 
     let output = '';
     let lastProgressLog = 0;
-    let timedOut = false;
+    let downloaded = 0;       // bytes ter-download (monotonik, dari readout aria2c)
+    let lastDownAt = startAt; // kapan downloaded terakhir bertambah
+    let lastHeartbeatAt = startAt;
+    let killReason = null;    // diisi timeout/watchdog → SIGTERM + reject sekali
+    const downSamples = [];   // rolling {at, bytes} untuk rata-rata trailing 90s
+
     const timeoutMs = calcAria2cTimeout(fileSize);
     const timeout = setTimeout(() => {
-      timedOut = true;
+      if (killReason) return; // jangan double-kill
+      killReason = `Download timeout (${Math.round(timeoutMs / 1000)} detik)`;
       proc.kill('SIGTERM');
     }, timeoutMs);
 
+    // Watchdog: deteksi stuck (nol progres) & speed floor (rata-rata trailing lambat).
+    const watchdog = setInterval(() => {
+      if (killReason) return;
+      const now = Date.now();
+      downSamples.push({ at: now, bytes: downloaded });
+      while (downSamples.length > 1 && now - downSamples[0].at > ARIA2C_SPEED_WINDOW_MS) downSamples.shift();
+      const runMs = now - startAt;
+
+      // 1) Stall: nol pertumbuhan downloaded (selalu aktif, termasuk paid).
+      if (runMs > ARIA2C_STALL_MIN_RUN_MS && now - lastDownAt > ARIA2C_STALL_FREEZE_MS) {
+        killReason = `server stuck — nol progres ${Math.round(ARIA2C_STALL_FREEZE_MS / 1000)} detik (host mati/gantung)`;
+        proc.kill('SIGTERM');
+        return;
+      }
+      // 2) Speed floor: rata-rata trailing < 70 KiB/s (dimatikan utk paid).
+      if (!disableSpeedFloor && runMs > ARIA2C_SPEED_MIN_RUN_MS && downloaded >= ARIA2C_SPEED_MIN_BYTES) {
+        const oldest = downSamples[0];
+        const windowMs = now - oldest.at;
+        const grown = downloaded - oldest.bytes;
+        if (windowMs >= ARIA2C_SPEED_WINDOW_MS * 0.75) {
+          const speed = (grown / windowMs) * 1000;
+          if (speed < ARIA2C_SPEED_FLOOR_BPS) {
+            killReason = `server terlalu lambat (rata-rata ${Math.round(speed / 1024)} KiB/s < 70 KiB/s selama 90 detik)`;
+            proc.kill('SIGTERM');
+            return;
+          }
+        }
+      }
+      // 3) Heartbeat ringan supaya user tidak lihat-diam.
+      if (onLog && downloaded > 0 && now - lastHeartbeatAt >= 60000) {
+        lastHeartbeatAt = now;
+        onLog(`masih download, ${(downloaded / 1048576).toFixed(1)} MB terkumpul`);
+      }
+    }, ARIA2C_WATCHDOG_MS);
+
+    function updateDownloaded(bytes) {
+      if (bytes > downloaded) {
+        downloaded = bytes;
+        lastDownAt = Date.now();
+      }
+    }
+
     function onData(d) {
       output += d;
+      const now = Date.now();
       const pctMatch = d.match(/\((\d+)%\)/);
       if (pctMatch) {
-        const now = Date.now();
         if (now - lastProgressLog > 3000) {
           lastProgressLog = now;
           if (onLog) onLog(`progress: ${pctMatch[1]}%`);
         }
-        return;
       }
-      const dlMatch = d.match(/DL:([\d\.]+)(\w+)/);
-      if (dlMatch) {
-        const now = Date.now();
-        if (now - lastProgressLog > 5000) {
-          lastProgressLog = now;
-          if (onLog) onLog(`DL: ${dlMatch[1]}${dlMatch[2]}`);
-        }
+      // Downloaded bytes dari readout [#gid <x>MiB/<total> ...] (prefix/i opsional).
+      const dlProgRe = /\[#[0-9a-f]+\s+([\d.]+)\s*([KMGT]?)i?B\//g;
+      let m;
+      while ((m = dlProgRe.exec(d)) !== null) updateDownloaded(aria2SizeToBytes(m[1], m[2]));
+      // Kecepatan DL:12MiB (baris lain, tanpa total) untuk log.
+      const dlRe = /DL:([\d.]+)\s*([KMGT]?)i?B\b/g;
+      const dl = dlRe.exec(d);
+      if (dl && now - lastProgressLog > 5000) {
+        lastProgressLog = now;
+        if (onLog) onLog(`DL: ${dl[1]}${dl[2]}${dl[2] ? 'i' : ''}B/s`);
       }
     }
 
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       clearTimeout(timeout);
-      if (timedOut) {
+      clearInterval(watchdog);
+      if (killReason) {
+        const logData = { file: fileName, reason: killReason, exitCode: code };
+        if (signal) logData.signal = signal;
+        appLogger.warn(logData, 'aria2c killed');
         cleanupFiles(outPath);
-        return reject(new Error(`Download timeout (${Math.round(timeoutMs / 1000)} detik)`));
+        return reject(new Error(killReason));
       }
       if (code === 0 && fs.existsSync(outPath)) {
         const sizeBytes = fs.statSync(outPath).size;
@@ -381,6 +461,7 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSize) {
 
     proc.on('error', (err) => {
       clearTimeout(timeout);
+      clearInterval(watchdog);
       appLogger.error({ file: fileName, err: err.message }, 'aria2c error');
       reject(err);
     });
