@@ -279,3 +279,19 @@ Baru diekspor: `pickBestServer(servers)` (prioritas SERVER_PRIORITY) + konstanta
   pagination 7, gdriveplayer-io 3, samehadaku-parse-ep1 14, download-sam-batch, kuronime,
   anime-topic-router 18 — semua hijau. node --check OK.
 - **Deploy**: restart bot di terminal user.
+
+## HARDENING 07:2x — Nama file upload nyata (fix bug parser konsumen)
+- **Bug**: gofile folder & pixeldrain download ke `gofile_${Date.now()}.mp4` /
+  `pixeldrain_${Date.now()}.mp4` walau nama server ada (`file.name`/`info.name`) →
+  file Telegram bernama acak; fomo-drama (repo terpisah) gagal parse title/episode.
+- **Fix (scraper/downloader.js)**: `safeFileName()` (NFC, buang traversal/ctrl/`..`,
+  cap 150) + `tempUniquePath()` (anti-bentrok suffix `_<ts>`); export keduanya.
+  **Fix (scraper/handlers/download.js:205 & 468)**: `outPath = tempUniquePath(
+  safeFileName(file.name|info.name, fallback_ts))` — nama server asli dipakai.
+- **Konteks fomo-drama**: fomo-drama DIREPO SENDIRI (github.com/tentangblockchain/
+  fomo-drama), folder di workspace ini cuma reference & DI-GIT-IGNORE di PRJS
+  (.gitignore:60). Di-pull ulang fresh pakai `FOMO_DRAMA_PAT` (clone --depth=1,
+  latest `f574716`), remote di-clean (hapus token dari URL), backup lama di
+  /tmp/fomo-drama-backup-<ts>.
+- **Test**: test-filename-sanitize 9 PASS (server name preserved, traversal/ctrl/dots
+  cleaned, fallback ts, anti-collision). Regresi penuh hijau. node --check OK.

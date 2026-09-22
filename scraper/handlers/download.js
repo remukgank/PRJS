@@ -11,7 +11,7 @@ const { isMegaUrl, resolveMegaFile, downloadMegaFile } = require('../providers/m
 const { isGdrivePlayerUrl, resolveGdrivePlayerFile, GPLAYER_UA, GPLAYER_REF } = require('../providers/gdriveplayer');
 const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive');
 const axios = require('axios');
-const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, remuxToMp4 } = require('../downloader');
+const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4 } = require('../downloader');
 const { cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename } = require('../lib/parser');
 const { detectTitleFromFilename } = require('../lib/titleDetect');
 
@@ -202,7 +202,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     }
 
     const ext = path.extname(file.name) || '';
-    outPath = tempPath(`gofile_${Date.now()}${ext}`);
+    outPath = tempUniquePath(safeFileName(file.name, `gofile_${Date.now()}${ext}`));
 
     rp.updateEpisode(capWithEp, 'download');
     await downloadWithAria2c(file.url, outPath, (log) => {
@@ -465,7 +465,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null, expectedEp =
     }
 
     const ext = path.extname(info.name) || '';
-    outPath = tempPath(`pixeldrain_${Date.now()}${ext}`);
+    outPath = tempUniquePath(safeFileName(info.name, `pixeldrain_${Date.now()}${ext}`));
 
     rp.updateEpisode(cap, 'download');
     const capEp = cap;

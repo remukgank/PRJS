@@ -488,10 +488,40 @@ function tempPath(name) {
 }
 
 /**
+ * Sanitasi nama file server supaya aman untuk TMP_DIR & jadi nama file Telegram
+ * (hilangkan traversal/karakter kontrol, batasi panjang). Fallback = nama acak
+ * ber-timestamp kalau nama server kosong atau hanya junk.
+ */
+function safeFileName(name, fallback) {
+  const clean = String(name || '')
+    .normalize('NFC')
+    .replace(/[\\/]/g, '_')
+    .replace(/[\x00-\x1f]/g, '')
+    .replace(/\.{2,}/g, '_')
+    .trim()
+    .slice(0, 150);
+  return (clean && clean !== '.') ? clean : fallback;
+}
+
+/**
+ * Path temp dengan fallback anti-bentrok (nama sudah ada di TMP_DIR).
+ * Dipakai supaya file yang di-upload Telegram namanya beneran dari server
+ * (mis. "One Piece Ep 1125.mp4"), bukan gofile_<ts>.mp4 — nama acak itu
+ * bikin bug parsing di konsumen lain (fomo-drama).
+ */
+function tempUniquePath(name) {
+  const base = tempPath(name);
+  if (!fs.existsSync(base)) return base;
+  const ext = path.extname(base);
+  const stem = path.basename(base, ext);
+  return tempPath(`${stem}_${Date.now()}${ext}`);
+}
+
+/**
  * Ukuran file dalam MB.
  */
 function fileSizeMb(filePath) {
   try { return fs.statSync(filePath).size / 1024 / 1024; } catch { return 0; }
 }
 
-module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, remuxToMp4, TMP_DIR };
+module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, fileSizeMb, remuxToMp4, TMP_DIR };
