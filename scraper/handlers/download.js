@@ -38,6 +38,24 @@ function ensureCtx(caller) {
   if (!_ctx || !_ctx.bot) throw new Error(`handlers/download belum di-init — panggil initDownload({ bot, config, samehadakuEpisodeMap, ... }) dulu (dari ${caller})`);
 }
 
+// Mode batch senyap: leaf handler tdk kirim pesan ⚠️ (cukup di tabel RichProgress batch).
+// Di-toggle oleh downloadSamehadakuFile saat dipanggil dgn opts.silent = { silent-visibility }
+let _samQuiet = false;
+function leafAlert(chatId, text) {
+  if (_samQuiet) return Promise.resolve();
+  return _ctx.bot.sendMessage(chatId, text).catch(() => {});
+}
+
+// Saat batch: leaf handler TIDAK bikin RichProgress per-episode (trafik edit pesan)
+// cukup tabel batch utama. noopRp = object no-op agar kode leaf tetap jalan polos.
+function noopRp() {
+  return {
+    updateEpisode() {}, updateLabel() {}, update() {}, tick() {},
+    note() { return this; },
+    done() { return Promise.resolve(); },
+  };
+}
+
 async function handleGofileUrl(chatId, url, customTitle = null) {
   ensureCtx('handleGofileUrl');
   const gofileToken = (process.env.GOFILE_TOKEN || '').trim();
@@ -62,7 +80,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     const goPartInit = sami?.episode ?? parseSamehadakuFilename(fileName)?.episode ?? extractPartFromFilename(fileName);
     const capWithEp = customTitle ? `${cap} — Episode ${goPartInit}` : cap;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
-    const rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    const rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     const outPath = tempPath(fileName);
 
     try {
@@ -80,7 +98,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
 
       if (sizeMb > _ctx.config.MAX_UPLOAD_MB) {
         rp.updateEpisode(capWithEp, 'fail', `${sizeMb.toFixed(1)} MB > limit`);
-        return;
+        return { ok: false, error: `${sizeMb.toFixed(1)} MB > limit` };
       }
 
       rp.updateEpisode(capWithEp, 'upload', `${sizeMb.toFixed(1)} MB`);
@@ -153,10 +171,11 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       logger.error({ chatId, file: fileName, err: err.message }, 'GoFile direct gagal');
       rp.updateEpisode(capWithEp, 'fail', err.message.slice(0, 30));
       rp.done().catch(() => {});
+      return { ok: false, error: err.message };
     } finally {
       cleanupFiles(outPath);
     }
-    return;
+    return { ok: true, file: fileName, sizeMb, part: goPart };
   }
 
   let outPath = null;
@@ -174,12 +193,12 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     const fileName = file.name;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
     capWithEp = customTitle ? `${cap} — Episode ${sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name)}` : cap;
-    rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
     if (file.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
       rp.updateEpisode(capWithEp, 'fail', `${sizeMb} MB > limit`);
       rp.done();
-      return;
+      return { ok: false, error: `${sizeMb} MB > limit` };
     }
 
     const ext = path.extname(file.name) || '';
@@ -254,6 +273,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     }
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
+    return { ok: true, file: file.name, sizeMb: finalSize, part: batchPart };
   } catch (err) {
     logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'GoFile content gagal');
     if (rp) {
@@ -407,7 +427,7 @@ async function handleUcDriveUrl(chatId, text) {
 }
 
 
-async function handlePixeldrainUrl(chatId, url, customTitle = null) {
+async function handlePixeldrainUrl(chatId, url, customTitle = null, expectedEp = null) {
   ensureCtx('handlePixeldrainUrl');
   let outPath = null;
   const sami = _ctx.samehadakuEpisodeMap.get(url);
@@ -428,15 +448,20 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     cap = customTitle || cleanCaption(fileName);
     // utk file samehadaku pakai sami.episode (extractPartFromFilename gagal utk format SHORT-S2-N-FULLHD-SAMEHADAKU)
     const pixPart = sami?.episode ?? parseSamehadakuFilename(info.name)?.episode ?? extractPartFromFilename(info.name);
+    const mismatch = partMismatch(expectedEp, pixPart);
+    if (mismatch) {
+      await leafAlert(chatId, `⚠️ Pixeldrain utk Ep ${expectedEp} menunjuk file salah (${info.name}).\n${mismatch}\nPakai server lain.`);
+      return { ok: false, error: mismatch };
+    }
     const capWithEp = customTitle ? `${cap} — Episode ${pixPart}` : cap;
     const cacheInfo = { urlHash, source: 'pixeldrain', fileName };
-    rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
     const capWithEpForLimit = capWithEp;
     if (info.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
       rp.updateEpisode(capWithEpForLimit, 'fail', `${sizeMb} MB > limit`);
       rp.done();
-      return;
+      return { ok: false, error: `${sizeMb} MB > limit` };
     }
 
     const ext = path.extname(info.name) || '';
@@ -455,7 +480,8 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
         rp.updateEpisode(capEp, 'fail', 'takedown DMCA');
         rp.done().catch(() => {});
         cleanupFiles(outPath);
-        return _ctx.bot.sendMessage(chatId, `⚠️ Pixeldrain: file di-takedown DMCA (HTTP 451) — tidak bisa didownload di server ini. \nCoba pilih server lain di pesan daftar episode.`).catch(() => {});
+        await leafAlert(chatId, `⚠️ Pixeldrain: file di-takedown DMCA (HTTP 451) — tidak bisa didownload di server ini. \nCoba pilih server lain di pesan daftar episode.`);
+        return { ok: false, error: 'takedown DMCA (HTTP 451)' };
       }
     }
     await downloadWithAria2c(info.directUrl, outPath, (log) => {
@@ -534,6 +560,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
     }
     rp.updateEpisode(capEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
+    return { ok: true, file: info.name, sizeMb: finalSize, part };
   } catch (err) {
     logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'Pixeldrain gagal');
     if (rp) {
@@ -541,14 +568,15 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null) {
       rp.done().catch(() => {});
     }
     // Feedback ke Telegram (jangan silent) — kirim pesan error agar user tahu
-    await _ctx.bot.sendMessage(chatId, `⚠️ Pixeldrain gagal: ${err.message.slice(0, 120)}\n\nLink mungkin expired/private. Coba server/URL lain.`).catch(() => {});
+    await leafAlert(chatId, `⚠️ Pixeldrain gagal: ${err.message.slice(0, 120)}\n\nLink mungkin expired/private. Coba server/URL lain.`);
+    return { ok: false, error: err.message };
   } finally {
     cleanupFiles(outPath);
   }
 }
 
 
-async function handleFiledonUrl(chatId, url, customTitle = null) {
+async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = null) {
   ensureCtx('handleFiledonUrl');
   let outPath = null;
   let cap = '';
@@ -559,6 +587,11 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
     const fdName = fd.name;
     const fdSame = parseSamehadakuFilename(fdName);
     const partN = fdSame?.episode ?? extractPartFromFilename(fdName);
+    const mismatch = partMismatch(expectedEp, partN);
+    if (mismatch) {
+      await leafAlert(chatId, `⚠️ Filedon utk Ep ${expectedEp} menunjuk file salah (${fdName}).\n${mismatch}\nPakai server lain.`);
+      return { ok: false, error: mismatch };
+    }
     const patFile = fdSame?.short ? fdSame.short : extractSourcePattern(fdName);
     let title = null;
     // Utk file Samehadaku: base title = S1 (kuronime-tssdk / samehadaku short), lalu tambah suffix S{season}.
@@ -591,7 +624,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
     cap = titleForCap || cleanCaption(fdName);
     capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
     const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
-    rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+    rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
     outPath = tempPath(fdName);
     await downloadWithAria2c(fd.url, outPath, (log) => {
@@ -633,10 +666,12 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
     }
     rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
     rp.done();
+    return { ok: true, file: fdName, sizeMb: finalSize, part: partN };
   } catch (err) {
     logger.error({ chatId, url: url.slice(0, 90), err: err.message }, 'Filedon gagal');
     if (rp) { rp.updateEpisode(capWithEp || cap || 'file', 'fail', err.message.slice(0, 50)); rp.done().catch(() => {}); }
-    await _ctx.bot.sendMessage(chatId, `⚠️ Filedon gagal: ${err.message.slice(0, 120)}\n\nLink mungkin private/expired.`).catch(() => {});
+    await leafAlert(chatId, `⚠️ Filedon gagal: ${err.message.slice(0, 120)}\n\nLink mungkin private/expired.`);
+    return { ok: false, error: err.message };
   } finally {
     cleanupFiles(outPath);
   }
@@ -822,25 +857,39 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   }
 }
 
-async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo) {
+async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo, opts = {}) {
   const titleArg = sameInfo
     ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
     : null;
+  // silent=true dipakai loop batch: status cukup di tabel RichProgress, hindari spam pesan per-ep.
+  const silent = !!opts.silent;
+  const epTag = sameInfo?.episode ? ` Ep ${sameInfo.episode}` : '';
   const backKb = { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `sam_ep:${sameInfo ? cacheUrl(episodeUrl) : 'x'}` }]] };
   const url = servers?.[server];
   if (!url) {
-    return _ctx.bot.sendMessage(chatId, `⚠️ Server ${server} tidak tersedia utk episode ini.`, { reply_markup: backKb }).catch(() => {});
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ Server ${server}${epTag} tidak tersedia utk episode ini.`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: `server ${server} tidak tersedia` };
   }
+  // Konteks samehadaku utk leaf handler (gofile/pixeldrain/filedon): caption → Provider samehadaku.
+  // Di flow manual sudah di-set di sam_go; batch tidak → diset di sini agar identik.
+  if (sameInfo) _ctx.samehadakuEpisodeMap?.set(url, sameInfo);
+  const prevQuiet = _samQuiet;
+  _samQuiet = silent;
   try {
     if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
-    if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg);
-    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg);
+    if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg, sameInfo?.episode);
+    if (isFiledonUrl(url)) return await handleFiledonUrl(chatId, url, titleArg, sameInfo?.episode);
     if (isGdrivePlayerUrl(url)) {
       const gp = await resolveGdrivePlayerFile(url);
       const gpBase = gp.fileName || `gdriveplayer_${Date.now()}`;
       const gpName = /\.ts$/i.test(gpBase) ? gpBase : `${gpBase}.ts`;
       const gpSame = parseSamehadakuFilename(gpName);
       const gpPart = sameInfo?.episode ?? gpSame?.episode ?? extractPartFromFilename(gpName);
+      const gpMismatch = partMismatch(sameInfo?.episode, gpPart);
+      if (gpMismatch) {
+        if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ GDrivePlayer utk Ep ${sameInfo?.episode} menunjuk file salah (${gpName}).\n${gpMismatch}\nPakai server lain.`).catch(() => {});
+        return { ok: false, error: gpMismatch };
+      }
       const gpTitle = titleArg || cleanCaption(gpName);
       const gpCap = titleArg
         ? [
@@ -852,7 +901,8 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
           ].join('\n')
         : gpTitle;
       const gpCacheInfo = { urlHash: hashUrl(url), source: 'gdriveplayer', fileName: gpName };
-      const rp = await new _ctx.RichProgress(chatId, gpTitle, [{ ep: titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle }]).start();
+      // batch: tanpa sub-progress per-ep (cukup tabel batch utama di bot.js)
+      const rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, gpTitle, [{ ep: titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle }]).start();
       let outPath = tempPath(gpName);
       try {
         rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'download');
@@ -868,7 +918,7 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
         logger.info({ chatId, file: gpName, sizeMb: gpSizeMb.toFixed(1) }, 'GDrivePlayer download selesai');
         if (gpSizeMb > _ctx.config.MAX_UPLOAD_MB) {
           rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'fail', `${gpSizeMb.toFixed(1)} MB > limit`);
-          return;
+          return { ok: false, error: `${gpSizeMb.toFixed(1)} MB > limit` };
         }
         rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'upload', `${gpSizeMb.toFixed(1)} MB`);
         const gpInfo = await getVideoInfo(outPath).catch(() => ({}));
@@ -889,21 +939,45 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
         }
         rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'done', `${gpSizeMb.toFixed(1)} MB`);
         rp.done();
+        return { ok: true, file: gpName, sizeMb: gpSizeMb, part: gpPart };
       } catch (err) {
         logger.error({ chatId, file: gpName, err: err.message }, 'GDrivePlayer gagal');
         rp.updateEpisode(titleArg ? `${gpTitle} — Episode ${gpPart}` : gpTitle, 'fail', err.message.slice(0, 30));
         rp.done().catch(() => {});
-        _ctx.bot.sendMessage(chatId, `⚠️ GDrivePlayer gagal: ${err.message.slice(0, 120)}\nServer GDrivePlayer lambat/error — ulangi lagi nanti ⏳, atau pilih host lain dari ⬅️ pilihan server.`, { reply_markup: backKb }).catch(() => {});
+        if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ GDrivePlayer${epTag} gagal: ${err.message.slice(0, 120)}\nServer GDrivePlayer lambat/error — ulangi lagi nanti ⏳, atau pilih host lain dari ⬅️ pilihan server.`, { reply_markup: backKb }).catch(() => {});
+        return { ok: false, error: err.message };
       } finally {
         cleanupFiles(outPath);
       }
-      return;
+      return { ok: false, error: 'unsupported path' };
     }
-    return _ctx.bot.sendMessage(chatId, `⚠️ Server ${server} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ Server ${server}${epTag} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: `server ${server} belum didukung` };
   } catch (err) {
-    logger.warn({ server, err: err.message }, 'sam server gagal — tidak auto-coba lain (hormat pilihan user)');
-    await _ctx.bot.sendMessage(chatId, `⚠️ ${server} gagal (${err.message.slice(0, 80)})\n\nKelik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
+    logger.warn({ server, episode: sameInfo?.episode ?? null, err: err.message }, 'sam server gagal');
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ ${server}${epTag} gagal (${err.message.slice(0, 80)})\n\nKlik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: err.message };
+  } finally {
+    _samQuiet = prevQuiet;
   }
 }
 
-module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile };
+// Urutan prioritas server utk batch "Download Semua" (yang didukung langsung).
+const SERVER_PRIORITY = ['gofile', 'filedon', 'pixeldrain', 'gdriveplayer'];
+// Guard anti-file-salah: situs Samehadaku kadang nunjuk file episode lain utk sebuah ep.
+// expectedEp = nomor episode yang diminta; gotPart = nomor episode dari nama file server.
+function partMismatch(expectedEp, gotPart) {
+  const want = Number(expectedEp);
+  const got = Number(gotPart);
+  if (want > 0 && got > 0 && got !== want) return `file server keliru: Ep ${got} (link Ep ${want})`;
+  return null;
+}
+function pickBestServerList(servers = {}) {
+  return SERVER_PRIORITY.filter((name) => servers[name]);
+}
+function pickBestServer(servers = {}) {
+  return pickBestServerList(servers)[0] || null;
+}
+const SAM_BATCH_PACE_MS = Number(process.env.SAM_BATCH_PACE_MS) || 1000;
+
+module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };

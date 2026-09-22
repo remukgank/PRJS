@@ -19,7 +19,7 @@ const GPLAYER_TIMEOUT_MS = 30000;
 function isGdrivePlayerUrl(url) {
   try {
     const host = new URL(url).hostname;
-    return /(^|\.)(?:gdriveplayer)\.(?:me|to)$/i.test(host) && /download\.php\?link=/i.test(url);
+    return /(^|\.)(?:gdriveplayer)\.(?:me|to|io)$/i.test(host) && /download\.php\?link=/i.test(url);
   } catch { return false; }
 }
 

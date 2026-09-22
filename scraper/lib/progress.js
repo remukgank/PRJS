@@ -15,6 +15,57 @@ function ensureInit(caller) {
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+// Throttle global antar SEMUA RichProgress: maksimal 1 edit per _MIN_EDIT_GAP_MS.
+// Mencegah burst edit (batch + sub-progress) memicu 429 Too Many Requests dari Telegram.
+const _MIN_EDIT_GAP_MS = 800;
+let _lastEditAt = 0;
+function _editGate() {
+  const now = Date.now();
+  if (now - _lastEditAt < _MIN_EDIT_GAP_MS) return false;
+  _lastEditAt = now;
+  return true;
+}
+function _sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// POST JSON ke Local API / bot API. Saat 429: tunggu retry_after lalu retry SATU kali.
+// (Pakai retry-after, bukan fallback kirim pesan baru — pesan baru memperparah rate-limit.)
+async function _postJson(url, payload) {
+  const http = require(url.startsWith('https') ? 'https' : 'http');
+  const data = JSON.stringify(payload);
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          if (json.ok) return resolve(json.result);
+          const err = new Error(json.description || 'API call failed');
+          err.retryAfter = json.parameters?.retry_after || 0;
+          reject(err);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+async function _postJsonRetry(url, payload) {
+  try { return await _postJson(url, payload); }
+  catch (err) {
+    if (err.retryAfter && err.retryAfter > 0) {
+      logger.warn({ url: url.slice(-40), retryAfter: err.retryAfter }, 'HTTP 429: backoff lalu retry sekali');
+      await _sleep(err.retryAfter * 1000 + 250);
+      return await _postJson(url, payload);
+    }
+    throw err;
+  }
+}
+
 class Progress {
   constructor(chatId, text) {
     ensureInit('Progress.constructor');
@@ -35,7 +86,7 @@ class Progress {
     } catch (err) {
       logger.error({ chatId: this.chatId, err: err.message }, 'Progress start failed');
     }
-    this.timer = setInterval(() => this.tick(), 3000);
+    this.timer = setInterval(() => this.tick(), 4000);
     return this;
   }
 
@@ -48,6 +99,7 @@ class Progress {
 
   async tick() {
     if (this.editing || !this.msgId) return;
+    if (!_editGate()) return;
     this.editing = true;
     this.frame++;
     try {
@@ -119,6 +171,8 @@ class RichProgress {
     this.timer = null;
     this.editing = false;
     this.isParts = !!opts.isParts;
+    this.window = opts.window || 0; // utk batch besar: render hanya N baris terakhir
+    this.recentActivity = []; // urutan key episode yang paling baru di-update
 
     this.episodes = episodes.map(ep => ({
       ep: ep.ep || ep,
@@ -152,44 +206,27 @@ class RichProgress {
     const progress = total > 0 ? Math.round(_totalPct / total) : 0;
 
     const progressBar = `<code>${'█'.repeat(Math.floor(progress / 5))}${'░'.repeat(20 - Math.floor(progress / 5))}</code> ${progress}%`;
-    const rows = this.episodes.map(e => {
+    const shown = this._displayList();
+    const hidden = this.episodes.length - shown.length;
+    const rows = shown.map(e => {
       const icon = STATUS_ICONS[e.status] || '⏳';
       const detail = e.detail ? ` — ${e.detail}` : '';
       const size = e.size ? ` (${e.size})` : '';
       const name = e.label || `${e.ep}`;
       return `<tr><td>${icon} ${e.status}</td><td>${name}${detail}${size}</td></tr>`;
     }).join('');
+    const hiddenNote = hidden > 0 ? ` · ${hidden} baris lain tersembunyi` : '';
     const table = `<table bordered striped compact><tr><th>Status</th><th>${this.isParts ? 'Part' : 'Episode'}</th></tr>${rows}</table>`;
     const notesHtml = this.notes.length ? this.notes.map(n => `<br><blockquote>${n}</blockquote>`).join('') : '';
     const footer = `<footer>⏱ ${mm}:${ss} | ✅ ${doneCount}/${total}${failCount > 0 ? ` | ❌ ${failCount}` : ''}</footer>`;
 
-    return `<h4>📥 ${this.title}</h4>${progressBar}<br><details open><summary>${this.isParts ? 'Part' : 'Episode'} (${doneCount}✓/${total})${failCount > 0 ? ` · ${failCount}✗` : ''}</summary>${table}</details><hr/>${footer}${notesHtml}`;
+    return `<h4>📥 ${this.title}</h4>${progressBar}<br><details open><summary>${this.isParts ? 'Part' : 'Episode'} (${doneCount}✓/${total})${failCount > 0 ? ` · ${failCount}✗` : ''}${hiddenNote}</summary>${table}</details><hr/>${footer}${notesHtml}`;
   }
 
   _richRequest(method, payload) {
     const { TOKEN, LOCAL_API_PORT } = _config;
     const baseUrl = LOCAL_API_PORT ? `http://127.0.0.1:${LOCAL_API_PORT}` : 'https://api.telegram.org';
-    const http = require(LOCAL_API_PORT ? 'http' : 'https');
-    return new Promise((resolve, reject) => {
-      const data = JSON.stringify(payload);
-      const req = http.request(`${baseUrl}/bot${TOKEN}/${method}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
-      }, (res) => {
-        let body = '';
-        res.on('data', (chunk) => { body += chunk; });
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(body);
-            if (json.ok) resolve(json.result);
-            else reject(new Error(json.description || `${method} failed`));
-          } catch (e) { reject(e); }
-        });
-      });
-      req.on('error', reject);
-      req.write(data);
-      req.end();
-    });
+    return _postJsonRetry(`${baseUrl}/bot${TOKEN}/${method}`, payload);
   }
 
   renderRichDone() {
@@ -214,19 +251,22 @@ class RichProgress {
       : `${total} episode`;
     const okLabel = this.isParts ? 'Part berhasil' : 'Berhasil';
 
-    const rows = this.episodes.map(e => {
+    const visibleRows = this._displayList();
+    const hiddenRows = this.episodes.length - visibleRows.length;
+    const rows = visibleRows.map(e => {
       const icon = STATUS_ICONS[e.status] || '⏳';
       const name = e.label || `${e.ep}`;
       const rawSize = e.size ? String(e.size) : (String(e.detail || '').match(/(\d+(?:\.\d+)? MB)/) || [''])[0];
       const cleanDetail = e.detail && e.detail !== rawSize ? ` — ${e.detail}` : '';
       return `<tr><td>${icon}</td><td>${name}${cleanDetail}</td><td>${rawSize || '—'}</td></tr>`;
     }).join('');
+    const hiddenRowsNote = hiddenRows > 0 ? ` · ${hiddenRows} baris lain tersembunyi` : '';
     const table = `<table bordered striped compact><caption>Detail</caption><tr><th>Status</th><th>${this.isParts ? 'Part' : 'Episode'}</th><th>Ukuran</th></tr>${rows}</table>`;
     const notesHtml = this.notes.length ? this.notes.map(n => `<br><blockquote>${n}</blockquote>`).join('') : '';
     const footer = `<footer>Total: ${totalUnit}${sizeStr} · ${okLabel} ${doneCount}${failCount > 0 ? ` · Gagal ${failCount}` : ''} · ⏱ ${mm}:${ss}</footer>`;
     const button = `<tg-button-row align="center"><tg-button type="callback_data" data="act:main_menu">📚 Menu Utama</tg-button></tg-button-row>`;
 
-    return `<h4>✅ ${this.title} — Selesai</h4><details><summary>📊 ${totalUnit}${sizeStr} · ${doneCount}✓${failCount > 0 ? ` · ${failCount}✗` : ''}</summary>${table}</details><hr/>${notesHtml}${footer}<br>${button}`;
+    return `<h4>✅ ${this.title} — Selesai</h4><details><summary>📊 ${totalUnit}${sizeStr} · ${doneCount}✓${failCount > 0 ? ` · ${failCount}✗` : ''}${hiddenRowsNote}</summary>${table}</details><hr/>${notesHtml}${footer}<br>${button}`;
   }
 
   render() {
@@ -264,39 +304,16 @@ class RichProgress {
     ].join('\n');
   }
 
-  async start() {
+async start() {
     ensureInit('RichProgress.start');
     try {
       const baseUrl = _config.LOCAL_API_PORT
         ? `http://127.0.0.1:${_config.LOCAL_API_PORT}`
         : 'https://api.telegram.org';
-      const http = require(_config.LOCAL_API_PORT ? 'http' : 'https');
-      const htmlContent = this.renderRichMessage();
 
-      const payload = JSON.stringify({
+      const msg = await _postJsonRetry(`${baseUrl}/bot${_config.TOKEN}/sendRichMessage`, {
         chat_id: this.chatId,
-        rich_message: { html: htmlContent },
-      });
-
-      const msg = await new Promise((resolve, reject) => {
-        const url = `${baseUrl}/bot${_config.TOKEN}/sendRichMessage`;
-        const req = http.request(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-        }, (res) => {
-          let body = '';
-          res.on('data', (chunk) => { body += chunk; });
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(body);
-              if (json.ok) resolve(json.result);
-              else reject(new Error(json.description || 'sendRichMessage failed'));
-            } catch (e) { reject(e); }
-          });
-        });
-        req.on('error', reject);
-        req.write(payload);
-        req.end();
+        rich_message: { html: this.renderRichMessage() },
       });
 
       this.msgId = msg?.message_id;
@@ -307,46 +324,25 @@ class RichProgress {
         this.msgId = msg.message_id;
       } catch {}
     }
-    this.timer = setInterval(() => this.tick(), 5000);
+    this.timer = setInterval(() => this.tick(), 6000);
     return this;
   }
 
   async tick() {
     ensureInit('RichProgress.tick');
     if (this.editing || !this.msgId) return;
+    if (!_editGate()) return;
     this.editing = true;
     try {
       const baseUrl = _config.LOCAL_API_PORT
         ? `http://127.0.0.1:${_config.LOCAL_API_PORT}`
         : 'https://api.telegram.org';
-      const http = require(_config.LOCAL_API_PORT ? 'http' : 'https');
       const htmlContent = this.renderRichMessage();
 
-      const payload = JSON.stringify({
+      await _postJsonRetry(`${baseUrl}/bot${_config.TOKEN}/editMessageText`, {
         chat_id: this.chatId,
         message_id: this.msgId,
         rich_message: { html: htmlContent },
-      });
-
-      await new Promise((resolve, reject) => {
-        const url = `${baseUrl}/bot${_config.TOKEN}/editMessageText`;
-        const req = http.request(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-        }, (res) => {
-          let body = '';
-          res.on('data', (chunk) => { body += chunk; });
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(body);
-              if (json.ok) resolve(json.result);
-              else reject(new Error(json.description || 'editMessageText failed'));
-            } catch (e) { reject(e); }
-          });
-        });
-        req.on('error', reject);
-        req.write(payload);
-        req.end();
       });
     } catch {
       try {
@@ -366,6 +362,7 @@ class RichProgress {
       item.status = status;
       item.detail = detail;
       item.size = size;
+      this._trackActivity(ep);
     }
   }
 
@@ -375,7 +372,27 @@ class RichProgress {
       item.status = status;
       item.detail = detail;
       item.size = size;
+      this._trackActivity(item.ep);
     }
+  }
+
+  // Mode window: daftar baris yang ditampilkan = baris yang paling baru di-update
+  // (bukan slice akhir array — biar live activity terlihat, bukan tail yang belum diproses).
+  _trackActivity(epKey) {
+    if (!this.window) return;
+    this.recentActivity = this.recentActivity.filter(k => k !== epKey);
+    this.recentActivity.push(epKey);
+    if (this.recentActivity.length > this.window) this.recentActivity.shift();
+  }
+
+  _displayList() {
+    if (!this.window) return this.episodes;
+    const shown = [];
+    for (const key of this.recentActivity) {
+      const item = this.episodes.find(e => e.ep === key);
+      if (item && !shown.includes(item)) shown.push(item);
+    }
+    return shown;
   }
 
   async done(note = '') {

@@ -19,6 +19,10 @@ const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
+// Cache daftar episode utk navigasi halaman picker (jangan fetch ulang tiap tap).
+const samehadakuEpisodesCache = new Map(); // animeUrl → { eps, ts }
+const SAM_PAGE_EP = Number(process.env.SAM_PAGE_EP) || 20; // ep per halaman (5 per baris × 4)
+const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
 const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
@@ -32,6 +36,8 @@ const { buildAnimeSender, ANIME_TOPIC_KEY } = require('./lib/animeTopic');
 const { detectTitleFromFilename } = require('./lib/titleDetect');
 const { sleep, floodRetryMs, initTelegram, apiPost } = require('./lib/telegram');
 const { initProgress, Progress, RichProgress } = require('./lib/progress');
+const { buildPicker } = require('./lib/samKeyboard');
+const { scanSupportedServers, viableFromScanned } = require('./lib/samPrescan');
 
 function isUcDriveUrl(text) {
   return /(?:uc-share\.com|drive\.ucweb\.com)\/s\/[A-Za-z0-9]+/.test(text);
@@ -245,6 +251,10 @@ backpressure.init({
 });
 
 const vidaraBusy = new Map(); // chatId → true (upload ke Vidara sedang berjalan) — dideklarasikan di atas wiring agar initVidara tidak TDZ
+const samAllBusy = new Set(); // lock batch "Download Semua" (chatId:title) agar tidak dobel isi queue
+const SAM_BATCH_WINDOW = Number(process.env.SAM_BATCH_WINDOW) || 15; // baris RichProgress yang dirender utk batch besar
+const SAM_PRE_SCAN = process.env.SAM_PRE_SCAN !== '0'; // pre-flight scan server sebelum batch (skip ep tanpa host didukung)
+const SAM_SCAN_CONCURRENCY = Math.max(1, Number(process.env.SAM_SCAN_CONCURRENCY) || 6); // resolve paralel saat pre-scan
 // ─── Download + kirim 1 file ──────────────────────────────────────────────────
 
 async function downloadAndSend(chatId, subdomain, id, slug, ep, lang, caption) {
@@ -1894,7 +1904,7 @@ function samehadakuAnimeSlug(animeUrl) {
 }
 
 // Keyboard episode + caption dgn centang ✅ utk part yg sudah ada di library.
-async function buildSamehadakuEpisodePicker(eps, animeUrl) {
+async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
   // Judul dari URL anime (deterministik) — data worker cuma berisi nomor ep.
   let title = 'Samehadaku';
   try {
@@ -1912,27 +1922,29 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl) {
   } catch (err) {
     logger.warn({ err: err.message }, 'episode picker done-state gagal, tampil tanpa centang');
   }
-  const keyboard = [];
-  const chunk = 5;
-  for (let i = 0; i < eps.length; i += chunk) {
-    const row = eps.slice(i, i + chunk).map((e) => {
+  const total = eps.length;
+  const { keyboard, meta } = buildPicker(eps, {
+    urlId: cacheUrl(animeUrl),
+    page,
+    pageSize: SAM_PAGE_EP,
+    done,
+    mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
       return { text: done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
-    });
-    keyboard.push(row);
-  }
-  const doneCount = eps.filter((e) => done.has(Number(e.ep))).length;
-  const total = eps.length;
+    },
+  });
+  const { first, last, doneCount } = meta;
   let caption;
   if (doneCount > 0) {
     const filled = Math.round((doneCount / total) * 10);
     const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
     const pct = Math.round((doneCount / total) * 100);
-    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nPilih episode:`;
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   } else {
-    caption = `📺 <b>${title}</b>\n🎞 ${total} episode — pilih episode:`;
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode — episode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   }
+  samehadakuEpisodesCache.set(animeUrl, { eps, ts: Date.now() });
   return { keyboard, caption };
 }
 
@@ -3162,6 +3174,152 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       logger.error({ err: err.message, stack: err.stack }, 'sam_ep failed');
       return bot.editMessageText(`⚠️ Gagal ambil server: ${err.message.slice(0, 100)}\n\nKirim ulang link anime.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
+  }
+
+  // ─── Samehadaku batch: "Download Semua" — queue semua episode sekaligus ─────
+  if (data.startsWith('sam_all:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const rawUrl = data.slice(8);
+    const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    let title = 'Samehadaku';
+    try {
+      const info = parseSamehadakuAnime(animeUrl);
+      if (info?.title) title = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
+    } catch {}
+    const lockKey = `${chatId}:${title}`;
+    if (samAllBusy.has(lockKey)) {
+      await bot.editMessageText('⏳ Batch utk anime ini sedang berjalan. Tunggu selesai.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      return;
+    }
+    samAllBusy.add(lockKey);
+    try {
+      const cachedEps = samehadakuEpisodesCache.get(animeUrl);
+      let episodes = cachedEps && Date.now() - cachedEps.ts < SAM_CACHE_MS ? cachedEps.eps : null;
+      if (!episodes) {
+        const freshRes = await resolveSamehadakuFullhd(animeUrl);
+        episodes = freshRes.episodes;
+        samehadakuEpisodesCache.set(animeUrl, { eps: freshRes.episodes, ts: Date.now() });
+      }
+      if (!episodes?.length) {
+        await bot.editMessageText('⚠️ Gagal load daftar episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      const res = { type: 'anime', episodes };
+      const slug = samehadakuAnimeSlug(animeUrl);
+      const done = new Set();
+      try {
+        const rows = slug ? await listPartsWithFile(slug) : [];
+        for (const r of rows || []) done.add(Number(r.part));
+      } catch {}
+      const queue = res.episodes.filter((e) => !done.has(Number(e.ep)));
+      if (!queue.length) {
+        await bot.editMessageText('✅ Semua episode sudah ada di library.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      // ── Pre-flight scan server: skip ep tanpa host didukung, reuse hasil scan ──
+      let scanned = null;
+      let skip = 0;
+      let viable = queue;
+      if (SAM_PRE_SCAN) {
+        const scanMsg = await bot.sendMessage(chatId, `🔎 Pre-scan server ${queue.length} ep...`).catch(() => null);
+        scanned = await scanSupportedServers(queue, resolveSamehadakuFullhd, { concurrency: SAM_SCAN_CONCURRENCY });
+        viable = viableFromScanned(queue, scanned, _downloadHandlers.pickBestServerList);
+        skip = queue.length - viable.length;
+        if (scanMsg) bot.editMessageText(`🔎 Pre-scan selesai: ${viable.length} ep layak unduh, ${skip} dilewati (tanpa server didukung).`, { chat_id: chatId, message_id: scanMsg.message_id }).catch(() => {});
+      }
+      if (!viable.length) {
+        await bot.editMessageText('⚠️ Tidak ada episode dengan server didukung (gofile/pixeldrain/filedon/gdriveplayer).', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
+      const rp = await new RichProgress(chatId, `📥 Batch ${title}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      let ok = 0, fail = 0;
+      for (const e of viable) {
+        const key = `Ep ${e.ep}`;
+        try {
+          let servers, quality;
+          if (scanned) {
+            const s = scanned.get(e.ep) || { servers: {}, quality: '' };
+            servers = s.servers;
+            quality = s.quality || '';
+          } else {
+            rp.updateEpisode(key, 'download', 'ambil server...');
+            const rin = await resolveSamehadakuFullhd(e.url);
+            servers = rin.servers || {};
+            quality = rin.quality || '';
+          }
+          const candidates = _downloadHandlers.pickBestServerList(servers);
+          if (!candidates.length) {
+            rp.updateEpisode(key, 'fail', 'no supported server');
+            fail++;
+            continue;
+          }
+          const sameInfo = parseSamehadakuEpisode(e.url);
+          // Fallback: jika server prioritas gagal, coba server berikutnya sebelum di-fail
+          // (keep outPath per branch unik → tidak ada percampuran partial antar server).
+          let r = null;
+          let lastErr = '';
+          for (const server of candidates) {
+            rp.updateEpisode(key, 'download', `${server} (${quality})`);
+            r = await _downloadHandlers.downloadSamehadakuFile(chatId, e.url, server, servers, sameInfo, { silent: true });
+            if (r?.ok) break;
+            lastErr = r?.error || 'gagal';
+            rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+          }
+          if (r?.ok) {
+            rp.updateEpisode(key, 'done', r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : 'ok');
+            ok++;
+          } else {
+            rp.updateEpisode(key, 'fail', String(lastErr).slice(0, 50));
+            fail++;
+          }
+        } catch (err) {
+          logger.error({ chatId, ep: e.ep, err: err.message }, 'sam_all item gagal');
+          rp.updateEpisode(key, 'fail', err.message.slice(0, 50));
+          fail++;
+        }
+        await sleep(_downloadHandlers.SAM_BATCH_PACE_MS || 1000);
+      }
+      await rp.done();
+      logger.info({ chatId, title, ok, fail, skip }, 'sam_all batch selesai');
+    } finally {
+      samAllBusy.delete(lockKey);
+    }
+    return;
+  }
+
+  // ─── Samehadaku navigasi halaman picker (anime dgn >100 episode) ───────────
+  if (data.startsWith('sam_page:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const parts = data.split(':');
+    const page = Number(parts[1]) || 0;
+    const rawUrl = parts.slice(2).join(':');
+    const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    let eps = null;
+    const cachedEps = samehadakuEpisodesCache.get(animeUrl);
+    if (cachedEps && Date.now() - cachedEps.ts < SAM_CACHE_MS) eps = cachedEps.eps;
+    if (!eps) {
+      await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      try {
+        const freshRes = await resolveSamehadakuFullhd(animeUrl);
+        eps = freshRes.episodes;
+        if (freshRes.type !== 'anime' || !eps?.length) return bot.editMessageText('⚠️ Gagal load episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        samehadakuEpisodesCache.set(animeUrl, { eps, ts: Date.now() });
+      } catch (err) {
+        return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 80)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      }
+    }
+    const { keyboard, caption } = await buildSamehadakuEpisodePicker(eps, animeUrl, page);
+    return bot.editMessageText(caption, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+    }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
   }
 
   if (data.startsWith('sam_back:')) {
