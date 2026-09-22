@@ -15,6 +15,7 @@ const { cleanupStaleSessions } = require('./providers/dramafren');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile, resolveGofileFiles } = require('./providers/gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./providers/pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./providers/samehadaku');
+const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
@@ -23,6 +24,9 @@ const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { tit
 const samehadakuEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const SAM_PAGE_EP = Number(process.env.SAM_PAGE_EP) || 20; // ep per halaman (5 per baris × 4)
 const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
+// Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
+const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
+const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
 const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
@@ -255,6 +259,7 @@ const samAllBusy = new Set(); // lock batch "Download Semua" (chatId:title) agar
 const SAM_BATCH_WINDOW = Number(process.env.SAM_BATCH_WINDOW) || 15; // baris RichProgress yang dirender utk batch besar
 const SAM_PRE_SCAN = process.env.SAM_PRE_SCAN !== '0'; // pre-flight scan server sebelum batch (skip ep tanpa host didukung)
 const SAM_SCAN_CONCURRENCY = Math.max(1, Number(process.env.SAM_SCAN_CONCURRENCY) || 6); // resolve paralel saat pre-scan
+const kurAllBusy = new Set(); // lock batch kuronime "Download Semua" (chatId:title)
 // ─── Download + kirim 1 file ──────────────────────────────────────────────────
 
 async function downloadAndSend(chatId, subdomain, id, slug, ep, lang, caption) {
@@ -858,8 +863,22 @@ async function waitForFlareSolverr(maxRetries = 30) {
   };
 
   function checkDiskSpace() {
-    const df = require('child_process').execFileSync('df', ['-B1', '--output=avail', '/home/runner/workspace'], { encoding: 'utf8' });
-    const avail = Number(df.trim().split('\n')[1]);
+    // /home/runner/workspace hanya ada di Replit — di env lain (mis. WSL/lokal)
+    // pakai fallback pertama yang ada; kalau semua gagal cukup warn, jangan throw.
+    const candidates = ['/home/runner/workspace', __dirname, '/tmp', '/'];
+    const dir = candidates.find((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+    if (!dir) {
+      logger.warn('checkDiskSpace dilewati: tidak ada path yang bisa dicek');
+      return null;
+    }
+    let avail;
+    try {
+      const df = require('child_process').execFileSync('df', ['-B1', '--output=avail', dir], { encoding: 'utf8' });
+      avail = Number(df.trim().split('\n')[1]);
+    } catch (err) {
+      logger.warn({ err: err.message, dir }, 'checkDiskSpace gagal, dilewati');
+      return null;
+    }
     const availGb = (avail / 1e9).toFixed(1);
     if (avail < 500 * 1024 * 1024) {
       logger.fatal({ availableGb: availGb }, 'Disk space critical — shutting down');
@@ -1948,6 +1967,62 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
   return { keyboard, caption };
 }
 
+// ─── Kuronime picker done-state ──────────────────────────────────────────────
+// Slug library anime: `anime:<slug-judul>` — IDENTIK dengan sisi download
+// (downloadKuronimeFile titleArg = title) agar centang cocok.
+function kuronimeAnimeSlug(animeUrl) {
+  try {
+    const info = parseKuronimeAnime(animeUrl);
+    if (!info) return null;
+    return `anime:${sanitizeSlug(info.title)}`;
+  } catch { return null; }
+}
+
+// Keyboard episode + caption dgn centang ✅ utk part yg sudah ada di library.
+async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
+  let title = 'Kuronime';
+  try {
+    const info = parseKuronimeAnime(animeUrl);
+    if (info?.title) title = info.title;
+  } catch {}
+  if (title === 'Kuronime') title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Kuronime';
+  const done = new Set();
+  try {
+    const slug = kuronimeAnimeSlug(animeUrl);
+    if (slug) {
+      const rows = await listPartsWithFile(slug);
+      for (const r of rows || []) done.add(Number(r.part));
+    }
+  } catch (err) {
+    logger.warn({ err: err.message }, 'kuronime picker done-state gagal, tampil tanpa centang');
+  }
+  const total = eps.length;
+  const { keyboard, meta } = buildPicker(eps, {
+    urlId: cacheUrl(animeUrl),
+    page,
+    pageSize: SAM_PAGE_EP,
+    done,
+    prefix: 'kur',
+    mkEp: (e) => {
+      const epId = hashUrl(e.url).slice(0, 8);
+      kuronimeEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
+      return { text: done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`, callback_data: `kur_ep:${epId}` };
+    },
+  });
+  const { first, last, doneCount } = meta;
+  let caption;
+  if (doneCount > 0) {
+    const filled = Math.round((doneCount / total) * 10);
+    const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
+    const pct = Math.round((doneCount / total) * 100);
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
+  } else {
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode — episode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
+  }
+  kuronimeEpisodesCache.set(animeUrl, { eps, ts: Date.now() });
+  return { keyboard, caption };
+}
+
 bot.on('message', safeHandler('message')(async (msg) => {
   logger.info({ chatId: msg.chat.id, text: msg.text || msg.caption || '', from: msg.from?.username || msg.from?.id, hasMedia: !!(msg.photo || msg.video || msg.document) }, 'Message received');
   const chatId = msg.chat.id;
@@ -2740,6 +2815,52 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
   }
 
+  // ─── Kuronime: anime → picker episode; episode → pilihan server quality terbaik
+  if (isKuronimeUrl(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil data Kuronime...').catch(() => null);
+    try {
+      const epInfo = parseKuronimeEpisode(text);
+      if (!epInfo) {
+        // Halaman anime: daftar episode
+        const eps = await listKuronimeEpisodes(text);
+        const { keyboard, caption } = await buildKuronimeEpisodePicker(eps, text);
+        if (statusMsg) {
+          return bot.editMessageText(caption, {
+            chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: keyboard },
+          }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
+        }
+        return bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+      }
+      // Halaman episode: resolve mirror → server quality terbaik (gofile/pixeldrain)
+      const { qualities } = await resolveKuronimeMirrors(text);
+      const best = pickKuronimeBest(qualities);
+      if (!best) {
+        if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+        return bot.sendMessage(chatId, '⚠️ Episode ini tidak punya server didukung (gofile/pixeldrain).', { parse_mode: 'HTML' });
+      }
+      const labelOf = (k) => k.charAt(0).toUpperCase() + k.slice(1);
+      const urlId = cacheUrl(text);
+      const keyboard = Object.entries(qualities[best.quality] || {})
+        .filter(([k]) => KURONIME_SERVER_PRIORITY.includes(k))
+        .map(([k]) => [{ text: `⬇️ ${labelOf(k)} (${best.quality})`, callback_data: `kur_dl:${k}:${urlId}` }]);
+      const caption = `📺 <b>Kuronime ${best.quality}</b> — Ep ${epInfo.episode}\n\nPilih server untuk download:`;
+      if (statusMsg) {
+        return bot.editMessageText(caption, {
+          chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: keyboard },
+        }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
+      }
+      return bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+    } catch (err) {
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return bot.sendMessage(chatId, `⚠️ Kuronime gagal: ${stripHtml(err.message).slice(0, 200)}`, { parse_mode: 'HTML' });
+    }
+  }
+
   if (isGofileUrl(text)) {
     if (!isAdmin(msg.from.id)) {
       return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
@@ -3427,6 +3548,280 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }).catch(() => {});
     }
     return;
+  }
+
+  // ─── Kuronime: satu episode → pilihan server ──────────────────────────────
+  if (data.startsWith('kur_ep:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const rawUrl = data.slice(7);
+    const episodeUrl = kuronimeEpisodeMap.get(rawUrl) || resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!episodeUrl) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    }
+    await bot.editMessageText('🔍 Mengambil server Kuronime...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    try {
+      const { qualities } = await resolveKuronimeMirrors(episodeUrl);
+      const best = pickKuronimeBest(qualities);
+      if (!best) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      const urlId = cacheUrl(episodeUrl);
+      const labelOf = (k) => k.charAt(0).toUpperCase() + k.slice(1);
+      const keyboard = Object.entries(qualities[best.quality] || {})
+        .filter(([k]) => KURONIME_SERVER_PRIORITY.includes(k))
+        .map(([k]) => [{ text: `⬇️ ${labelOf(k)} (${best.quality})`, callback_data: `kur_dl:${k}:${urlId}` }]);
+      if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      const kurInfoBack = parseKuronimeEpisode(episodeUrl);
+      const animeUrlBack = kurInfoBack?.slug ? `https://kuronime.sbs/anime/${kurInfoBack.slug}/` : null;
+      if (animeUrlBack) keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}` }]);
+      return bot.editMessageText(`📺 <b>Kuronime ${best.quality}</b>\n\nPilih server untuk download:`, {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+      }).catch(() => bot.sendMessage(chatId, `📺 <b>Kuronime ${best.quality}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
+    } catch (err) {
+      logger.error({ err: err.message, stack: err.stack }, 'kur_ep failed');
+      return bot.editMessageText(`⚠️ Gagal ambil server: ${err.message.slice(0, 100)}\n\nKirim ulang link anime.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+  }
+
+  // ─── Kuronime: preview sebelum download ───────────────────────────────────
+  if (data.startsWith('kur_dl:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const parts2 = data.split(':');
+    const server = parts2[1];
+    const rawUrl = parts2.slice(2).join(':');
+    const episodeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!episodeUrl) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    }
+    const kurInfo = parseKuronimeEpisode(episodeUrl);
+    await bot.editMessageText('🔍 Mengambil link server...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    try {
+      const { qualities } = await resolveKuronimeMirrors(episodeUrl);
+      const best = pickKuronimeBest(qualities);
+      const fileUrl = best?.quality ? (qualities[best.quality] || {})[server] : null;
+      if (!fileUrl) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      const preview = `📦 <b>Preview Download</b>\n\n` +
+        `➧ Judul :- <b>${kurInfo?.title || '?'}</b>\n` +
+        `➧ Episode :- ${kurInfo?.episode || '?'}\n` +
+        `➧ Provider :- kuronime\n` +
+        `➧ Server :- ${server} (${best.quality})\n\nDownload?`;
+      const urlId2 = cacheUrl(episodeUrl);
+      return bot.editMessageText(preview, {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [
+          [{ text: `✅ Ya, Download (${server})`, callback_data: `kur_go:${server}:${urlId2}` }],
+          [{ text: '⬅️ Ganti server', callback_data: `kur_ep:${cacheUrl(episodeUrl)}` }],
+        ] },
+      }).catch(() => {});
+    } catch (err) {
+      return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+  }
+
+  // ─── Kuronime: confirm download (setelah preview) ─────────────────────────
+  if (data.startsWith('kur_go:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const partsG = data.split(':');
+    const server = partsG[1];
+    const rawUrlG = partsG.slice(2).join(':');
+    const episodeUrlG = resolveUrl(rawUrlG) || decodeURIComponent(rawUrlG);
+    if (!episodeUrlG) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    }
+    const kurInfoG = parseKuronimeEpisode(episodeUrlG);
+    await bot.editMessageText('📥 Downloading...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    let serversAll = null;
+    try {
+      const { qualities } = await resolveKuronimeMirrors(episodeUrlG);
+      const best = pickKuronimeBest(qualities);
+      serversAll = best?.quality ? qualities[best.quality] : {};
+      if (!serversAll[server]) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    } catch (err) {
+      return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+    await _downloadHandlers.downloadKuronimeFile(chatId, episodeUrlG, server, serversAll, kurInfoG);
+    if (kurInfoG?.slug) {
+      const animeUrlBack = `https://kuronime.sbs/anime/${kurInfoG.slug}/`;
+      await bot.sendMessage(chatId, `⬅️ Kembali ke list episode?`, {
+        reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}` }]] },
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  // ─── Kuronime batch: "Download Semua" ─────────────────────────────────────
+  if (data.startsWith('kur_all:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const rawUrl = data.slice(8);
+    const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    let title = 'Kuronime';
+    try {
+      const info = parseKuronimeAnime(animeUrl);
+      if (info?.title) title = info.title;
+    } catch {}
+    const lockKey = `${chatId}:${title}`;
+    if (kurAllBusy.has(lockKey)) {
+      await bot.editMessageText('⏳ Batch utk anime ini sedang berjalan. Tunggu selesai.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      return;
+    }
+    kurAllBusy.add(lockKey);
+    try {
+      const cachedEps = kuronimeEpisodesCache.get(animeUrl);
+      let episodes = cachedEps && Date.now() - cachedEps.ts < SAM_CACHE_MS ? cachedEps.eps : null;
+      if (!episodes) {
+        episodes = await listKuronimeEpisodes(animeUrl);
+        kuronimeEpisodesCache.set(animeUrl, { eps: episodes, ts: Date.now() });
+      }
+      if (!episodes?.length) {
+        await bot.editMessageText('⚠️ Gagal load daftar episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      const slug = kuronimeAnimeSlug(animeUrl);
+      const done = new Set();
+      try {
+        const rows = slug ? await listPartsWithFile(slug) : [];
+        for (const r of rows || []) done.add(Number(r.part));
+      } catch {}
+      const queue = episodes.filter((e) => !done.has(Number(e.ep)));
+      if (!queue.length) {
+        await bot.editMessageText('✅ Semua episode sudah ada di library.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      // ── Pre-flight scan server: skip ep tanpa host didukung, reuse hasil scan ──
+      const pickKurList = (servers = {}) => KURONIME_SERVER_PRIORITY.filter((name) => servers[name]);
+      let scanned = null;
+      let skip = 0;
+      let viable = queue;
+      if (SAM_PRE_SCAN) {
+        const scanMsg = await bot.sendMessage(chatId, `🔎 Pre-scan server ${queue.length} ep...`).catch(() => null);
+        scanned = await scanSupportedServers(queue, resolveKuronimeBest, { concurrency: SAM_SCAN_CONCURRENCY });
+        viable = viableFromScanned(queue, scanned, pickKurList);
+        skip = queue.length - viable.length;
+        if (scanMsg) bot.editMessageText(`🔎 Pre-scan selesai: ${viable.length} ep layak unduh, ${skip} dilewati (tanpa server didukung).`, { chat_id: chatId, message_id: scanMsg.message_id }).catch(() => {});
+      }
+      if (!viable.length) {
+        await bot.editMessageText('⚠️ Tidak ada episode dengan server didukung (gofile/pixeldrain).', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        return;
+      }
+      const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
+      const rp = await new RichProgress(chatId, `Batch ${title}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      // Desain konsisten: semua baris langsung bawa detail server (quality) dari
+      // hasil prescan, jadi baris antre tampil "⏳ Ep N — server (quality)" sama
+      // seperti baris aktif (renderer hanya ganti icon).
+      if (scanned) {
+        for (const e of viable) {
+          const s = scanned.get(e.ep) || { servers: {}, quality: '' };
+          const first = pickKurList(s.servers)[0];
+          if (first) rp.updateEpisode(`Ep ${e.ep}`, 'pending', `${first} (${s.quality || '?'})`);
+        }
+      }
+      let ok = 0, fail = 0;
+      for (const e of viable) {
+        const key = `Ep ${e.ep}`;
+        try {
+          let servers, quality;
+          if (scanned) {
+            const s = scanned.get(e.ep) || { servers: {}, quality: '' };
+            servers = s.servers;
+            quality = s.quality || '';
+          } else {
+            rp.updateEpisode(key, 'download', 'ambil server...');
+            const rin = await resolveKuronimeBest(e.url);
+            servers = rin.servers || {};
+            quality = rin.quality || '';
+          }
+          const candidates = pickKurList(servers);
+          if (!candidates.length) {
+            rp.updateEpisode(key, 'fail', 'no supported server');
+            fail++;
+            continue;
+          }
+          const kurInfo = parseKuronimeEpisode(e.url) || { title, episode: e.ep, provider: 'kuronime', slug: '' };
+          // Fallback: jika server prioritas gagal, coba server berikutnya sebelum di-fail.
+          let r = null;
+          let lastErr = '';
+          for (const server of candidates) {
+            rp.updateEpisode(key, 'download', `${server} (${quality})`);
+            r = await _downloadHandlers.downloadKuronimeFile(chatId, e.url, server, servers, kurInfo, { silent: true });
+            if (r?.ok) break;
+            lastErr = r?.error || 'gagal';
+            rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+          }
+          if (r?.ok) {
+            rp.updateEpisode(key, 'done', r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : 'ok');
+            ok++;
+          } else {
+            rp.updateEpisode(key, 'fail', String(lastErr).slice(0, 50));
+            fail++;
+          }
+        } catch (err) {
+          logger.error({ chatId, ep: e.ep, err: err.message }, 'kur_all item gagal');
+          rp.updateEpisode(key, 'fail', err.message.slice(0, 50));
+          fail++;
+        }
+        await sleep(_downloadHandlers.SAM_BATCH_PACE_MS || 1000);
+      }
+      await rp.done();
+      logger.info({ chatId, title, ok, fail, skip }, 'kur_all batch selesai');
+    } finally {
+      kurAllBusy.delete(lockKey);
+    }
+    return;
+  }
+
+  // ─── Kuronime: kembali ke list episode ────────────────────────────────────
+  if (data.startsWith('kur_back:')) {
+    const rawUrl = data.slice(9);
+    const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa' }).catch(() => {});
+    await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    try {
+      const cached = kuronimeEpisodesCache.get(animeUrl);
+      const eps = (cached && Date.now() - cached.ts < SAM_CACHE_MS) ? cached.eps : await listKuronimeEpisodes(animeUrl);
+      const { keyboard, caption } = await buildKuronimeEpisodePicker(eps, animeUrl);
+      return bot.editMessageText(caption, {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+      }).catch(() => {});
+    } catch (err) {
+      return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 80)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+  }
+
+  // ─── Kuronime navigasi halaman picker ─────────────────────────────────────
+  if (data.startsWith('kur_page:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    const parts = data.split(':');
+    const page = Number(parts[1]) || 0;
+    const rawUrl = parts.slice(2).join(':');
+    const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+    if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    let eps = null;
+    const cachedEps = kuronimeEpisodesCache.get(animeUrl);
+    if (cachedEps && Date.now() - cachedEps.ts < SAM_CACHE_MS) eps = cachedEps.eps;
+    if (!eps) {
+      await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      try {
+        eps = await listKuronimeEpisodes(animeUrl);
+        if (!eps?.length) return bot.editMessageText('⚠️ Gagal load episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        kuronimeEpisodesCache.set(animeUrl, { eps, ts: Date.now() });
+      } catch (err) {
+        return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 80)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      }
+    }
+    const { keyboard, caption } = await buildKuronimeEpisodePicker(eps, animeUrl, page);
+    return bot.editMessageText(caption, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+    }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
   }
 
   // ─── Title prompt callbacks ───────────────────────────────────────────────────

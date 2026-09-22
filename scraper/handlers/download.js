@@ -962,6 +962,35 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
   }
 }
 
+// ─── Kuronime single-file (gofile/pixeldrain) ────────────────────────────────
+// kurInfo = { title, episode } dari providers/kuronime.js. Caption seragam via
+// leaf handler (customTitle + part dari nama file): ➧ Judul / ➧ Episode / ➧ Provider :- kuronime.
+async function downloadKuronimeFile(chatId, episodeUrl, server, servers, kurInfo, opts = {}) {
+  const titleArg = kurInfo?.title || null;
+  const silent = !!opts.silent;
+  const epTag = kurInfo?.episode ? ` Ep ${kurInfo.episode}` : '';
+  const backKb = { inline_keyboard: [[{ text: '⬅️ Kembali ke pilihan server', callback_data: `kur_ep:${kurInfo ? cacheUrl(episodeUrl) : 'x'}` }]] };
+  const url = servers?.[server];
+  if (!url) {
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ Server ${server}${epTag} tidak tersedia utk episode ini.`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: `server ${server} tidak tersedia` };
+  }
+  const prevQuiet = _samQuiet;
+  _samQuiet = silent;
+  try {
+    if (isGofileUrl(url)) return await handleGofileUrl(chatId, url, titleArg);
+    if (isPixeldrainUrl(url)) return await handlePixeldrainUrl(chatId, url, titleArg, kurInfo?.episode);
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ Server ${server}${epTag} belum didukung langsung. Coba server lain:`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: `server ${server} belum didukung` };
+  } catch (err) {
+    logger.warn({ server, episode: kurInfo?.episode ?? null, err: err.message }, 'kur server gagal');
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ ${server}${epTag} gagal (${err.message.slice(0, 80)})\n\nKlik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
+    return { ok: false, error: err.message };
+  } finally {
+    _samQuiet = prevQuiet;
+  }
+}
+
 // Urutan prioritas server utk batch "Download Semua" (yang didukung langsung).
 const SERVER_PRIORITY = ['gofile', 'filedon', 'pixeldrain', 'gdriveplayer'];
 // Guard anti-file-salah: situs Samehadaku kadang nunjuk file episode lain utk sebuah ep.
@@ -980,4 +1009,4 @@ function pickBestServer(servers = {}) {
 }
 const SAM_BATCH_PACE_MS = Number(process.env.SAM_BATCH_PACE_MS) || 1000;
 
-module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };
+module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };
