@@ -296,7 +296,7 @@ _downloadHandlers.initDownload({
 
 // E5a: wire handlers/library via ctx injection
 const _libraryHandlers = require('./handlers/library');
-_libraryHandlers.initLibrary({ bot, isAdmin });
+_libraryHandlers.initLibrary({ bot, isAdmin, getPendingDeletes: () => pendingDeletes });
 
 // E5c: wire handlers/admin via ctx injection
 const _adminHandlers = require('./handlers/admin');
@@ -2097,11 +2097,11 @@ bot.on('message', safeHandler('message')(async (msg) => {
       if (lcRoute) {
         if (msg.photo) {
           await sendPhoto(lcRoute.user_chat_id, msg.photo[msg.photo.length - 1].file_id, {
-            caption: `👤 <b>Admin:</b>${text.trim() ? `\n\n${escHtml(text)}` : ''}`,
+            caption: text.trim() ? escHtml(text) : '',
             reply_markup: { inline_keyboard: [[{ text: '⬅️ Keluar', callback_data: 'act:ai_exit' }]] },
           }).catch(() => {});
         } else if (text.trim()) {
-          await bot.sendMessage(lcRoute.user_chat_id, `👤 <b>Admin:</b>\n\n${escHtml(text)}`, {
+          await bot.sendMessage(lcRoute.user_chat_id, escHtml(text), {
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: [[{ text: '⬅️ Keluar', callback_data: 'act:ai_exit' }]] },
           }).catch((err) => logger.error({ err: err.message, userId: lcRoute.user_chat_id }, 'Balasan admin gagal dikirim'));
@@ -4096,6 +4096,18 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
   if (data.startsWith('lib_menu:')) {
     return _libraryHandlers.handleLibMenu({ chatId, msgId, query, data });
+  }
+
+  if (data.startsWith('lib_delmode:')) {
+    return _libraryHandlers.handleLibDelMode({ chatId, msgId, query, data });
+  }
+
+  if (data.startsWith('lib_del_ep:')) {
+    return _libraryHandlers.handleLibDelEp({ chatId, query, data });
+  }
+
+  if (data.startsWith('lib_del_title:')) {
+    return _libraryHandlers.handleLibDelTitle({ chatId, query, data });
   }
 
   if (data.startsWith('lib_part:')) {

@@ -246,9 +246,36 @@ Baru diekspor: `pickBestServer(servers)` (prioritas SERVER_PRIORITY) + konstanta
     admin (ack sekali per sesi via `liveChatAcked`), fallback "Belum tersedia" jika gagal.
   - Admin-reply routing di awal message handler: reply di grup pada pesan forward → kirim ke
     user (teks → sendMessage; foto → sendPhoto; lampir keyboard ⬅️ Keluar); route tetap
-    disimpan agar reply beruntun ke pesan sama tetap terkirim.
+    disimpan agar reply beruntun ke pesan sama tetap terkirim. Balasan user polos/bersih
+    TANPA prefix "👤 Admin:" (koreksi user + verifikasi live 06:15:21: topic 5437 auto-create,
+    fwd 5438, balasan sampai ke user). Alamat balik user polos/
+    bersih TANPA prefix "👤 Admin:" (koreksi + tes live 06:15:21 — topic 5437 auto-create
+    jalan, forward 5438, balasan sampai user).
   - Guard album: buffer AI album hanya aktif saat ai_endpoint ada (manual mode → foto album
     diteruskan per-foto).
   - `liveChatAcked` dibersihkan saat keluar (menu/act:ai_exit).
 - **Deploy**: restart bot di terminal user (patch belum live — tunggu restart + redirect log).
 - **Test**: node --check OK; test-livechat-route 4 PASS; suite lama tetap hijau.
+
+## HARDENING 07:0x — Menu library rapi (grid ala fomo-drama) + hapus episode/judul via UI
+- **Latar**: user komplain menu episode "gak rapi" (1 tombol/baris) & tidak ada menu hapus
+  (hapus hanya via command `!dell`). Referensi: fomo-drama contentHandler (grid 5/baris,
+  nav p/total, admin Hapus). Scope = lib_menu saja (disetujui user via question).
+- **handlers/library.js**:
+  - Ganti keyboard part → grid `libraryPartsGrid` (5 tombol/baris, label angka; delMode →
+    label "🗑️ N"), nav `⬅️ Prev | p/total | Next ➡️`, admin row `🗑️ Hapus Ep` +
+    `🗑️ Hapus Judul` (non-admin bersih tanpa tombol ini).
+  - State `libDelMode` (Map chatId) mode hapus per-episode; `buildLibMenuCaption` dipisah
+    (escape sinopsis HTML tetap).
+  - Handler baru `handleLibDelMode` (toggle+re-render halaman sama), `handleLibDelEp`
+    (set pendingDeletes via ctx.getPendingDeletes() → konfirmasi reuse dell_confirm/dell_cancel),
+    `handleLibDelTitle` (part:null → deleteMedia).
+- **bot.js**: initLibrary beri `getPendingDeletes: () => pendingDeletes`; route callback
+  baru `lib_delmode/lib_del_ep/lib_del_title` (sebelum lib_part).
+- **Catatan**: `cacheSlug` sengaja bikin id BARU tiap render → callback selalu baca id dari
+  keyboard yang sama (valid 30 mnt). Test awal salah asumsi id stabil ("1") — diperbaiki
+  pakai `resolveSlug`.
+- **Test**: test-libmenu-grid 14 PASS; regresi: livechat-route 4, extract-provider, prescan,
+  pagination 7, gdriveplayer-io 3, samehadaku-parse-ep1 14, download-sam-batch, kuronime,
+  anime-topic-router 18 — semua hijau. node --check OK.
+- **Deploy**: restart bot di terminal user.
