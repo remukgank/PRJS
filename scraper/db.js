@@ -89,6 +89,15 @@ async function initDatabase() {
         PRIMARY KEY (drama_key, ep)
       );
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS livechat_route (
+        admin_msg_id BIGINT PRIMARY KEY,
+        user_chat_id BIGINT NOT NULL,
+        user_msg_id  BIGINT,
+        user_name    TEXT,
+        ts           TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
     logger.info('Database tables initialized');
   } catch (err) {
     logger.error({ err: err.message }, 'Failed to initialize database');
@@ -204,6 +213,31 @@ async function getSetting(key) {
     return r.rows[0]?.value || null;
   } catch (err) {
     logger.error({ err: err.message, key }, 'Failed to get setting');
+    return null;
+  }
+}
+
+async function saveLiveChatRoute(adminMsgId, userChatId, userMsgId, userName) {
+  try {
+    await pool.query(
+      `INSERT INTO livechat_route (admin_msg_id, user_chat_id, user_msg_id, user_name)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (admin_msg_id) DO UPDATE SET user_chat_id = $2, user_msg_id = $3, user_name = $4`,
+      [adminMsgId, userChatId, userMsgId, userName]
+    );
+    return true;
+  } catch (err) {
+    logger.error({ err: err.message, adminMsgId }, 'Failed to save live chat route');
+    return false;
+  }
+}
+
+async function getLiveChatRoute(adminMsgId) {
+  try {
+    const r = await pool.query('SELECT * FROM livechat_route WHERE admin_msg_id = $1', [adminMsgId]);
+    return r.rows[0] || null;
+  } catch (err) {
+    logger.error({ err: err.message, adminMsgId }, 'Failed to get live chat route');
     return null;
   }
 }
@@ -451,6 +485,8 @@ module.exports = {
   savePartFileId,
   getSetting,
   setSetting,
+  saveLiveChatRoute,
+  getLiveChatRoute,
   saveVidaraUpload,
   getVidaraUpload,
   listVidaraUploads,

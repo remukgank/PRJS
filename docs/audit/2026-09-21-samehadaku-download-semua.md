@@ -223,3 +223,32 @@ Baru diekspor: `pickBestServer(servers)` (prioritas SERVER_PRIORITY) + konstanta
   batch tdk bikin sub-progress per-ep; trafik edit turun drastis; flow manual tetap normal.
 - **Test**: test-download-sam-batch (14 PASS), extract-provider (3), prescan (3), pagination (7),
   gdriveplayer-io (3), samehadaku-parse-ep1 (14). test-rich* butuh env → skip.
+
+## HARDENING — act:help guard (deploy: restart bot)
+- **Bug**: `limit` ("🟢 Local API — limit 2 GB" / API publik) di-render ke SEMUA user =
+  bocor info internal. Role-split lainnya (Cara Pakai, link didukung, subdomain) sudah benar.
+- **Fix**: isAdminUser → versi teknis; user → "🟢 Video langsung dari Telegram — maks 2 GB
+  per file" (tanpa istilah "Local API"; hilangkan baris saat API publik).
+  - Hotfix: isAdminUser dipindah ke atas (TDZ ReferenceError di act:help) — node --check OK.
+
+## HARDENING 04:4x — Live Chat manual (tanpa AI endpoint)
+- **Fitur**: saat `ai_endpoint` belum diset, pesan user (teks/foto) di sesi 💬 Live Chat
+  diteruskan ke topic "💬 Live Chat" di grup RF_GROUP_ID; admin balas via reply → dikirim
+  balik ke user (rute via tabel `livechat_route` baru).
+- **scraper/db.js**: migrasi tabel `livechat_route(admin_msg_id PK, user_chat_id, user_msg_id,
+  user_name, ts)` + `saveLiveChatRoute`/`getLiveChatRoute` (round-trip test 4 PASS — catatan:
+  pg mengembalikan BIGINT sebagai string, compare pakai Number()).
+- **scraper/bot.js**:
+  - Helper `escHtml`, `ensureLiveChatTopic` (auto-create `createForumTopic('💬 Live Chat')`,
+    persist di reelfren_topics.json key `/live-chat` — walau RF_GROUP_ENABLED false tetap jalan
+    asal RF_GROUP_ID ada), `forwardToLiveChatAdmin`.
+  - Branch `!aiEndpoint`: admin → pesan "AI endpoint belum diset + /setai"; user → forward ke
+    admin (ack sekali per sesi via `liveChatAcked`), fallback "Belum tersedia" jika gagal.
+  - Admin-reply routing di awal message handler: reply di grup pada pesan forward → kirim ke
+    user (teks → sendMessage; foto → sendPhoto; lampir keyboard ⬅️ Keluar); route tetap
+    disimpan agar reply beruntun ke pesan sama tetap terkirim.
+  - Guard album: buffer AI album hanya aktif saat ai_endpoint ada (manual mode → foto album
+    diteruskan per-foto).
+  - `liveChatAcked` dibersihkan saat keluar (menu/act:ai_exit).
+- **Deploy**: restart bot di terminal user (patch belum live — tunggu restart + redirect log).
+- **Test**: node --check OK; test-livechat-route 4 PASS; suite lama tetap hijau.

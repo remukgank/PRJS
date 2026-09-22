@@ -29,7 +29,7 @@ const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
+const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -147,6 +147,63 @@ function evictStaleTopic(provider) {
     saveReelfrenTopics();
     logger.warn({ provider, oldThreadId: oldId }, 'Stale topic evicted dari mapping');
   }
+}
+
+// ─── Live Chat manual (tanpa AI endpoint) ─────────────────────────────────────
+const LIVE_CHAT_TOPIC_KEY = '/live-chat';
+
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function ensureLiveChatTopic() {
+  if (!RF_GROUP_ID) return null;
+  try {
+    const existing = reelfrenTopics.get(LIVE_CHAT_TOPIC_KEY);
+    if (existing) return existing;
+    const topic = await bot.createForumTopic(RF_GROUP_ID, '💬 Live Chat');
+    reelfrenTopics.set(LIVE_CHAT_TOPIC_KEY, topic.message_thread_id);
+    saveReelfrenTopics();
+    logger.info({ threadId: topic.message_thread_id }, 'Topic Live Chat dibuat');
+    return topic.message_thread_id;
+  } catch (err) {
+    logger.warn({ err: err.message }, 'createForumTopic Live Chat gagal — butuh bot jadi admin grup');
+    return null;
+  }
+}
+
+async function forwardToLiveChatAdmin(userChatId, text, msg) {
+  const topicId = await ensureLiveChatTopic();
+  if (!topicId) return null;
+  const user = msg?.from || {};
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ') ||
+    (user.username ? `@${user.username}` : String(userChatId));
+  const header = `👤 <b>${escHtml(name)}</b>${user.username ? ` (@${escHtml(user.username)})` : ''} [<code>${userChatId}</code>]`;
+  const body = text.trim() ? `\n\n${escHtml(text)}` : '';
+  let adminResp = null;
+  if (msg?.photo) {
+    const photo = msg.photo[msg.photo.length - 1];
+    adminResp = await sendPhoto(RF_GROUP_ID, photo.file_id, {
+      caption: header + (body || ' 🖼'),
+      message_thread_id: topicId,
+    }).catch((err) => {
+      logger.error({ err: err.message }, 'LiveChat forward foto ke admin gagal');
+      return null;
+    });
+  } else {
+    adminResp = await bot.sendMessage(RF_GROUP_ID, header + (body || '\n\n<i>(pesan tanpa teks)</i>'), {
+      message_thread_id: topicId,
+      parse_mode: 'HTML',
+    }).catch((err) => {
+      logger.error({ err: err.message }, 'LiveChat forward ke admin gagal');
+      return null;
+    });
+  }
+  if (!adminResp || !adminResp.message_id) return null;
+  await saveLiveChatRoute(adminResp.message_id, userChatId, msg?.message_id || 0, name);
+  logger.info({ userChatId, adminMsgId: adminResp.message_id }, 'Pesan diteruskan ke Live Chat admin');
+  return adminResp;
 }
 
 async function sendToProviderTopic(provider, caption, posterPath) {
@@ -370,6 +427,7 @@ _vidaraHandlers.initVidara({
 });
 const sessions = new Map();
 const aiChatSessions = new Map();
+const liveChatAcked = new Set(); // chatId yang sudah dapat notif "diteruskan ke admin"
 const pendingDownloads = new Map(); // chatId → { url, handler, fileName }
 const pendingDeletes = new Map(); // chatId → { slug, part, name }
 const pendingReplaces = new Map(); // chatId → { slug, part, name }
@@ -2031,6 +2089,29 @@ bot.on('message', safeHandler('message')(async (msg) => {
   // Skip echo pesan bot sendiri (mis. poster yang dikirim ke topic grup)
   if (msg.from?.is_bot) return;
 
+  // ─── Balasan admin di topic Live Chat → diteruskan balik ke user ──────────
+  if (RF_GROUP_ID && msg.chat.id === RF_GROUP_ID && msg.reply_to_message) {
+    const lcThread = reelfrenTopics.get(LIVE_CHAT_TOPIC_KEY);
+    if ((!msg.message_thread_id || !lcThread || msg.message_thread_id === lcThread)) {
+      const lcRoute = await getLiveChatRoute(msg.reply_to_message.message_id);
+      if (lcRoute) {
+        if (msg.photo) {
+          await sendPhoto(lcRoute.user_chat_id, msg.photo[msg.photo.length - 1].file_id, {
+            caption: `👤 <b>Admin:</b>${text.trim() ? `\n\n${escHtml(text)}` : ''}`,
+            reply_markup: { inline_keyboard: [[{ text: '⬅️ Keluar', callback_data: 'act:ai_exit' }]] },
+          }).catch(() => {});
+        } else if (text.trim()) {
+          await bot.sendMessage(lcRoute.user_chat_id, `👤 <b>Admin:</b>\n\n${escHtml(text)}`, {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '⬅️ Keluar', callback_data: 'act:ai_exit' }]] },
+          }).catch((err) => logger.error({ err: err.message, userId: lcRoute.user_chat_id }, 'Balasan admin gagal dikirim'));
+        }
+        logger.info({ adminMsgId: msg.reply_to_message.message_id, userChatId: lcRoute.user_chat_id }, 'Balasan admin dikirim ke user');
+        return;
+      }
+    }
+  }
+
   if (msg.successful_payment) {
     const session = sessions.get(String(chatId));
 
@@ -2228,12 +2309,14 @@ bot.on('message', safeHandler('message')(async (msg) => {
   // ─── Live Chat: biar menu reply keyboard bisa akhiri sesi otomatis ───────
   if (aiChatSessions.has(chatId) && ['📚 Katalog', '🔍 Cari', '👤 Akun', '🛠 Admin Panel', '⬅️ Keluar', '❌ Keluar', '⬅️ Kembali ke menu utama'].includes(text)) {
     aiChatSessions.delete(chatId);
+    liveChatAcked.delete(chatId);
     // jangan return — biarkan handler menu di bawah proses text yang sama
     // (tanpa ini Live Chat nyangkut dan menu tidak merespon)
   }
 
   // ─── Live Chat album (4-5 gambar sekaligus) — buffer 1.5 detik ───────────
-  if (msg.media_group_id && aiChatSessions.has(chatId) && (msg.photo || msg.document || msg.video)) {
+  const aiAlbumReady = !!(await getSetting('ai_endpoint'));
+  if (msg.media_group_id && aiChatSessions.has(chatId) && aiAlbumReady && (msg.photo || msg.document || msg.video)) {
     const groupId = msg.media_group_id;
     let entry = pendingMediaAlbums.get(groupId);
     if (!entry) {
@@ -2305,6 +2388,17 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (!aiEndpoint) {
       if (isAdminUser) {
         return bot.sendMessage(chatId, '⚙️ AI endpoint belum diset.\n\nBuka 🛠 Admin Panel → 🤖 AI Endpoint atau kirim <code>/setai https://api.example.com/v1/chat/completions [model]</code>', { parse_mode: 'HTML' });
+      }
+      // Live Chat manual: forwarded ke topic admin di grup (tanpa AI)
+      if (!text.trim() && !msg.photo) return null;
+      const fwd = await forwardToLiveChatAdmin(chatId, text, msg)
+        .catch((err) => { logger.error({ err: err.message, chatId }, 'LiveChat forward manual gagal'); return null; });
+      if (fwd) {
+        if (!liveChatAcked.has(chatId)) {
+          liveChatAcked.add(chatId);
+          return bot.sendMessage(chatId, '📨 <b>Pesan diteruskan ke admin.</b>\n\nGunakan <b>⬅️ Keluar</b> untuk mengakhiri obrolan.', { parse_mode: 'HTML' });
+        }
+        return null;
       }
       return bot.sendMessage(chatId, '💬 Live Chat belum tersedia. Hubungi admin.', { parse_mode: 'HTML' });
     }
@@ -4113,6 +4207,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
   if (act === 'ai_exit') {
     aiChatSessions.delete(chatId);
+    liveChatAcked.delete(chatId);
     return bot.sendMessage(
       chatId,
       `✅ Live Chat ditutup.\n\nPilih menu:`,
@@ -4313,10 +4408,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   if (act === 'help') {
-    const limit = LOCAL_API_PORT
-      ? '🟢 Local API — limit 2 GB'
-      : '🟡 API publik — limit 50 MB';
     const isAdminUser = isAdmin(query.from.id);
+    const limit = isAdminUser
+      ? (LOCAL_API_PORT ? '🟢 Local API — limit 2 GB' : '🟡 API publik — limit 50 MB')
+      : (LOCAL_API_PORT ? '🟢 Video langsung dari Telegram — maks 2 GB per file' : '');
     const paymentInfo = isAdminUser
       ? ''
       : `\n**🆓 Free:** ${FREE_DOWNLOAD_LIMIT}x download gratis per hari.\n**⭐ Premium:** Bayar ${STAR_PRICE}⭐ setelah free habis.`;
