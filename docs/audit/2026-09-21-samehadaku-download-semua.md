@@ -295,3 +295,11 @@ Baru diekspor: `pickBestServer(servers)` (prioritas SERVER_PRIORITY) + konstanta
   /tmp/fomo-drama-backup-<ts>.
 - **Test**: test-filename-sanitize 9 PASS (server name preserved, traversal/ctrl/dots
   cleaned, fallback ts, anti-collision). Regresi penuh hijau. node --check OK.
+
+## HARDENING 07:3x — Caption part-batch tanpa duplikasi "Part"
+- Label caption `➧ Episode/Part :- Part 5 (Ep 41–50)` redundan ("Part" dobel).
+- Karena label sudah "Part/Episode", value cukup angka: `➧ Part/Episode :- 5 (Ep 41–50)`.
+- Diubah di bot.js:1781/1817/1879/1917 — HANYA pada komposisi caption
+  (subLabel/partLabel original tetap dipakai untuk RichProgress, judul merge, log).
+- Verifikasi fomo-drama (regex f574716): range `Ep 41–50` TERDETEKSI → merged
+  part 41–50; fallback single `➧ Part/Episode :- 3` → EP 3. Tidak perlu ubah fomo.

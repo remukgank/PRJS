@@ -1778,7 +1778,7 @@ async function actionMerge10(chatId, session) {
             const subOpts = {
               caption: [
                 `➧ Judul :- <b>${dramaTitle}</b>`,
-                `➧ Episode/Part :- <b>${subLabel}</b>`,
+                `➧ Part/Episode :- <b>${subLabel.replace(/^Part\s+/, '')}</b>`,
                 `➧ Provider :- <tg-spoiler>${cleanProvider2}</tg-spoiler>`,
               ].join('\n'),
               parse_mode: 'HTML',
@@ -1814,7 +1814,7 @@ async function actionMerge10(chatId, session) {
               try { await upsertMedia(mediaSlug, dramaTitle, totalEps2, sourceUrl2, null, posterUrl2, posterFileId2, synopsis2); } catch {}
               const capLib = [
                 `➧ Judul :- <b>${dramaTitle}</b>`,
-                `➧ Episode/Part :- <b>${subLabel}</b>`,
+                `➧ Part/Episode :- <b>${subLabel.replace(/^Part\s+/, '')}</b>`,
                 `➧ Provider :- <tg-spoiler>${cleanProvider2}</tg-spoiler>`,
               ].join('\n');
               await savePartFileId(mediaSlug, part + 1 + sIdx * 0.1, subResult.video.file_id, Math.round(subSizeMb * 1024 * 1024), `Part ${part + 1}${String.fromCharCode(97 + sIdx)}.mp4`, capLib);
@@ -1876,7 +1876,7 @@ async function actionMerge10(chatId, session) {
         const opts = {
           caption: [
             `➧ Judul :- <b>${dramaTitle}</b>`,
-            `➧ Episode/Part :- <b>${partLabel}</b>`,
+            `➧ Part/Episode :- <b>${partLabel.replace(/^Part\s+/, '')}</b>`,
             `➧ Provider :- <tg-spoiler>${cleanProvider}</tg-spoiler>`,
           ].join('\n'),
           parse_mode: 'HTML',
@@ -1914,7 +1914,7 @@ async function actionMerge10(chatId, session) {
           try { await upsertMedia(mediaSlug, dramaTitle, totalEps2, sourceUrl2, null, posterUrl2, posterFileId2, synopsis2); } catch {}
           const capLib = [
             `➧ Judul :- <b>${dramaTitle}</b>`,
-            `➧ Episode/Part :- <b>${partLabel}</b>`,
+            `➧ Part/Episode :- <b>${partLabel.replace(/^Part\s+/, '')}</b>`,
             `➧ Provider :- <tg-spoiler>${cleanProvider}</tg-spoiler>`,
           ].join('\n');
           await savePartFileId(mediaSlug, part + 1, sendResult.video.file_id, Math.round(sizeMb * 1024 * 1024), `Part ${part + 1}.mp4`, capLib);
