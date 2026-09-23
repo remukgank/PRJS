@@ -12,7 +12,7 @@ const TelegramBot = TelegramBotLib.default || TelegramBotLib;
 const { getVideoUrl, getAllEpisodes, destroySession } = require('./index');
 const { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, fileSizeMb, remuxToMp4 } = require('./downloader');
 const { cleanupStaleSessions } = require('./providers/dramafren');
-const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFirstFile, resolveGofileFiles } = require('./providers/gofile');
+const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFiles } = require('./providers/gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./providers/pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./providers/samehadaku');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
@@ -29,7 +29,7 @@ const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, getFreeDownloadCount, incrementFreeDownload: dbIncrementFreeDownload, cleanupOldDownloads, getCachedFileId, setCachedFileId, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -93,7 +93,6 @@ const MAX_UPLOAD_MB = LOCAL_API_PORT ? 2000 : 49;
 
 const ADMIN_IDS = (process.env.ADMIN_USER_IDS || '').split(',').map(Number).filter(Boolean);
 const STAR_PRICE = Number(process.env.STAR_PRICE) || 10;
-const FREE_DOWNLOAD_LIMIT = Number(process.env.FREE_DOWNLOAD_LIMIT) || 3;
 
 // ─── Paket VIP & harga Stars (source: services/vipPackages.js) ────────────
 const { VIP_PACKAGES, VIP_STAR_PRICES, VIP_PACKAGE_ORDER } = require('./services/vipPackages');
@@ -471,24 +470,6 @@ async function getImageBase64(fileId) {
 }
 
 
-
-// ─── Free download tracker (database-backed) ──────────────────────────────────
-
-async function hasFreeDownload(userId) {
-  if (isAdmin(userId)) return true;
-  const count = await getFreeDownloadCount(userId);
-  return count < FREE_DOWNLOAD_LIMIT;
-}
-
-async function getRemainingFreeDownloads(userId) {
-  if (isAdmin(userId)) return Infinity;
-  const count = await getFreeDownloadCount(userId);
-  return Math.max(0, FREE_DOWNLOAD_LIMIT - count);
-}
-
-async function incrementFreeDownload(userId) {
-  return dbIncrementFreeDownload(userId);
-}
 
 // ─── sendRichMessage helper ──────────────────────────────────────────────────
 
@@ -950,9 +931,7 @@ async function waitForFlareSolverr(maxRetries = 30) {
   checkDiskSpace();
   setInterval(checkDiskSpace, 600000);
 
-  // Initialize database and cleanup old downloads
   await initDatabase();
-  setInterval(cleanupOldDownloads, 60 * 60 * 1000); // Cleanup setiap jam
 
   process.on('SIGINT', async () => {
     logger.info('SIGINT received, shutting down...');
@@ -1329,37 +1308,6 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
   return _downloadHandlers.downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo);
 }
 
-// ─── Show file info (non-admin preview) ────────────────────────────────────────
-
-function formatFileSize(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-async function sendPaidMediaVideo(chatId, media, opts = {}) {
-  const { caption, starCount, supports_streaming, duration, width, height } = opts;
-  const isFilePath = typeof media === 'string' && (media.startsWith('/') || media.startsWith('file://'));
-  if (isFilePath && !LOCAL_API_PORT) {
-    const err = new Error('sendPaidMedia butuh Local Bot API Server untuk upload file lokal');
-    logger.error({ chatId, err: err.message }, 'sendPaidMedia cloud guard');
-    throw err;
-  }
-  return apiPost('sendPaidMedia', {
-    chat_id: chatId,
-    star_count: starCount,
-    media: [{
-      type: 'video',
-      media: toLocalFileRef(media),
-      supports_streaming: supports_streaming ?? true,
-      ...(duration && { duration }),
-      ...(width && { width }),
-      ...(height && { height }),
-    }],
-    caption: caption ? caption.slice(0, 1024) : undefined,
-  });
-}
 
 /**
  * Parse Google Drive filename gaya Samehadaku:
@@ -1376,183 +1324,6 @@ async function sendPaidMediaVideo(chatId, media, opts = {}) {
 async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   return _downloadHandlers.handleGdriveUrl(chatId, url, customTitle, opts);
 }
-
-async function showGofileFileInfo(chatId, url, userId) {
-  try {
-    const file = await resolveGofileFirstFile(url);
-    const sizeStr = formatFileSize(file.size);
-    const cap = cleanCaption(file.name);
-    const remaining = await getRemainingFreeDownloads(userId);
-    const freeInfo = remaining > 0 ? `🆓 Free: ${remaining}x hari ini` : '⭐ Bayar Stars untuk download';
-
-    const dlId = cacheUrl(url);
-    await bot.sendMessage(chatId,
-      `📁 <b>${cap}</b>\n` +
-      `💾 Ukuran: ${sizeStr}\n` +
-      `🔗 Sumber: gofile.io\n\n` +
-      `${freeInfo}`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: `📥 Download (${sizeStr})`, callback_data: `dl:gofile:${dlId}` }]] } }
-    );
-  } catch (err) {
-    logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'Gofile info gagal');
-    await bot.sendMessage(chatId, `❌ Gagal mengambil info file: ${err.message.slice(0, 100)}`);
-  }
-}
-
-async function showPixeldrainFileInfo(chatId, url, userId) {
-  try {
-    const info = await getPixeldrainInfo(url);
-    const sizeStr = formatFileSize(info.size);
-    const cap = cleanCaption(info.name);
-    const remaining = await getRemainingFreeDownloads(userId);
-    const freeInfo = remaining > 0 ? `🆓 Free: ${remaining}x hari ini` : '⭐ Bayar Stars untuk download';
-
-    const dlId = cacheUrl(url);
-    await bot.sendMessage(chatId,
-      `📁 <b>${cap}</b>\n` +
-      `💾 Ukuran: ${sizeStr}\n` +
-      `🔗 Sumber: pixeldrain.com\n\n` +
-      `${freeInfo}`,
-      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: `📥 Download (${sizeStr})`, callback_data: `dl:pixeldrain:${dlId}` }]] } }
-    );
-  } catch (err) {
-    logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'Pixeldrain info gagal');
-    await bot.sendMessage(chatId, `❌ Gagal mengambil info file: ${err.message.slice(0, 100)}`);
-  }
-}
-
-async function downloadAndSendPaidMedia(chatId, url, source, fileName, userId) {
-  const cap = cleanCaption(fileName);
-  const ext = path.extname(fileName) || '.mp4';
-  const urlHash = hashUrl(url);
-
-  // Cek cache dulu — skip download kalau udah pernah dikirim
-  const cached = await getCachedFileId(urlHash);
-  if (cached) {
-    const isFree = await hasFreeDownload(userId);
-    let cacheOk = false;
-    try {
-      if (cached.file_type === 'video') {
-        if (isFree) {
-          const newCount = await incrementFreeDownload(userId);
-          const remaining = Math.max(0, FREE_DOWNLOAD_LIMIT - newCount);
-          await sendVideo(chatId, cached.file_id, { caption: cap });
-          await bot.sendMessage(chatId, `🆓 Free download! Sisa: ${remaining}x hari ini`);
-        } else {
-          await sendPaidMediaVideo(chatId, cached.file_id, { caption: cap, starCount: STAR_PRICE });
-        }
-      } else if (cached.file_type === 'audio') {
-        if (isFree) {
-          await incrementFreeDownload(userId);
-          await sendAudio(chatId, cached.file_id, { caption: cap });
-        } else {
-          await sendPaidMediaVideo(chatId, cached.file_id, { caption: cap, starCount: STAR_PRICE });
-        }
-      } else {
-        if (isFree) {
-          await incrementFreeDownload(userId);
-          await sendDocument(chatId, cached.file_id, { caption: cap });
-        } else {
-          await sendPaidMediaVideo(chatId, cached.file_id, { caption: cap, starCount: STAR_PRICE });
-        }
-      }
-      cacheOk = true;
-      logger.info({ chatId, file: cached.file_name || fileName, source, cache: true }, 'Cache hit — skip download');
-    } catch (err) {
-      logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'Cache send gagal, fallback download');
-    }
-    if (cacheOk) return;
-  }
-
-  const outPath = tempPath(`paid_${Date.now()}${ext}`);
-
-  try {
-    let downloadUrl = url;
-    let extraHeaders = {};
-    let fileSize;
-
-    if (source === 'pixeldrain') {
-      const info = await getPixeldrainInfo(url);
-      downloadUrl = info.directUrl;
-      fileName = info.name || fileName;
-      fileSize = info.size;
-      extraHeaders = { 'Referer': 'https://pixeldrain.com/' };
-    } else if (source === 'gofile') {
-      const gofileToken = (process.env.GOFILE_TOKEN || '').trim();
-      extraHeaders = {
-        'Referer': 'https://gofile.io/',
-        ...(gofileToken && { 'Authorization': `Bearer ${gofileToken}` }),
-      };
-      const file = await resolveGofileFirstFile(url);
-      downloadUrl = file.url;
-      fileName = file.name || fileName;
-      fileSize = file.size;
-    }
-
-    await downloadWithAria2c(downloadUrl, outPath, () => {}, extraHeaders, { fileSize, disableSpeedFloor: true });
-
-    const sizeMb = fileSizeMb(outPath);
-    if (sizeMb > MAX_UPLOAD_MB) {
-      await bot.sendMessage(chatId, `❌ File terlalu besar (${sizeMb.toFixed(1)} MB > ${MAX_UPLOAD_MB} MB)`);
-      return;
-    }
-
-    const info = await getVideoInfo(outPath).catch(() => ({}));
-    const fileExt = path.extname(outPath).toLowerCase();
-    const fileType = getFileTypeFromExt(fileExt);
-    const cacheInfo = { urlHash, source, fileName };
-
-    const isFree = await hasFreeDownload(userId);
-
-    if (VIDEO_EXTS.has(fileExt)) {
-      if (isFree) {
-        const newCount = await incrementFreeDownload(userId);
-        const remaining = Math.max(0, FREE_DOWNLOAD_LIMIT - newCount);
-        await sendVideo(chatId, outPath, {
-          caption: cap,
-          supports_streaming: true,
-          ...(info.duration && { duration: info.duration }),
-          ...(info.width && { width: info.width }),
-          ...(info.height && { height: info.height }),
-        }, cacheInfo);
-        await bot.sendMessage(chatId, `🆓 Free download! Sisa: ${remaining}x hari ini`);
-      } else {
-        const result = await sendPaidMediaVideo(chatId, outPath, {
-          caption: cap,
-          starCount: STAR_PRICE,
-          supports_streaming: true,
-          ...(info.duration && { duration: info.duration }),
-          ...(info.width && { width: info.width }),
-          ...(info.height && { height: info.height }),
-        });
-        const fileId = result?.paid_media?.[0]?.video?.file_id;
-        if (fileId) setCachedFileId(urlHash, source, fileId, 'video', fileName).catch(() => {});
-      }
-    } else if (AUDIO_EXTS.has(fileExt)) {
-      if (isFree) {
-        await incrementFreeDownload(userId);
-        await sendAudio(chatId, outPath, { caption: cap }, cacheInfo);
-      } else {
-        await sendPaidMediaVideo(chatId, outPath, { caption: cap, starCount: STAR_PRICE });
-      }
-    } else {
-      if (isFree) {
-        await incrementFreeDownload(userId);
-        await sendDocument(chatId, outPath, { caption: cap }, cacheInfo);
-      } else {
-        await sendPaidMediaVideo(chatId, outPath, { caption: cap, starCount: STAR_PRICE });
-      }
-    }
-
-    logger.info({ chatId, file: fileName, sizeMb: sizeMb.toFixed(1), source, free: isFree, cache: false }, 'Download selesai');
-  } catch (err) {
-    logger.error({ chatId, url: url.slice(0, 80), err: err.message }, 'Download paid media gagal');
-    await bot.sendMessage(chatId, `❌ Gagal download: ${err.message.slice(0, 100)}`);
-  } finally {
-    cleanupFiles(outPath);
-  }
-}
-
 
 // ─── Aksi: kirim per episode ───────────────────────────────────────────────────
 
@@ -4426,7 +4197,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       : (LOCAL_API_PORT ? '🟢 Video langsung dari Telegram — maks 2 GB per file' : '');
     const paymentInfo = isAdminUser
       ? ''
-      : `\n**🆓 Free:** ${FREE_DOWNLOAD_LIMIT}x download gratis per hari.\n**⭐ Premium:** Bayar ${STAR_PRICE}⭐ setelah free habis.`;
+      : `\n**⭐ Download:** Bayar ${STAR_PRICE}⭐ via invoice untuk akses download.`;
     const subdomainInfo = isAdminUser
       ? `\n\n**📋 Subdomain Drama:**\n` +
         `\`shortmax, flickreels, goodshort, dramawave, dramabox, starshort, dramapops, stardusttv, microdrama, reelshort, flextv, dramabite, netshort, kalostv, tvseries, moboreels, idrama, reelfren, shortwave\``
@@ -4435,7 +4206,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       ? `**📖 Cara Pakai:**\n` +
         `1. Kirim link drama atau file\n` +
         `2. Pilih episode (untuk drama)\n` +
-        `3. Download gratis ${FREE_DOWNLOAD_LIMIT}x/hari atau bayar Stars\n` +
+        `3. Download langsung tanpa limit (admin)\n` +
         `4. File dikirim ke chat\n\n`
       : `**📖 Cara Pakai:**\n` +
         `1. Cari drama di 📚 Katalog atau \`/cari nama drama\`\n` +

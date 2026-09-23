@@ -59,8 +59,7 @@ Penjelasan teknis implementasi.
 
 ## Catatan
 
-- Link gofile/pixeldrain dari non-admin via tombol → `downloadAndSendPaidMedia` (ada quota check)
-- Link gofile/pixeldrain dari text langsung → `handleGofileUrl`/`handlePixeldrainUrl` (TANPA quota check untuk non-admin)
+- Link gofile/pixeldrain (tombol & text) → `handleGofileUrl`/`handlePixeldrainUrl` — **TANPA quota check** (jalur quota/paid media `downloadAndSendPaidMedia` dihapus 23 Sep 2026 sebagai dead code; tidak pernah ada pemanggil sejak initial commit)
 - File ID cache di PostgreSQL tabel `file_cache`, key = MD5 hash URL (`crypto.createHash('md5')` di bot.js)
 - `sendPaidMediaVideo` pake `apiPost('sendPaidMedia', ...)` langsung (support LOCAL API & cloud API)
 - `batch-download.js` mode default = **merge** (10 ep/chunk); `--per-ep` untuk upload per episode, `--merge-size N` untuk atur ukuran chunk

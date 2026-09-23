@@ -15,14 +15,6 @@ pool.on('error', (err) => {
 async function initDatabase() {
   try {
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS free_downloads (
-        user_id BIGINT NOT NULL,
-        download_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        count INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (user_id, download_date)
-      );
-    `);
-    await pool.query(`
       CREATE TABLE IF NOT EXISTS file_cache (
         url_hash  TEXT PRIMARY KEY,
         source    TEXT NOT NULL,
@@ -128,46 +120,6 @@ async function setCachedFileId(urlHash, source, fileId, fileType, fileName) {
     );
   } catch (err) {
     logger.error({ err: err.message, urlHash }, 'Failed to set cached file');
-  }
-}
-
-async function getFreeDownloadCount(userId) {
-  try {
-    const result = await pool.query(
-      'SELECT count FROM free_downloads WHERE user_id = $1 AND download_date = CURRENT_DATE',
-      [userId]
-    );
-    return result.rows[0]?.count || 0;
-  } catch (err) {
-    logger.error({ err: err.message, userId }, 'Failed to get free download count');
-    return 0;
-  }
-}
-
-async function incrementFreeDownload(userId) {
-  try {
-    const result = await pool.query(
-      `INSERT INTO free_downloads (user_id, download_date, count)
-       VALUES ($1, CURRENT_DATE, 1)
-       ON CONFLICT (user_id, download_date)
-       DO UPDATE SET count = free_downloads.count + 1
-       RETURNING count`,
-      [userId]
-    );
-    return result.rows[0].count;
-  } catch (err) {
-    logger.error({ err: err.message, userId }, 'Failed to increment free download');
-    return 0;
-  }
-}
-
-async function cleanupOldDownloads() {
-  try {
-    await pool.query(
-      'DELETE FROM free_downloads WHERE download_date < CURRENT_DATE - INTERVAL \'7 days\''
-    );
-  } catch (err) {
-    logger.error({ err: err.message }, 'Failed to cleanup old downloads');
   }
 }
 
@@ -477,9 +429,6 @@ async function listAllLibrary() {
 module.exports = {
   pool,
   initDatabase,
-  getFreeDownloadCount,
-  incrementFreeDownload,
-  cleanupOldDownloads,
   getCachedFileId,
   setCachedFileId,
   savePartFileId,
