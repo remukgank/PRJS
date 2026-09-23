@@ -7,4 +7,4 @@ The Hermes CLI can run from `/home/runner/workspace/.hermes/hermes-agent/venv`, 
 
 **Why:** Linking Hermes to the PRJS `.git` would make a Hermes update operate on the application repository.
 
-**How to apply:** If `hermes update` reports “Not a git repository”, use the official Hermes installer to repair/reinstall the Hermes checkout. Do not create a `.git` symlink to the PRJS repository.
+**How to apply:** If `hermes update` reports “Not a git repository”, move the existing `hermes-agent` directory aside (do not delete it), then use the official installer to recreate the checkout at the same path. Do not create a `.git` symlink to the PRJS repository.
