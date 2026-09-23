@@ -1,6 +1,6 @@
 ---
 name: audit-workflow
-description: Use at the start of every session and whenever fixing bugs, changing code, or committing. Enforces: read skill at session start, proposal first before implementation, wait for user approval, strict scope, node --check + functional test scenario, API/endpoint cross-check, audit log in docs/audit/, commit only after confirmation.
+description: Use at the start of every session and whenever fixing bugs, changing code, or committing. Enforces: read skill at session start, proposal first before implementation, wait for user approval, strict scope, node --check + functional test scenario, API/endpoint cross-check against latest Telegram Bot API docs, audit log in docs/audit/, deploy via pm2 (ask first) + verify before commit + push + version tag.
 ---
 
 # Audit Workflow
@@ -11,9 +11,11 @@ description: Use at the start of every session and whenever fixing bugs, changin
 1. **Proposal fix dulu** (root cause + rencana + scope file) → tunggu user approve
 2. **Implement** hanya sesuai proposal yang disetujui → test lokal: `node --check` semua .js yang berubah + jelaskan skenario functional test (apa yang harus terjadi, apa yang harus di-observe)
 3. **Cari potensi bug/error/ketidaksesuaian** → cross-check penggunaan API/endpoint dengan dokumentasi/response asli; cek bug kelas yang sama di call path saudara
-4. **Restart bot bila perlu** → tunggu user melakukan tes manual di Replit/server
-5. **Setelah user mengonfirmasi OK** → commit + push otomatis
-6. **Update docs/audit/** sesuai format yang ada — selalu LOG file apa saja yang kena dan di folder mana
+4. **Sumber kebenaran API = dokumentasi terbaru** https://core.telegram.org/bots/api (boleh fetch via jina.ai: `https://r.jina.ai/https://core.telegram.org/bots/api`); fitur wajib modern & profesional demi kenyamanan pengguna
+5. **Setelah selesai** → LOG perubahan (file apa saja yang kena + folder mana) di docs/audit/
+6. **Deploy dulu, baru commit**: Tanya user dulu sebelum restart via pm2 (biar gak konflik) → restart → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
+   - Tag wajib lengkap & proporsional terhadap besar perubahan: `v<major>.<minor>.<patch>` — bedakan kecil (patch) / sedang (minor) / besar (major)
+   - Jangan commit/push/tag sebelum deploy terverifikasi jalan normal
 
 ## Prinsip Penting
 
