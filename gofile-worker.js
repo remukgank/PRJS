@@ -60,6 +60,40 @@ function parseDownloadBlocks(html) {
   return { blocks, chosenQ, preferred: chosenQ ? blocks[chosenQ] : null };
 }
 
+function decodeEntities(s) {
+  return s
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;|&#0*39;/gi, "'")
+    .replace(/&ndash;/gi, "-")
+    .replace(/&mdash;/gi, "-");
+}
+
+function extractPageTitle(html) {
+  let t = null;
+  const h1 = html.match(/<h1[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i);
+  if (h1) t = h1[1];
+  if (!t) {
+    const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)["']/i);
+    if (og) t = og[1];
+  }
+  if (!t) {
+    const tt = html.match(/<title>([\s\S]*?)<\/title>/i);
+    if (tt) t = tt[1];
+  }
+  if (!t) return null;
+  t = decodeEntities(String(t).replace(/<[^>]+>/g, " "))
+    .replace(/\s*[-–—|]\s*Samehadaku\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return t || null;
+}
+
 function detectSinglePageLink(html, scope) {
   const mvRe = /<a[^>]+href="([^"]*-episode-(?:movie|ova|special|batch|ona)\b[^"]*)"[^>]*>([^<]*)<\/a>/gi;
   let mm;
@@ -223,9 +257,10 @@ export default {
               const subUrl = single.startsWith("http") ? single : new URL(single, target).href;
               const sr = await fetch(subUrl, { headers: hdrs, cf: { cacheTtl: 60 } }).catch(() => null);
               if (sr && sr.ok) {
-                const sub = parseDownloadBlocks(await sr.text());
+                const subHtml = await sr.text();
+                const sub = parseDownloadBlocks(subHtml);
                 if (sub.preferred) {
-                  return new Response(JSON.stringify({ ok: true, type: "episode", quality: sub.chosenQ, servers: sub.preferred, blocks: sub.blocks, via: "single" }), {
+                  return new Response(JSON.stringify({ ok: true, type: "episode", quality: sub.chosenQ, servers: sub.preferred, blocks: sub.blocks, via: "single", title: extractPageTitle(html) || extractPageTitle(subHtml), movie: true }), {
                     headers: { "Content-Type": "application/json", ...cors },
                   });
                 }
@@ -248,7 +283,7 @@ export default {
             headers: { "Content-Type": "application/json", ...cors },
           });
         }
-        return new Response(JSON.stringify({ ok: true, type: "episode", quality: parsed.chosenQ, servers: parsed.preferred, blocks: parsed.blocks }), {
+        return new Response(JSON.stringify({ ok: true, type: "episode", quality: parsed.chosenQ, servers: parsed.preferred, blocks: parsed.blocks, title: extractPageTitle(html) }), {
           headers: { "Content-Type": "application/json", ...cors },
         });
       } catch (e) {

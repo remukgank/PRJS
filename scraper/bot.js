@@ -3348,19 +3348,22 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const sameInfo = parseSamehadakuEpisode(episodeUrl);
     await bot.editMessageText('🔍 Mengambil link server...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     try {
-      const { servers, quality } = await resolveSamehadakuFullhd(episodeUrl);
+      const { servers, quality, title: pageTitle, via } = await resolveSamehadakuFullhd(episodeUrl);
       const fileUrl = servers[server];
       if (!fileUrl) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       if (sameInfo) samehadakuEpisodeMap.set(fileUrl, sameInfo);
       // Preview: tampilkan identitas (title + season + server) sebelum download
       const titleArg = sameInfo
         ? `${sameInfo.title}${sameInfo.season ? ` S${sameInfo.season}` : ''}${sameInfo.part ? ` P${sameInfo.part}` : ''}`
-        : null;
-      const seasonLine = sameInfo?.season
-        ? `➧ Season :- ${sameInfo.season}${sameInfo.part ? ` Part ${sameInfo.part}` : ''} Episode ${sameInfo.episode}`
-        : `➧ Episode :- ${sameInfo?.episode || '?'}`;
+        : (pageTitle || null);
+      const titleSafe = escHtml(titleArg || sameInfo?.title || '?');
+      const seasonLine = via === 'single'
+        ? '➧ Tipe :- Movie'
+        : (sameInfo?.season
+          ? `➧ Season :- ${sameInfo.season}${sameInfo.part ? ` Part ${sameInfo.part}` : ''} Episode ${sameInfo.episode}`
+          : `➧ Episode :- ${sameInfo?.episode || '?'}`);
       const preview = `📦 <b>Preview Download</b>\n\n` +
-        `➧ Judul :- <b>${titleArg || sameInfo?.title || '?'}</b>\n` +
+        `➧ Judul :- <b>${titleSafe}</b>\n` +
         `${seasonLine}\n` +
         `➧ Provider :- samehadaku\n` +
         `➧ Server :- ${server} (${quality})\n\nDownload?`;
@@ -3391,15 +3394,21 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!episodeUrlG) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
     }
-    const sameInfoG = parseSamehadakuEpisode(episodeUrlG);
+    let sameInfoG = parseSamehadakuEpisode(episodeUrlG);
     await bot.editMessageText('📥 Downloading...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     let fileUrlG = null;
     let serversAll = null;
     try {
-      const { servers } = await resolveSamehadakuFullhd(episodeUrlG);
+      const { servers, title: pageTitleG, via: viaG } = await resolveSamehadakuFullhd(episodeUrlG);
       serversAll = servers;
       fileUrlG = servers[server];
       if (!fileUrlG) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      if (viaG === 'single' && !sameInfoG) {
+        const slugM = episodeUrlG.match(/\/anime\/([^/]+)\/?/i);
+        const slug = slugM?.[1] || null;
+        const slugTitle = slug ? slug.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : null;
+        sameInfoG = { title: pageTitleG || slugTitle || '?', season: null, part: null, episode: null, movie: true, provider: 'samehadaku', slug };
+      }
       if (sameInfoG) samehadakuEpisodeMap.set(fileUrlG, sameInfoG);
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});

@@ -115,7 +115,13 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
         if (isSame && sami) {
           const cleanTitle = (customTitle && !/S\d/i.test(sami.title||'')) ? customTitle : (sami.title || customTitle || '');
           const partSuffix = sami.part ? ` Part ${sami.part}` : '';
-          if (sami.season) {
+          if (sami.movie) {
+            finalCap = [
+              `➧ Judul :- ${cleanTitle}`,
+              `➧ Tipe :- Movie`,
+              `➧ Provider :- samehadaku`,
+            ].join('\n');
+          } else if (sami.season) {
             finalCap = [
               `➧ Judul :- ${cleanTitle}`,
               `➧ Season :- ${sami.season}${partSuffix} Episode ${sami.episode}`,

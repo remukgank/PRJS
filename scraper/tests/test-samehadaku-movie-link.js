@@ -1,48 +1,37 @@
 'use strict';
 
-// Unit test: deteksi link film/single Samehadaku (slug non-numerik, mis. -episode-movie)
-// pada halaman /anime/<slug>/ lalu parse blok download sub-halaman.
-// Replika logika gofile-worker.js (helper QUALITY_ORDER/parseDownloadBlocks/detectSinglePageLink).
+// Unit test: halaman film Samehadaku (slug non-numerik -episode-movie) → sub-halaman,
+// ekstraksi judul halaman, dan komposisi caption Movie.
+// Helper diambil LANGSUNG dari gofile-worker.js (dimuat via eval) agar tak ada drift regex.
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const QUALITY_ORDER = ["4K", "FULLHD", "MP4HD", "720p", "480p", "360p"];
+const WORKER_PATH = path.join(__dirname, '..', '..', 'gofile-worker.js');
+const worker = fs.readFileSync(WORKER_PATH, 'utf8');
 
-function parseDownloadBlocks(html) {
-  const blocks = {};
-  const liRe = /<li[^>]*>\s*<strong[^>]*>([^<]+)<\/strong>([\s\S]*?)<\/li>/gi;
-  let m;
-  while ((m = liRe.exec(html))) {
-    const q = m[1].trim().replace(/\s+/g, "");
-    const inner = m[2];
-    const servers = {};
-    const hrefRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-    let h;
-    while ((h = hrefRe.exec(inner))) {
-      const href = h[1].trim();
-      const name = (h[2] || "").trim().toLowerCase();
-      let key = null;
-      try {
-        const host = new URL(href).hostname.replace(/^www(?:\d+)\./i, "").replace(/^www\./, "").split(".")[0];
-        if (host) key = host.toLowerCase();
-      } catch {}
-      if (!key && name) key = name.replace(/\s+/g, "");
-      if (key && /^(?:zipps?yshare|racaty)$/i.test(key)) continue;
-      if (key) servers[key] = href;
-    }
-    if (Object.keys(servers).length) blocks[q] = servers;
-  }
-  const chosenQ = QUALITY_ORDER.find((q) => blocks[q]) || Object.keys(blocks).find((q) => blocks[q]) || null;
-  return { blocks, chosenQ, preferred: chosenQ ? blocks[chosenQ] : null };
+function sliceBlock(src, startMarker) {
+  const start = src.indexOf(startMarker);
+  if (start < 0) throw new Error(`blok worker tak ditemukan: ${startMarker}`);
+  const end = src.indexOf('\n}', start);
+  if (end < 0) throw new Error(`blok worker tak lengkap: ${startMarker}`);
+  return src.slice(start, end + 2);
 }
 
-function detectSinglePageLink(html, scope) {
-  const mvRe = /<a[^>]+href="([^"]*-episode-(?:movie|ova|special|batch|ona)\b[^"]*)"[^>]*>([^<]*)<\/a>/gi;
-  let mm;
-  while ((mm = mvRe.exec(scope || html))) return mm[1].trim();
-  return null;
+const QUALITY_ORDER = worker.match(/const QUALITY_ORDER[^;]+;/)[0];
+const code = [
+  QUALITY_ORDER,
+  sliceBlock(worker, 'function decodeEntities'),
+  sliceBlock(worker, 'function extractPageTitle'),
+  sliceBlock(worker, 'function parseDownloadBlocks'),
+  sliceBlock(worker, 'function detectSinglePageLink'),
+].join('\n');
+const w = new Function(`${code}; return { extractPageTitle, parseDownloadBlocks, detectSinglePageLink };`)();
+
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 let passed = 0;
@@ -52,68 +41,107 @@ function t(name, fn) {
   catch (e) { failed++; console.error(`FAIL  ${name}: ${e.message}`); }
 }
 
-const TARGET = 'https://v2.samehadaku.how/anime/assassination-classroom-the-movie-our-time/';
 const MOVIE_EP = 'https://v2.samehadaku.how/assassination-classroom-the-movie-our-time-episode-movie/';
 
-// Fixture nyata (dipotong dari HTML asli samehadaku, 23 Sep 2026).
 const moviePage = `<div class="lstepsiode listeps" style="height:auto!important;"><ul style="overflow: hidden auto;"><li><div class="epsright"><span class="eps"><a href="${MOVIE_EP}">1</a></span></div><div class="epsleft"><span class="lchx"><a href="${MOVIE_EP}">Assassination Classroom the Movie: Our Time Episode Movie</a></span><span class="date">25 July 2026</span></div></li></ul></div>`;
+
+const moviePageFull = `<html><head><title>Assassination Classroom the Movie: Our Time &#8211; Samehadaku</title></head><body><h1 class="entry-title" itemprop="name">Assassination Classroom the Movie: Our Time Sub Indo</h1>${moviePage}</body></html>`;
 
 const subPage = `
 <li><strong>360p </strong><span><a href="https://gofile.io/d/hgap3P">Gofile</a></span><span><a href="https://acefile.co/f/112001390/ak-mmnj-360p"> Acefile</a></span></li>
 <li><strong>MP4HD </strong><span><a href="https://gofile.io/d/mp4hd1">Gofile</a></span><span><a href="https://pixeldrain.com/u/mp4hdP"> Pixeldrain</a></span></li>
 <li><strong>FULLHD </strong><span><a href="https://gofile.io/d/sPU89A">Gofile</a></span><span><strike> Krakenfiles</strike></span><span><a href="https://pixeldrain.com/u/9JYc2ZkD"> Pixeldrain</a></span></li>
-<li><strong>360p </strong><span><a href="https://gofile.io/d/zzz1">Gofile</a></span></li>
 `;
 
 t('halaman film: link -episode-movie terdeteksi di scope lstepsiode', () => {
-  const link = detectSinglePageLink(moviePage, moviePage);
-  assert.ok(link, 'link movie harus terdeteksi');
-  assert.strictEqual(link, MOVIE_EP);
-  assert.ok(link.startsWith('https://v2.samehadaku.how/'), 'link absolut ke host yang sama');
+  assert.strictEqual(w.detectSinglePageLink(moviePage, moviePage), MOVIE_EP);
+  assert.ok(MOVIE_EP.startsWith('https://v2.samehadaku.how/'));
 });
 
 t('sub-halaman film: quality tertinggi FULLHD + gofile & pixeldrain', () => {
-  const parsed = parseDownloadBlocks(subPage);
+  const parsed = w.parseDownloadBlocks(subPage);
   assert.strictEqual(parsed.chosenQ, 'FULLHD');
-  assert.ok(parsed.preferred.gofile, 'gofile harus ada');
-  assert.ok(parsed.preferred.pixeldrain, 'pixeldrain harus ada');
-  assert.ok(!parsed.preferred.krakenfiles, 'server mati (krakenfiles) tidak boleh masuk');
+  assert.ok(parsed.preferred.gofile);
+  assert.ok(parsed.preferred.pixeldrain);
+  assert.ok(!parsed.preferred.krakenfiles, 'server mati tak boleh masuk');
 });
 
-t('halaman film tanpa sub-page → tak ada link, parse kosong (fallback aman)', () => {
-  const emptyPage = '<div class="lstepsiode listeps"><ul><li><span>Belum ada file</span></li></ul></div>';
-  assert.strictEqual(detectSinglePageLink(emptyPage, emptyPage), null);
-  const parsed = parseDownloadBlocks(emptyPage);
-  assert.strictEqual(parsed.preferred, null);
+t('judul halaman film diambil dari <h1 entry-title> (tanpa "Episode Movie" dari sub)', () => {
+  assert.strictEqual(w.extractPageTitle(moviePageFull), 'Assassination Classroom the Movie: Our Time Sub Indo');
 });
 
-t('halaman anime normal (episode angka) TIDAK false-positive ke movie', () => {
-  const animePage = `<div class="lstepsiode listeps"><ul>
-    <li><span class="eps"><a href="https://v2.samehadaku.how/one-piece-episode-1/">1</a></span></li>
-    <li><span class="eps"><a href="https://v2.samehadaku.how/one-piece-episode-2/">2</a></span></li>
-  </ul></div>`;
-  assert.strictEqual(detectSinglePageLink(animePage, animePage), null);
+t('judul fallback ke <title> + decode entity + buang suffix " – Samehadaku"', () => {
+  const html = '<html><head><title>Duck &amp; Goose &#8211; Samehadaku</title></head><body>x</body></html>';
+  assert.strictEqual(w.extractPageTitle(html), 'Duck & Goose');
 });
 
-t('slug movie terdeteksi walau case varies & di luar teks anchor', () => {
-  const variants = [
-    'https://v2.samehadaku.how/foo-episode-MOVIE/',
-    'https://v2.samehadaku.how/foo-episode-OVA/',
-    'https://v2.samehadaku.how/foo-episode-special/',
-    'https://v2.samehadaku.how/foo-episode-batch/',
-  ];
-  for (const v of variants) {
-    const html = `<div class="lstepsiode listeps"><ul><li><span class="lchx"><a href="${v}">Judul Film</a></span></li></ul></div>`;
-    assert.strictEqual(detectSinglePageLink(html, html), v, `harus kena: ${v}`);
+t('judul tanpa <h1>/og:title/<title> → null (tak crash)', () => {
+  assert.strictEqual(w.extractPageTitle('<div>x</div>'), null);
+});
+
+t('judul dengan karakter HTML di-escape untuk parse_mode HTML (anti 400 entities)', () => {
+  const title = w.extractPageTitle('<h1 class="entry-title">Tom &amp; Jerry &lt;Film&gt;</h1>');
+  assert.strictEqual(title, 'Tom & Jerry <Film>');
+  const safe = escHtml(title);
+  assert.strictEqual(safe, 'Tom &amp; Jerry &lt;Film&gt;');
+  assert.ok(!/[^&]<Film>/.test(safe), 'tag mentah tak boleh bocor ke parse_mode HTML');
+});
+
+t('caption movie: Judul + Tipe Movie, tanpa baris Episode', () => {
+  const sami = { title: 'Assassination Classroom the Movie: Our Time Sub Indo', season: null, part: null, episode: null, movie: true, provider: 'samehadaku', slug: 'assassination-classroom-the-movie-our-time' };
+  const customTitle = sami.title;
+  const cleanTitle = (customTitle && !/S\d/i.test(sami.title || '')) ? customTitle : (sami.title || customTitle || '');
+  let finalCap = '';
+  if (sami.movie) {
+    finalCap = [`➧ Judul :- ${cleanTitle}`, `➧ Tipe :- Movie`, `➧ Provider :- samehadaku`].join('\n');
+  }
+  assert.ok(finalCap.includes('Assassination Classroom the Movie: Our Time Sub Indo'));
+  assert.ok(finalCap.includes('➧ Tipe :- Movie'));
+  assert.ok(!/➧ Episode :-/.test(finalCap), 'baris Episode tak boleh muncul untuk movie');
+  assert.ok(!finalCap.includes('null'), 'tak ada nilai null di caption');
+});
+
+t('caption episode biasa:Season/Episode tetap utuh (tanpa regresi)', () => {
+  const sami = { title: 'One Piece', season: 2, part: 1, episode: 1125, provider: 'samehadaku' };
+  let finalCap = '';
+  if (sami.season) {
+    finalCap = [`➧ Judul :- ${sami.title}`, `➧ Season :- ${sami.season} Part ${sami.part} Episode ${sami.episode}`, `➧ Provider :- samehadaku`].join('\n');
+  }
+  assert.ok(finalCap.includes('➧ Season :- 2 Part 1 Episode 1125'));
+});
+
+t('halaman film tanpa sub-page → fallback aman (tak ada server)', () => {
+  const empty = '<div class="lstepsiode listeps"><ul><li><span>Belum ada file</span></li></ul></div>';
+  assert.strictEqual(w.detectSinglePageLink(empty, empty), null);
+  assert.strictEqual(w.parseDownloadBlocks(empty).preferred, null);
+});
+
+t('halaman anime episode-angka TIDAK false-positive ke movie', () => {
+  const anime = '<div class="lstepsiode listeps"><ul><li><a href="https://v2.samehadaku.how/one-piece-episode-1/">1</a></li><li><a href="https://v2.samehadaku.how/one-piece-episode-2/">2</a></li></ul></div>';
+  assert.strictEqual(w.detectSinglePageLink(anime, anime), null);
+});
+
+t('varian slug movie/ova/special/batch terdeteksi (case-insensitive)', () => {
+  for (const v of ['foo-episode-MOVIE', 'foo-episode-OVA', 'foo-episode-special', 'foo-episode-batch']) {
+    const html = `<div class="lstepsiode listeps"><ul><li><span class="lchx"><a href="https://v2.samehadaku.how/${v}/">Judul</a></span></li></ul></div>`;
+    assert.strictEqual(w.detectSinglePageLink(html, html), `https://v2.samehadaku.how/${v}/`, `harus kena: ${v}`);
   }
 });
 
-t('file test punya helper worker yang sama (cek drift regex via fixture worker asli)', () => {
-  const worker = fs.readFileSync(path.join(__dirname, '..', '..', 'gofile-worker.js'), 'utf8');
-  assert.ok(worker.includes('function detectSinglePageLink'), 'helper detectSinglePageLink harus ada di worker');
-  assert.ok(worker.includes('function parseDownloadBlocks'), 'helper parseDownloadBlocks harus ada di worker');
-  assert.ok(worker.includes('via: "single"'), 'balasan movie harus menandai via=single');
-  assert.ok(worker.includes('parseDownloadBlocks(await sr.text())'), 'sub-halaman film harus diparse');
+t('worker menyertakan title + movie flag di respons single', () => {
+  assert.ok(worker.includes('via: "single", title: extractPageTitle(html) || extractPageTitle(subHtml), movie: true'), 'respons single wajib title + movie:true');
+  assert.ok(worker.includes('blocks: parsed.blocks, title: extractPageTitle(html)'), 'respons episode biasa wajib title');
+});
+
+t('bot.js & handler punya cabang movie (anti drift)', () => {
+  const bot = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+  const handler = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+  assert.ok(bot.includes("via === 'single'"), 'bot preview harus tahu jalur single');
+  assert.ok(bot.includes('➧ Tipe :- Movie'), 'bot preview harus punya baris Tipe Movie');
+  assert.ok(bot.includes('movie: true'), 'sam_go harus synthesise sameInfo movie');
+  assert.ok(handler.includes('sami.movie'), 'handler caption harus punya cabang movie');
+  assert.ok(handler.includes('➧ Tipe :- Movie'), 'handler caption harus punya Tipe Movie');
+  assert.ok(/const titleSafe = escHtml\(/.test(bot), 'judul di preview wajib di-escape untuk parse_mode HTML');
 });
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
