@@ -25,6 +25,48 @@ async function sha256Hex(str) {
     .join("");
 }
 
+const QUALITY_ORDER = ["4K", "FULLHD", "MP4HD", "720p", "480p", "360p"];
+
+function parseDownloadBlocks(html) {
+  const blocks = {};
+  const liRe = /<li[^>]*>\s*<strong[^>]*>([^<]+)<\/strong>([\s\S]*?)<\/li>/gi;
+  let m;
+  while ((m = liRe.exec(html))) {
+    const q = m[1].trim().replace(/\s+/g, "");
+    const inner = m[2];
+    const servers = {};
+    const hrefRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+    let h;
+    while ((h = hrefRe.exec(inner))) {
+      const href = h[1].trim();
+      const name = (h[2] || "").trim().toLowerCase();
+      // Generic: slug = hostname .split interdip dari href (bukan hardcode nama server)
+      // Buff www86.zippyshare.com → zippyshare (buang awalan www<angka>.)
+      let key = null;
+      try {
+        const host = new URL(href).hostname.replace(/^www(?:\d+)\./i, "").replace(/^www\./, "").split(".")[0];
+        if (host) key = host.toLowerCase();
+      } catch {}
+      if (!key && name) key = name.replace(/\s+/g, "");
+      // Server mati/anti-bot tak disajikan: Zippyshare tutup (302 ke homepage), Racaty
+      // pakai anti-bot JS chain (butuh headless, bukan curl). Hanya server scrapeable
+      // (Gofile/Pixeldrain/Filedon/GDrivePlayer) yang dibuka ke bot.
+      if (key && /^(?:zipps?yshare|racaty)$/i.test(key)) continue;
+      if (key) servers[key] = href;
+    }
+    if (Object.keys(servers).length) blocks[q] = servers;
+  }
+  const chosenQ = QUALITY_ORDER.find((q) => blocks[q]) || Object.keys(blocks).find((q) => blocks[q]) || null;
+  return { blocks, chosenQ, preferred: chosenQ ? blocks[chosenQ] : null };
+}
+
+function detectSinglePageLink(html, scope) {
+  const mvRe = /<a[^>]+href="([^"]*-episode-(?:movie|ova|special|batch|ona)\b[^"]*)"[^>]*>([^<]*)<\/a>/gi;
+  let mm;
+  while ((mm = mvRe.exec(scope || html))) return mm[1].trim();
+  return null;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -125,8 +167,9 @@ export default {
           // lain di halaman (menu, anime lain, pagination) tak ikut tertangkap sebagai episode.
           const listRe = /<div[^>]*class=["'][^"']*lstepsiode[^"']*["'][^>]*>([\s\S]*?)<\/ul>/gi;
           const listM = listRe.exec(html);
+          let listHtml = "";
           if (listM && listM[1]) {
-            const listHtml = listM[1];
+            listHtml = listM[1];
             const bareRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
             const bareByEp = new Map();
             let bm;
@@ -174,6 +217,21 @@ export default {
               if (num === 1) episodes.push({ ep: 1, url: href.startsWith("http") ? href : new URL(href, target).href, title });
             }
           }
+          if (!episodes.length) {
+            const single = detectSinglePageLink(html, listHtml || html);
+            if (single) {
+              const subUrl = single.startsWith("http") ? single : new URL(single, target).href;
+              const sr = await fetch(subUrl, { headers: hdrs, cf: { cacheTtl: 60 } }).catch(() => null);
+              if (sr && sr.ok) {
+                const sub = parseDownloadBlocks(await sr.text());
+                if (sub.preferred) {
+                  return new Response(JSON.stringify({ ok: true, type: "episode", quality: sub.chosenQ, servers: sub.preferred, blocks: sub.blocks, via: "single" }), {
+                    headers: { "Content-Type": "application/json", ...cors },
+                  });
+                }
+              }
+            }
+          }
           episodes.sort((a, b) => a.ep - b.ep);
           if (episodes.length) {
             return new Response(JSON.stringify({ ok: true, type: "anime", episodes }), {
@@ -183,54 +241,14 @@ export default {
           // Movie/single — no episode links, fall through to parse download blocks below
         }
         // Episode page: Parse download-eps blocks: <li><strong>FULLHD</strong> <span><a href="...gofile...">...</a>
-        const qualityOrder = ["4K", "FULLHD", "MP4HD", "720p", "480p", "360p"];
-        const blocks = {};
-        const liRe = /<li[^>]*>\s*<strong[^>]*>([^<]+)<\/strong>([\s\S]*?)<\/li>/gi;
-        let m;
-        while ((m = liRe.exec(html))) {
-          const q = m[1].trim().replace(/\s+/g, "");
-          const inner = m[2];
-          const servers = {};
-          const hrefRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
-          let h;
-          while ((h = hrefRe.exec(inner))) {
-            const href = h[1].trim();
-            const name = (h[2] || '').trim().toLowerCase();
-            // Generic: slug = hostname .split interdip dari href (bukan hardcode nama server)
-            // Buff www86.zippyshare.com → zippyshare (buang awalan www<angka>.)
-            let key = null;
-            try {
-              const host = new URL(href).hostname.replace(/^www(?:\d+)\./i, '').replace(/^www\./, '').split('.')[0];
-              if (host) key = host.toLowerCase();
-            } catch {}
-            if (!key && name) key = name.replace(/\s+/g, '');
-            // Server mati/anti-bot tak disajikan: Zippyshare tutup (302 ke homepage), Racaty
-            // pakai anti-bot JS chain (butuh headless, bukan curl). Hanya server scrapeable
-            // (Gofile/Pixeldrain/Filedon/GDrivePlayer) yang dibuka ke bot.
-            if (key && /^(?:zipps?yshare|racaty)$/i.test(key)) continue;
-            if (key) servers[key] = href;
-          }
-          if (Object.keys(servers).length) blocks[q] = servers;
-        }
-        // Prefer kualitas tertinggi yang tersedia, scan qualityOrder penuh (4K → 360p).
-        // Pagar #2: kalau semua kualitas baku absen (mis. cuma SD/1080p), pakai blok pertama
-        // yang ADA dengan label kualitas JUJUR dari tag <strong> halaman (bukan asumsi).
-        let chosenQ = qualityOrder.find((q) => blocks[q]) || null;
-        let preferred = chosenQ ? blocks[chosenQ] : null;
-        if (!preferred) {
-          const available = Object.keys(blocks).filter((q) => blocks[q]);
-          if (available.length) {
-            chosenQ = available[0];
-            preferred = blocks[chosenQ];
-          }
-        }
-        if (!preferred) {
-          return new Response(JSON.stringify({ ok: false, message: "no FULLHD/4K servers found", blocks }), {
+        const parsed = parseDownloadBlocks(html);
+        if (!parsed.preferred) {
+          return new Response(JSON.stringify({ ok: false, message: "no FULLHD/4K servers found", blocks: parsed.blocks }), {
             status: 404,
             headers: { "Content-Type": "application/json", ...cors },
           });
         }
-        return new Response(JSON.stringify({ ok: true, type: "episode", quality: chosenQ, servers: preferred, blocks }), {
+        return new Response(JSON.stringify({ ok: true, type: "episode", quality: parsed.chosenQ, servers: parsed.preferred, blocks: parsed.blocks }), {
           headers: { "Content-Type": "application/json", ...cors },
         });
       } catch (e) {
