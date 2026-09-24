@@ -3477,8 +3477,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const fileUrl = best?.quality ? (qualities[best.quality] || {})[server] : null;
       if (!fileUrl) return bot.editMessageText(`⚠️ Server ${server} tidak tersedia.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       const preview = `📦 <b>Preview Download</b>\n\n` +
-        `➧ Judul :- <b>${kurInfo?.title || '?'}</b>\n` +
-        `➧ Episode :- ${kurInfo?.episode || '?'}\n` +
+        `➧ Judul :- <b>${escHtml(kurInfo?.title || '?')}</b>\n` +
+        `➧ Episode :- ${escHtml(kurInfo?.episode || '?')}\n` +
         `➧ Provider :- kuronime\n` +
         `➧ Server :- ${server} (${best.quality})\n\nDownload?`;
       const urlId2 = cacheUrl(episodeUrl);
