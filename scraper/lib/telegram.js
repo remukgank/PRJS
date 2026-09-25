@@ -1,5 +1,6 @@
 const { logger } = require('../logger');
 const backpressure = require('./backpressure'); // upload accounting lapis 1
+const { safeHtml, isTelegramBadRequest, sanitizeHtmlPayload, toPlainTextPayload } = require('./html');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,7 +40,57 @@ function toLocalFileRef(filePath) {
 let _config = null;
 let _bot = null;
 const ANSWER_CALLBACK_WRAP_MARK = Symbol.for('prjs.telegram.answerCallbackQueryWrapped');
+const HTML_SAFETY_WRAP_MARK = Symbol.for('prjs.telegram.htmlSafetyWrapped');
+const HTML_TEXT_METHODS = [
+  { name: 'sendMessage', textIndex: 1, optionsIndex: 2, key: 'text' },
+  { name: 'editMessageText', textIndex: 0, optionsIndex: 1, key: 'text' },
+  { name: 'editMessageCaption', textIndex: 0, optionsIndex: 1, key: 'caption' },
+  { name: 'sendPhoto', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendVideo', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendDocument', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendAudio', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendAnimation', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendVoice', textIndex: 2, optionsIndex: 3, key: 'caption' },
+  { name: 'sendVideoNote', textIndex: 2, optionsIndex: 3, key: 'caption' },
+];
 const { setCachedFileId: _setCachedFileId } = require('../db');
+
+function wrapHtmlSafety(bot) {
+  if (!bot || bot[HTML_SAFETY_WRAP_MARK]) return;
+  for (const spec of HTML_TEXT_METHODS) {
+    const original = typeof bot[spec.name] === 'function' ? bot[spec.name].bind(bot) : null;
+    if (!original) continue;
+    bot[spec.name] = async (...args) => {
+      const options = args[spec.optionsIndex];
+      let touched = false;
+      if (options && options.parse_mode === 'HTML' && typeof args[spec.textIndex] === 'string') {
+        const cleaned = safeHtml(args[spec.textIndex]);
+        if (cleaned !== args[spec.textIndex]) {
+          args = args.slice();
+          args[spec.textIndex] = cleaned;
+          touched = true;
+        }
+      }
+      try {
+        return await original(...args);
+      } catch (err) {
+        if (!isTelegramBadRequest(err) || !options || options.parse_mode !== 'HTML') throw err;
+        const fallback = args.slice();
+        const plainOptions = { ...options };
+        delete plainOptions.parse_mode;
+        if (spec.key === 'caption') delete plainOptions.caption_entities;
+        else delete plainOptions.entities;
+        fallback[spec.optionsIndex] = plainOptions;
+        logger.warn(
+          { method: spec.name, err: err.message, sanitized: touched },
+          'Telegram 400 pada parse_mode HTML — retry sebagai plain text'
+        );
+        return original(...fallback);
+      }
+    };
+  }
+  Object.defineProperty(bot, HTML_SAFETY_WRAP_MARK, { value: true, enumerable: false });
+}
 
 function wrapAnswerCallbackQuery(bot, sleepFn = sleep) {
   if (!bot || typeof bot.answerCallbackQuery !== 'function' || bot[ANSWER_CALLBACK_WRAP_MARK]) return;
@@ -71,6 +122,7 @@ function initTelegram(config) {
   if (config.bot) {
     _bot = config.bot;
     wrapAnswerCallbackQuery(config.bot);
+    wrapHtmlSafety(config.bot);
   }
 }
 function ensureSender(caller) {
@@ -104,13 +156,14 @@ async function withUploadRetry(label, sendFn) {
 
 // Kirim via apiPost dengan retry: flood 429 (retry_after) atau transient
 // (internal server error). Kuota terpisah: flood ~ API_MAX_RETRY, transient ~ 2.
-function apiPost(method, payload, _retry, _transient) {
-  if (!_config) throw new Error('lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, API_HTTP, API_MAX_RETRY }) dulu');
+function apiPost(method, payload, _retry, _transient, _htmlFallbackDone) {
+  if (!_config) throw new Error('lib/telegram belum di-init — panggil initTelegram({ TOKEN, API_BASE, ..., bot }) dulu');
   const { TOKEN, API_BASE, API_HTTP, API_MAX_RETRY } = _config;
   if (_retry === undefined) _retry = API_MAX_RETRY;
   if (_transient === undefined) _transient = 2;
+  const outgoing = sanitizeHtmlPayload(payload);
   return new Promise((resolve, reject) => {
-    const data = JSON.stringify(payload);
+    const data = JSON.stringify(outgoing);
     const url = `${API_BASE}/bot${TOKEN}/${method}`;
     const req = API_HTTP.request(url, {
       method: 'POST',
@@ -124,16 +177,24 @@ function apiPost(method, payload, _retry, _transient) {
           if (json.ok) resolve(json.result);
           else {
             const err = new Error(json.description || `${method} failed`);
+            err.telegramErrorCode = json.error_code;
             const floodMs = floodRetryMs(err);
             const transientMs = floodMs ? 0 : transientRetryMs(err);
             if (floodMs > 0 && _retry > 0) {
               logger.warn({ method, retryAfterMs: floodMs, remaining: _retry, err: err.message }, 'apiPost flood — retry');
               await sleep(floodMs + 500);
-              resolve(await apiPost(method, payload, _retry - 1, _transient));
+              resolve(await apiPost(method, payload, _retry - 1, _transient, _htmlFallbackDone));
             } else if (transientMs > 0 && _transient > 0) {
               logger.warn({ method, retryMs: transientMs, remaining: _transient, err: err.message }, 'apiPost transient — retry');
               await sleep(transientMs + 500);
-              resolve(await apiPost(method, payload, _retry, _transient - 1));
+              resolve(await apiPost(method, payload, _retry, _transient - 1, _htmlFallbackDone));
+            } else if (
+              !_htmlFallbackDone
+              && json.error_code === 400
+              && outgoing.parse_mode === 'HTML'
+            ) {
+              logger.warn({ method, err: err.message }, 'apiPost 400 pada parse_mode HTML — retry sebagai plain text');
+              resolve(await apiPost(method, toPlainTextPayload(outgoing), _retry, _transient, true));
             } else {
               reject(err);
             }

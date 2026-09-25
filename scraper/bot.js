@@ -39,6 +39,7 @@ const { stripHtml, truncateText, cleanCaption, parseKuronimeSeasonEpisode, extra
 const { buildAnimeSender, ANIME_TOPIC_KEY } = require('./lib/animeTopic');
 const { detectTitleFromFilename } = require('./lib/titleDetect');
 const { sleep, floodRetryMs, initTelegram, apiPost } = require('./lib/telegram');
+const { safeHtml } = require('./lib/html');
 const { initProgress, Progress, RichProgress } = require('./lib/progress');
 const { buildPicker } = require('./lib/samKeyboard');
 const { scanSupportedServers, viableFromScanned } = require('./lib/samPrescan');
@@ -486,7 +487,7 @@ async function sendRichMessage(chatId, content, opts = {}) {
   const payload = {
     chat_id: chatId,
     rich_message: {
-      [format]: content,
+      [format]: format === 'html' ? safeHtml(content) : content,
       is_rtl,
       skip_entity_detection: false,
     },
@@ -607,7 +608,7 @@ async function finalizeDraft(chatId, content, opts = {}) {
   const payload = {
     chat_id: chatId,
     rich_message: {
-      [format]: content,
+      [format]: format === 'html' ? safeHtml(content) : content,
     },
   };
 
