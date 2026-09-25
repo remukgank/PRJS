@@ -161,5 +161,16 @@ t('label progress film: "— Movie" (bukan "— Episode 1") di semua tahap', () 
   assert.strictEqual(sites, 6, 'helper dipakai 5 situs + definisinya (ditemukan ' + sites + ')');
 });
 
+t('caption movie di SEMUA handler (gofile direct+folder, pixeldrain, gdrive, gdriveplayer)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+  const cnt = (re) => (src.match(re) || []).length;
+  assert.strictEqual(cnt(/Tipe :- Movie/g), 6, 'branch Movie harus ada di 6 blok caption (ditemukan ' + cnt(/Tipe :- Movie/g) + ')');
+  assert.strictEqual(cnt(/sami\.movie/g), 3, 'gofile direct + gofile folder + pixeldrain');
+  assert.strictEqual(cnt(/sameInfo\?\.movie/g), 1, 'gdriveplayer');
+  assert.strictEqual(cnt(/gdSami\?\.movie/g), 3, 'gdrive: caption gdSame + caption generic + label seasonEpLabel');
+  assert.ok(!/Episode :- null/.test(src), 'tak boleh ada caption film yg jatuh ke Episode null');
+  assert.ok(src.includes("?'Movie'") || src.includes("'Movie'"), 'label seasonEpLabel film = Movie');
+});
+
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 process.exit(failed ? 1 : 0);

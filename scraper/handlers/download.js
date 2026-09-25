@@ -234,7 +234,13 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
       if (isSame && sami) {
         const cleanTitle = (customTitle && !/S\d/i.test(sami.title||'')) ? customTitle : (sami.title || customTitle || '');
         const partSuffix2 = sami.part ? ` Part ${sami.part}` : '';
-        if (sami.season) {
+        if (sami.movie) {
+          finalCap = [
+            `➧ Judul :- ${cleanTitle}`,
+            `➧ Tipe :- Movie`,
+            `➧ Provider :- samehadaku`,
+          ].join('\n');
+        } else if (sami.season) {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
             `➧ Season :- ${sami.season}${partSuffix2} Episode ${sami.episode}`,
@@ -511,7 +517,13 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null, expectedEp =
       if (isSame && sami) {
         const cleanTitle = (customTitle && !/S\d/i.test(sami.title||'')) ? customTitle : (sami.title || customTitle || '');
         const partSuffix3 = sami.part ? ` Part ${sami.part}` : '';
-        if (sami.season) {
+        if (sami.movie) {
+          finalCap = [
+            `➧ Judul :- ${cleanTitle}`,
+            `➧ Tipe :- Movie`,
+            `➧ Provider :- samehadaku`,
+          ].join('\n');
+        } else if (sami.season) {
           finalCap = [
             `➧ Judul :- ${cleanTitle}`,
             `➧ Season :- ${sami.season}${partSuffix3} Episode ${sami.episode}`,
@@ -822,21 +834,33 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     let finalCap = cap;
     if (gdSame) {
       const gdTitle = titleForMedia || cap;
-      finalCap = [
-        `➧ Judul :- ${gdTitle}`,
-        gdSame.season
-          ? `➧ Season :- ${gdSame.season}${gdSame.part ? ` Part ${gdSame.part}` : ''} Episode ${gdSame.episode}`
-          : `➧ Episode :- ${gdSame.episode}`,
-        `➧ Provider :- samehadaku`,
-      ].join('\n');
+      finalCap = gdSami?.movie
+        ? [
+            `➧ Judul :- ${gdTitle}`,
+            `➧ Tipe :- Movie`,
+            `➧ Provider :- samehadaku`,
+          ].join('\n')
+        : [
+          `➧ Judul :- ${gdTitle}`,
+          gdSame.season
+            ? `➧ Season :- ${gdSame.season}${gdSame.part ? ` Part ${gdSame.part}` : ''} Episode ${gdSame.episode}`
+            : `➧ Episode :- ${gdSame.episode}`,
+          `➧ Provider :- samehadaku`,
+        ].join('\n');
     } else if (title) {
       // Google Drive Samehadaku (Movie, tanpa -S/-P): provider samehadaku, bukan extractProvider (yang ambil tssdkmgnokh)
       const gdProv = /SAMEHADAKU/i.test(fileName) ? 'samehadaku' : extractProvider(fileName);
-      finalCap = [
-        `➧ Judul :- ${title}`,
-        `➧ Episode :- ${extractPartFromFilename(fileName)}`,
-        `➧ Provider :- ${gdProv}`,
-      ].join('\n');
+      finalCap = gdSami?.movie
+        ? [
+            `➧ Judul :- ${title}`,
+            `➧ Tipe :- Movie`,
+            `➧ Provider :- ${gdProv}`,
+          ].join('\n')
+        : [
+          `➧ Judul :- ${title}`,
+          `➧ Episode :- ${extractPartFromFilename(fileName)}`,
+          `➧ Provider :- ${gdProv}`,
+        ].join('\n');
     }
     let sendResult = null;
     sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
@@ -903,13 +927,19 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
       }
       const gpTitle = titleArg || cleanCaption(gpName);
       const gpCap = titleArg
-        ? [
+        ? (sameInfo?.movie
+          ? [
+              `➧ Judul :- ${titleArg}`,
+              `➧ Tipe :- Movie`,
+              `➧ Provider :- samehadaku`,
+            ].join('\n')
+          : [
             `➧ Judul :- ${titleArg}`,
             gpSame?.season
               ? `➧ Season :- ${gpSame.season}${gpSame.part ? ` Part ${gpSame.part}` : ''} Episode ${gpPart}`
               : `➧ Episode :- ${gpPart}`,
             `➧ Provider :- samehadaku`,
-          ].join('\n')
+          ].join('\n'))
         : gpTitle;
       const gpCacheInfo = { urlHash: hashUrl(url), source: 'gdriveplayer', fileName: gpName };
       // batch: tanpa sub-progress per-ep (cukup tabel batch utama di bot.js)
