@@ -144,5 +144,22 @@ t('bot.js & handler punya cabang movie (anti drift)', () => {
   assert.ok(/const titleSafe = escHtml\(/.test(bot), 'judul di preview wajib di-escape untuk parse_mode HTML');
 });
 
+t('label progress film: "— Movie" (bukan "— Episode 1") di semua tahap', () => {
+  const handlerSrc = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+  const start = handlerSrc.indexOf('function epCapLabel');
+  const end = handlerSrc.indexOf('\n}', start);
+  assert.ok(start > 0 && end > start, 'helper epCapLabel harus ada di handlers/download.js');
+  const epCapLabel = new Function(`${handlerSrc.slice(start, end + 2)}; return epCapLabel;`)();
+  const cap = 'Assassination Classroom the Movie: Our Time Sub Indo';
+  const movie = { title: cap, movie: true, episode: null, provider: 'samehadaku' };
+  assert.strictEqual(epCapLabel(cap, true, movie, 1), `${cap} — Movie`);
+  assert.ok(!/Episode/.test(epCapLabel(cap, true, movie, 1)), 'tak boleh ada "Episode" untuk film');
+  const anime = { title: 'One Piece', movie: false, season: 2, part: 1, episode: 1125 };
+  assert.strictEqual(epCapLabel('One Piece S2 P1', true, anime, 1125), 'One Piece S2 P1 — Episode 1125');
+  assert.strictEqual(epCapLabel(cap, false, null, 3), cap, 'tanpa customTitle label tetap polos');
+  const sites = (handlerSrc.match(/epCapLabel\(/g) || []).length;
+  assert.strictEqual(sites, 6, 'helper dipakai 5 situs + definisinya (ditemukan ' + sites + ')');
+});
+
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 process.exit(failed ? 1 : 0);

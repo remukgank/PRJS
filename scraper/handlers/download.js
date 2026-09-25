@@ -78,7 +78,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
 
     const cap = customTitle || cleanCaption(fileName);
     const goPartInit = sami?.episode ?? parseSamehadakuFilename(fileName)?.episode ?? extractPartFromFilename(fileName);
-    const capWithEp = customTitle ? `${cap} — Episode ${goPartInit}` : cap;
+    const capWithEp = epCapLabel(cap, !!customTitle, sami, goPartInit);
     const cacheInfo = { urlHash, source: 'gofile', fileName };
     const rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     const outPath = tempPath(fileName);
@@ -198,7 +198,7 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
     cap = customTitle || cleanCaption(file.name);
     const fileName = file.name;
     const cacheInfo = { urlHash, source: 'gofile', fileName };
-    capWithEp = customTitle ? `${cap} — Episode ${sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name)}` : cap;
+    capWithEp = epCapLabel(cap, !!customTitle, sami, sami?.episode ?? parseSamehadakuFilename(file.name)?.episode ?? extractPartFromFilename(file.name));
     rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
     if (file.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
@@ -459,7 +459,7 @@ async function handlePixeldrainUrl(chatId, url, customTitle = null, expectedEp =
       await leafAlert(chatId, `⚠️ Pixeldrain utk Ep ${expectedEp} menunjuk file salah (${info.name}).\n${mismatch}\nPakai server lain.`);
       return { ok: false, error: mismatch };
     }
-    const capWithEp = customTitle ? `${cap} — Episode ${pixPart}` : cap;
+    const capWithEp = epCapLabel(cap, !!customTitle, sami, pixPart);
     const cacheInfo = { urlHash, source: 'pixeldrain', fileName };
     rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
 
@@ -599,6 +599,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
       return { ok: false, error: mismatch };
     }
     const patFile = fdSame?.short ? fdSame.short : extractSourcePattern(fdName);
+    const fdSami = _ctx.samehadakuEpisodeMap.get(url);
     let title = null;
     // Utk file Samehadaku: base title = S1 (kuronime-tssdk / samehadaku short), lalu tambah suffix S{season}.
     // JANGAN pakai findMediaByPattern('TSS') karena source_pattern TSS dipakai multi-season (collide bug DB).
@@ -628,7 +629,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
     }
     const titleForCap = title; // title sudah incl S{season} (anti-dobel)
     cap = titleForCap || cleanCaption(fdName);
-    capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
+    capWithEp = epCapLabel(cap, !!titleForCap, fdSami, partN);
     const cacheInfo = { urlHash: hashUrl(url), source: 'filedon', fileName: fdName };
     rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     rp.updateEpisode(capWithEp, 'download');
@@ -694,6 +695,7 @@ async function handleMegaUrl(chatId, url, customTitle = null) {
     const mf = await resolveMegaFile(url);
     const mfName = mf.name;
     const partN = extractPartFromFilename(mfName);
+    const mfSami = _ctx.samehadakuEpisodeMap.get(url);
     const patFile = extractSourcePattern(mfName);
     let title = customTitle || null;
     if (!title) {
@@ -702,7 +704,7 @@ async function handleMegaUrl(chatId, url, customTitle = null) {
     }
     const titleForCap = title;
     cap = titleForCap || cleanCaption(mfName);
-    capWithEp = titleForCap ? `${cap} — Episode ${partN}` : cap;
+    capWithEp = epCapLabel(cap, !!titleForCap, mfSami, partN);
     const cacheInfo = { urlHash: hashUrl(url), source: 'mega', fileName: mfName };
     rp = await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
     if (mf.size / 1024 / 1024 > _ctx.config.MAX_UPLOAD_MB) {
@@ -773,15 +775,18 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
     const sourcePattern = extractSourcePattern(fileName);
     // Prioritas: filename gaya Samehadaku (TSSDK-S2-P2-1...) → season/part/episode + provider samehadaku
     const gdSame = parseSamehadakuFilename(fileName);
+    const gdSami = _ctx.samehadakuEpisodeMap.get(url);
     let title = customTitle;
     if (!title) {
       const { title: detected } = await detectTitleFromFilename(fileName);
       if (detected) title = detected;
     }
     const part = extractPartFromFilename(fileName);
-    const seasonEpLabel = gdSame
-      ? (gdSame.season ? (gdSame.part ? `${gdSame.season} Part ${gdSame.part} Episode ${gdSame.episode}` : `${gdSame.season} Episode ${gdSame.episode}`) : `Episode ${gdSame.episode}`)
-      : `Episode ${part}`;
+    const seasonEpLabel = gdSami?.movie
+      ? 'Movie'
+      : gdSame
+        ? (gdSame.season ? (gdSame.part ? `${gdSame.season} Part ${gdSame.part} Episode ${gdSame.episode}` : `${gdSame.season} Episode ${gdSame.episode}`) : `Episode ${gdSame.episode}`)
+        : `Episode ${part}`;
     // Title untuk media (fomo anti-bentrok): tambah suffix " S2" / " S2 P2"
     // Anti-dobel: kalau customTitle sudah ada "S2"/"P2" jangan tambah ulang; kalau baru "S2" tapi belum "P2" lengkapi.
     let titleForMedia = title;
@@ -1006,6 +1011,11 @@ function partMismatch(expectedEp, gotPart) {
   const got = Number(gotPart);
   if (want > 0 && got > 0 && got !== want) return `file server keliru: Ep ${got} (link Ep ${want})`;
   return null;
+}
+function epCapLabel(cap, hasTitle, sameInfo, part) {
+  if (!hasTitle) return cap;
+  if (sameInfo && sameInfo.movie) return `${cap} — Movie`;
+  return `${cap} — Episode ${part}`;
 }
 function pickBestServerList(servers = {}) {
   return SERVER_PRIORITY.filter((name) => servers[name]);
