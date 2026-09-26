@@ -478,6 +478,46 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: !vdell hapus file VIDOY (bukan library) ─────────────────────
+t('!vdell ada: parsing judul + ep opsional + konfirmasi', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/\^!vdell\\s\+(.+)/i.test(B)) throw new Error('perintah !vdell tidak ada');
+  const i = B.indexOf('!vdell');
+  const body = B.slice(i, B.indexOf('!vdell', i + 10) > 0 ? B.indexOf('\n  }', i) : i + 4000);
+  if (!/findVidoyRecords\(titleQ, hasEp \? epNum : null\)/.test(B)) {
+    throw new Error('!vdell harus mencari record (judul, ep opsional)');
+  }
+  if (!/vdel_confirm/.test(B) || !/vdel_cancel/.test(B)) throw new Error('konfirmasi !vdell tidak ada');
+  if (!/pendingVidoyDeletes/.test(B)) throw new Error('pending !vdell tidak disimpan');
+});
+
+t('!vdell hapus file fisik di Vidoy lewat deleteItem, bukan hanya DB', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = B.indexOf("if (data === 'vdel_confirm'");
+  if (i < 0) throw new Error('handler vdel_confirm tidak ada');
+  const body = B.slice(i, B.indexOf("\n  }\n", i));
+  if (!/VidoyUploader\.deleteItem\('video', code\)/.test(body)) {
+    throw new Error('harus memanggil deleteItem di Vidoy — hapus DB saja tidak cukup');
+  }
+  // filecode dari dashboard ATAU link
+  if (!body.includes("/view/") || !body.includes("/e/")) {
+    throw new Error('filecode harus diambil dari dashboard atau link');
+  }
+  // record DB hanya dihapus kalau file fisik sukses
+  if (!/if \(okDel\) delDb \+= await deleteVidoyRecord/.test(body)) {
+    throw new Error('record DB harus dihapus hanya bila file fisik terhapus');
+  }
+});
+
+t('!vdell dan !dell terpisah (tidak boleh saling menimpa)', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/if \(data === 'dell_confirm'\)/.test(B)) throw new Error('handler !dell hilang');
+  if (!/if \(data === 'dell_cancel'\)/.test(B)) throw new Error('handler batal !dell hilang');
+  if (!/const pendingVidoyDeletes = new Map\(\)/.test(B)) throw new Error('pending terpisah tidak ada');
+  if (!/const pendingDeletes = new Map/.test(B)) throw new Error('pending !dell hilang');
+});
+
+
 // ── KRITIS: format deteksi dari ISI FILE, bukan ekstensi nama ───────────────
 // Bug: handlers/vidoy.js menamai tujuan "Ep 01.mp4" padahal isinya .ts dari
 // server → remux tidak pernah jalan → iOS layar hitam (suara keluar, video tidak).

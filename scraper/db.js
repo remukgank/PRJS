@@ -574,6 +574,45 @@ async function deleteMedia(slug) {
   }
 }
 
+
+// Cari record Vidoy berdasarkan judul (title ATAU media_key), opsional per part.
+// Dipakai !vdell. Pesan Telegram yangiks impacted ikut dikembalikan supaya
+// bisa dilaporkan (link-nya jadi mati setelah file dihapus).
+async function findVidoyRecords(query, part = null) {
+  try {
+    const like = '%' + String(query || '').trim() + '%';
+    const cols = 'media_key, kind, part, title, link, dashboard, tg_chat_id, tg_message_id';
+    if (part === null || part === undefined) {
+      const r = await pool.query(
+        `SELECT ${cols} FROM vidoy_uploads
+          WHERE title ILIKE $1 OR media_key ILIKE $1
+          ORDER BY kind, media_key, part`, [like]);
+      return r.rows;
+    }
+    const r = await pool.query(
+      `SELECT ${cols} FROM vidoy_uploads
+        WHERE (title ILIKE $1 OR media_key ILIKE $1) AND part = $2
+        ORDER BY kind, media_key`, [like, Number(part) || 0]);
+    return r.rows;
+  } catch (err) {
+    logger.error({ err: err.message, query }, 'Failed to find vidoy records');
+    return [];
+  }
+}
+
+// Hapus record Vidoy setelah file fisik di Vidoy dihapus.
+async function deleteVidoyRecord(mediaKey, kind, part) {
+  try {
+    const r = await pool.query(
+      'DELETE FROM vidoy_uploads WHERE media_key = $1 AND kind = $2 AND part = $3',
+      [mediaKey, kind, Number(part) || 0]);
+    return r.rowCount || 0;
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind, part }, 'Failed to delete vidoy record');
+    return 0;
+  }
+}
+
 async function findMediaByName(query) {
   try {
     const r = await pool.query(
@@ -665,6 +704,8 @@ module.exports = {
   upsertMedia,
   deletePart,
   deleteMedia,
+  findVidoyRecords,
+  deleteVidoyRecord,
   findMediaByName,
   listAllLibrary,
   getMediaBySlug,

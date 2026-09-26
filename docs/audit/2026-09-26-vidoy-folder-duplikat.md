@@ -580,3 +580,36 @@ if (ext !== '.mp4') { remuxToMp4(...) } // ← DEAD CODE
 
 ### Verifikasi
 `test-vidoy-uploader` **152 pass** (+5), suite lain 0 fail, kontrak media 10/10.
+
+## Q. Perintah !vdell — hapus file di VIDOY (27 Sep 2026)
+
+### Kebutuhan user
+"!dell" hanya menghapus library + Telegram. Tidak bisa menghapus file di
+Vidoy. Rider: episode yang filenya rusak/compatibilitas salah harus bisa dihapus
+dari Vidoy supaya bisa di-upload ulang dengan benar.
+
+### Perintah
+| Bentuk | Arti |
+|---|---|
+| `!vdell <judul> <ep>` | hapus 1 episode |
+| `!vdell <judul>` | hapus semua episode judul itu |
+
+### Cara kerja
+1. `findVidoyRecords(title, ep)` mencari record via `title` ATAU `media_key`
+2. Tampilkan konfirmasi (jumlah file, peringatan link Telegram jadi mati)
+3. `vdel_confirm` → untuk tiap record:
+   - ambil filecode dari `dashboard` (`/view/<code>`) atau `link` (`/e/<code>`)
+   - `deleteItem('video', code)` hapus file fisik di Vidoy
+   - record DB dihapus **hanya kalau** file fisik benar-benar terhapus
+4. Laporan: file terhapus / record terhapus / yang gagal
+
+### Kebersihan
+- `pendingVidoyDeletes` terpisah dari `pendingDeletes` (!dell)
+- Dialog konfirmasi memunculkan peringatan bahwa pesan Telegram akan ber-link mati
+- Kalau penghapusan gagal, record DB **tidak** dihapus → tidak pernah ada record
+  yang menunjuk file yang masih ada
+
+### Verifikasi
+`test-vidoy-uploader` **155 pass** (+3), suite lain 0 fail.
+Juga: record basi Naruto Shippuuden Ep 1 (link ke file yang sudah dihapus user)
+sudah dibersihkan → run berikutnya akan upload ulang dengan file MP4 benar.

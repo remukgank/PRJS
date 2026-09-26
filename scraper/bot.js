@@ -29,7 +29,7 @@ const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -442,7 +442,9 @@ const sessions = new Map();
 const aiChatSessions = new Map();
 const liveChatAcked = new Set(); // chatId yang sudah dapat notif "diteruskan ke admin"
 const pendingDownloads = new Map(); // chatId → { url, handler, fileName }
-const pendingDeletes = new Map(); // chatId → { slug, part, name }
+const pendingDeletes = new Map()
+// Menunggu konfirmasi !vdell (hapus file di Vidoy)
+const pendingVidoyDeletes = new Map();; // chatId → { slug, part, name }
 const pendingReplaces = new Map(); // chatId → { slug, part, name }
 const pendingAdds = new Map(); // chatId → { slug, nextPart, name }
 const pendingAiEndpoint = new Map(); // chatId → true (menunggu input URL custom AI)
@@ -2786,6 +2788,50 @@ bot.on('message', safeHandler('message')(async (msg) => {
     });
   }
 
+  // ─── !vdell — hapus file di VIDOY (bukan library) ───────────────────────────
+  // !vdell <judul> <ep>  → hapus 1 episode
+  // !vdell <judul>        → hapus semua episode judul itu
+  // Catatan: file dihapus permanen di Vidoy. Record DB ikut dihapus supaya run
+  // berikutnya bisa upload ulang (tidak dianggap duplikat).
+  const vdelMatch = text.match(/^!vdell\s+(.+)/i);
+  if (vdelMatch) {
+    if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⚠️ Hanya admin.');
+    const args = vdelMatch[1].trim().split(/\s+/);
+    const lastArg = args[args.length - 1];
+    const epNum = Number(lastArg);
+    const hasEp = !isNaN(epNum) && args.length > 1;
+    const titleQ = hasEp ? args.slice(0, -1).join(' ') : args.join(' ');
+
+    const rows = await findVidoyRecords(titleQ, hasEp ? epNum : null);
+    if (!rows.length) {
+      return bot.sendMessage(chatId, `❌ Tidak ada file Vidoy cocok: "<b>${escHtml(titleQ)}</b>"${hasEp ? ` Ep ${epNum}` : ''}`, { parse_mode: 'HTML' });
+    }
+    const kinds = [...new Set(rows.map((r) => r.kind))];
+    if (kinds.length > 1) {
+      return bot.sendMessage(chatId, `⚠️ "<b>${escHtml(titleQ)}</b>" cocok untuk beberapa jenis (${kinds.join(', ')}). Sebutkan lebih spesifik.`, { parse_mode: 'HTML' });
+    }
+    const label = hasEp
+      ? `Ep <b>${epNum}</b> dari <b>${escHtml(rows[0].title || titleQ)}</b>`
+      : `semua <b>${rows.length}</b> episode dari <b>${escHtml(rows[0].title || titleQ)}</b>`;
+    const withMsg = rows.filter((r) => r.tg_message_id).length;
+
+    pendingVidoyDeletes.set(String(chatId), {
+      titleQ, ep: hasEp ? epNum : null, adminId: msg.from.id, chatId,
+    });
+    return bot.sendMessage(chatId,
+      `🗑️ <b>Konfirmasi hapus VIDOY:</b>\n\n${label}\n\n`
+      + `📁 File akan dihapus permanen dari Vidoy.\n`
+      + (withMsg ? `⚠️ ${withMsg} pesan Telegram akan jadi ber-link mati.\n` : '')
+      + `\nYakin?`, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🗑️ Ya, Hapus dari Vidoy', callback_data: 'vdel_confirm' }, { text: '❌ Batal', callback_data: 'vdel_cancel' }],
+          ],
+        },
+      });
+  }
+
   if (text === '/libsimpan' || text === '/libsimpan on' || text === '/libsimpan off') {
     if (!isAdmin(msg.from.id)) return bot.sendMessage(chatId, '⚠️ Hanya admin.');
     const current = await getSetting('libsimpan');
@@ -4251,6 +4297,50 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   if (data === 'dell_cancel') {
     pendingDeletes.delete(String(chatId));
     return bot.editMessageText('❌ Dibatalkan.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+  }
+
+  // ─── !vdell confirm — hapus file fisik di Vidoy + record DB ──────────────────
+  if (data === 'vdel_confirm' || data === 'vdel_cancel') {
+    const pend = pendingVidoyDeletes.get(String(chatId));
+    pendingVidoyDeletes.delete(String(chatId));
+    if (!pend) return bot.answerCallbackQuery(query.id, { text: '⚠️ Session habis' }).catch(() => {});
+    if (pend.adminId !== query.from.id) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Bukan perintahmu' }).catch(() => {});
+    }
+    if (data === 'vdel_cancel') {
+      return bot.editMessageText('❌ Dibatalkan.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+
+    await bot.editMessageText('🗑️ Menghapus dari Vidoy...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    const VidoyUploader = require('./vidoy-uploader');
+    const rows = await findVidoyRecords(pend.titleQ, pend.ep);
+    let delFile = 0, delDb = 0, gagal = [];
+    for (const r of rows) {
+      // filecode dari dashboard (https://vidoy.asia/view/<code>) atau link (/e/<code>)
+      let code = null;
+      const dm = String(r.dashboard || '').match(/\/view\/([A-Za-z0-9]+)/);
+      if (dm) code = dm[1];
+      if (!code) { const lm = String(r.link || '').match(/\/e\/([A-Za-z0-9]+)/); if (lm) code = lm[1]; }
+      if (!code) { gagal.push(`ep${r.part} (tidak ada filecode)`); continue; }
+      let okDel = false;
+      try {
+        const res = await VidoyUploader.deleteItem('video', code);
+        if (res && res.ok) { okDel = true; delFile++; }
+        else gagal.push(`ep${r.part} (${(res && res.error) || 'gagal'})`);
+      } catch (err) {
+        gagal.push(`ep${r.part} (${String(err.message).slice(0, 30)})`);
+      }
+      // Record DB hanya dihapus kalau file fisiknya benar-benar terhapus, supaya
+      // tidak pernah ada record yang menunjuk file yang masih ada.
+      if (okDel) delDb += await deleteVidoyRecord(r.media_key, r.kind, r.part);
+    }
+    const withMsg = rows.filter((r) => r.tg_message_id).length;
+    let out = `🗑️ <b>Vidoy dihapus</b>\n\n`
+      + `📁 File terhapus: ${delFile}/${rows.length}\n`
+      + `🗃️ Record DB dihapus: ${delDb}\n`;
+    if (withMsg) out += `⚠️ ${withMsg} pesan Telegram kini ber-link mati (pesan tidak dihapus).\n`;
+    if (gagal.length) out += `\n⚠️ Gagal: ${gagal.slice(0, 6).join(', ')}${gagal.length > 6 ? ' …' : ''}`;
+    return bot.editMessageText(out, { chat_id: chatId, message_id: msgId, parse_mode: 'HTML' }).catch(() => {});
   }
 
   // ─── Replace callbacks ────────────────────────────────────────────────────────
