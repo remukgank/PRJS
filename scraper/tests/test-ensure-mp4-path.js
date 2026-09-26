@@ -97,6 +97,40 @@ function serveFile(file) {
     if (!S.isIosCompatible(destPath)) throw new Error('cek ulang gagal');
   });
 
+  await t('KRITIS: resolveFresh mengembalikan OBJEK → retry tetap jalan', async () => {
+    // Insiden 27 Sep 2026: resolveDirectUrl() balik {url,...}, dipakai apa adanya
+    // → attempt 2 melempar "url.startsWith is not a function" → episode gagal.
+    const buf = fs.readFileSync(tsFile);
+    let hits = 0;
+    const srv = http.createServer((req, res) => {
+      hits++;
+      if (hits === 1) { res.writeHead(500); res.end('boom'); return; }
+      res.writeHead(200, { 'Content-Length': buf.length, 'Content-Type': 'video/mp2t' });
+      res.end(buf);
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const destPath = path.join(TMP, 'retry', 'Ep 01.mp4');
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    try {
+      const hasil = await S.ensureMp4(`http://127.0.0.1:${port}/x.ts`, destPath, {
+        retries: 1,
+        backoffMs: 50,
+        resolveFresh: async () => ({ url: `http://127.0.0.1:${port}/x.ts`, provider: 'lokal' }),
+      });
+      if (hits < 2) throw new Error(`retry tidak terjadi (hits=${hits})`);
+      if (hasil !== destPath) throw new Error('path salah: ' + hasil);
+      S.assertLooksLikeVideo(destPath);
+    } finally { srv.close(); }
+  });
+
+  await t('downloadTo menolak url non-string dengan pesan jelas', async () => {
+    let msg = '';
+    try { await S.downloadTo({ url: 'x' }, path.join(TMP, 'nope.bin')); }
+    catch (e) { msg = e.message; }
+    if (!/url bukan string/.test(msg)) throw new Error('pesan tidak informatif: ' + (msg || '(tanpa error)'));
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

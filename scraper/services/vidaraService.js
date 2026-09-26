@@ -33,6 +33,11 @@ const PROGRESS_MS = 10000; // interval log progres
  * supaya "macet" dan "jalan" bisa dibedakan dari log.
  */
 async function downloadTo(url, destPath, opts = {}) {
+  if (typeof url !== 'string' || !url) {
+    // Bukan TypeError yang membingungkan: pesan ini menunjuk penyebab sesungguhnya
+    // (pemanggil mengoper objek, bukan string).
+    throw new Error(`downloadTo: url bukan string (dapat ${url === null ? 'null' : typeof url})`);
+  }
   const lib = url.startsWith('https:') ? https : http;
   const logCtx = opts.logCtx || {};
   return new Promise((resolve, reject) => {
@@ -387,7 +392,14 @@ async function ensureMp4(url, destPath, opts = {}) {
       if (resolveFresh) {
         try {
           const fresh = await resolveFresh();
-          if (fresh) url = fresh;
+          // resolveDirectUrl() mengembalikan OBJEK { url, provider, ... } sedangkan
+          // resolveVideoUrl() mengembalikan string. Memakai objek apa adanya membuat
+          // downloadTo melempar "url.startsWith is not a function" → percobaan ulang
+          // langsung gagal total (insiden 27 Sep 2026, attempt 2).
+          const u = typeof fresh === 'string' ? fresh
+            : (fresh && typeof fresh.url === 'string' ? fresh.url : null);
+          if (u) url = u;
+          else if (fresh) logger.warn({ ...logCtx, tipe: typeof fresh }, 'resolveFresh tidak mengembalikan URL — memakai URL lama');
         } catch {}
       }
     }

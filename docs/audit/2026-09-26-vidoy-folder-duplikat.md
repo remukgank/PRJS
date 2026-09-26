@@ -756,3 +756,46 @@ Suite penuh: **202 pass / 0 fail**.
 ### Catatan operasional
 File 59,9 MB sempat dipindahkan ulang, tetapi instance sempat berhenti
 (`pm2 stop`, 21:04:57) dan file ikut hilang — Ep 1 harus diunduh ulang.
+
+## U. Retry gagal: objek dipakai sebagai URL (27 Sep 2026)
+
+### Gejala (dari log produksi)
+```
+21:14:37 WARN  attempt 1  err: "download macet — 0 byte selama 21 dtk"
+21:14:54 WARN  attempt 2  err: "url.startsWith is not a function"
+21:15:26 ERROR Anime episode upload gagal  err: "url.startsWith is not a function"
+```
+Watchdog stall bekerja persis seperti dirancang (diketahui macet dalam 21 dtk),
+tetapi **percobaan ulang yang seharusnya memulihkan malah langsung mati**.
+
+### Root cause
+`resolveDirectUrl()` mengembalikan **objek** `{ url, provider, ... }`, bukan
+string. Tiga pemanggil di `bot.js` menulis:
+```js
+resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(...)) || direct.url
+```
+`|| direct.url` hanya dipakai bila hasilnya falsy — objek selalu truthy, jadi
+objek lolos ke `ensureMp4` → `url = fresh` → `downloadTo` →
+`url.startsWith is not a function`.
+
+Catatan: saat verifikasi `f97bf9e` saya memanggil `d.url` secara manual di test
+sehingga lolos; implementasi produksinya tidak. **Verifikasi dihasil, bukan di
+skrip uji yang disusun sendiri.**
+
+### Perbaikan (3 lapis)
+1. `ensureMp4`: normalisasi `fresh` → string bila `fresh.url` ada; selain itu
+   log warn dan tetap pakai URL lama (bukan diam-diam memakai objek).
+2. `bot.js`: 3 pemanggil kini `(...)?.url || direct.url`.
+3. `downloadTo`: tolak di awal dengan pesan jelas
+   `downloadTo: url bukan string (dapat object)` — bukan TypeError membingungkan.
+
+### Verifikasi + bukti test bukan kosong
+`test-ensure-mp4-path.js` tambah 2 kasus: server balas 500 lalu 200 dengan
+`resolveFresh` mengembalikan **objek**; dan `downloadTo` dengan url non-string.
+
+| | hasil |
+|---|---|
+| dengan fix | **7 pass / 0 fail** |
+| **mutasi** (`url = fresh`) | **6 pass / 1 fail** — `downloadTo: url bukan string (dapat object)` |
+
+Suite penuh: **204 pass / 0 fail**.
