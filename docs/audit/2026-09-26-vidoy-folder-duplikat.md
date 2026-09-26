@@ -710,3 +710,49 @@ socket-nya putus.
 Suite penuh: **197 pass / 0 fail** (test-vidoy-uploader 157, media-contract 10,
 btn-style 10, caption-html-escape 6, sam-picker 7, download-stall 7).
 `downloadTo` kini ikut di-export agar bisa diuji nyata.
+
+## T. Hasil konversi nyasar → ENOENT (27 Sep 2026)
+
+### Gejala
+Unduhan Ep 1 Shippuuden selesai dan remux sukses (`remux: mkv→mp4 done (copy)`,
+file 59.989.411 byte, `ftyp` ✓, durasi 1386 s / 23:06, iOS-compatible ✓),
+tetapi episode dilaporkan gagal:
+```
+ERROR: Anime episode upload gagal
+  err: "ENOENT: no such file or directory, stat
+        '.../downloads/anime/Naruto_Shippuuden/ep1/Naruto Shippuuden — Ep 01.mp4'"
+```
+
+### Root cause
+- `remuxToMp4` (downloader.js:243) menulis hasil ke `tempPath(basename+'_remux.mp4')`
+  = **`TMP_DIR` root**, bukan folder input; lalu `cleanupFiles(inputPath)`
+  (baris 267) **menghapus file asli**.
+- `reencodeForIos` juga `fs.unlinkSync(inputPath)`.
+- `ensureMp4` memang mengembalikan path baru — tapi **semua 6 pemanggil
+  membuangnya** (dipakai boolean / `await` tanpa nilai):
+  `handlers/vidoy.js:256`, `services/vidoyService.js:250`,
+  `handlers/vidara.js:80,219,342`, `services/vidaraService.js:405`.
+
+Jadi begitu isi file bukan MP4 asli (`.ts` dari gdriveplayer), hasil remux nyasar
+dan seluruh jalur memakai path lama → ENOENT. Unduhan sukses = episode gagal.
+
+### Perbaikan (satu titik, semua pemanggil ikut benar)
+Di `ensureMp4`: simpan `wanted = destPath` di awal; sebelum return panggil
+`restoreTo(destPath)` yang mengembalikan file ke `wanted` (rename, fallback
+copy+unlink bila lintas filesystem; gagal → log warn + pakai path hasil).
+Keenam pemanggil tidak diubah sehingga tidak ada yang terlewat.
+
+### Verifikasi FUNGSIONAL + bukti test bukan kosong
+`scraper/tests/test-ensure-mp4-path.js` — konten MPEG-TS asli dibuat ffmpeg,
+disajikan server HTTP lokal, `ensureMp4` dipanggil ke destPath `.mp4`:
+
+| | hasil |
+|---|---|
+| dengan fix | **5 pass / 0 fail** |
+| **mutasi** (`return destPath`) | **4 pass / 4 fail** — reproduksi persis produksi: `ensureMp4 balikkan path lain: downloads/Anime — Ep 01_remux.mp4` + `ENOENT` |
+
+Suite penuh: **202 pass / 0 fail**.
+
+### Catatan operasional
+File 59,9 MB sempat dipindahkan ulang, tetapi instance sempat berhenti
+(`pm2 stop`, 21:04:57) dan file ikut hilang — Ep 1 harus diunduh ulang.

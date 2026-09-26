@@ -319,7 +319,35 @@ async function ensureMp4(url, destPath, opts = {}) {
   const backoffMs = opts.backoffMs ?? 15000;
   const resolveFresh = opts.resolveFresh || null;
   const logCtx = opts.logCtx || {};
+  // Path yang diminta pemanggil. remuxToMp4 menulis hasilnya ke TMP_DIR lalu
+  // MENGHAPUS file asli, dan reencodeForIos juga menghapus input — jadi destPath
+  // lokal bisa berpindah tempat. Semua pemanggil mengabaikan nilai balik fungsi
+  // ini (dipakai boolean) dan tetap memakai path lama → ENOENT dan episode gagal
+  // padahal unduhannya sudah sukses. Dikembalikan ke tujuan semula di bawah.
+  const wanted = destPath;
   let lastErr = null;
+
+  /** Pindahkan hasil konversi kembali ke path yang diminta pemanggil. */
+  function restoreTo(actual) {
+    if (!actual || actual === wanted) return actual || wanted;
+    if (!fs.existsSync(actual)) return wanted;
+    try {
+      fs.mkdirSync(path.dirname(wanted), { recursive: true });
+      if (fs.existsSync(wanted)) fs.unlinkSync(wanted);
+      fs.renameSync(actual, wanted);
+      return wanted;
+    } catch (e) {
+      try {
+        fs.copyFileSync(actual, wanted);
+        try { fs.unlinkSync(actual); } catch {}
+        return wanted;
+      } catch (e2) {
+        logger.warn({ ...logCtx, err: e2.message, actual, wanted }, 'gagal memindahkan hasil konversi — memakai path hasil');
+        return actual;
+      }
+    }
+  }
+
   for (let attempt = 1; attempt <= 1 + retries; attempt++) {
     try {
       if (isHlsUrl(url)) {
@@ -350,7 +378,7 @@ async function ensureMp4(url, destPath, opts = {}) {
         if (iosPath) destPath = iosPath;
         assertLooksLikeVideo(destPath);
       }
-      return destPath;
+      return restoreTo(destPath);
     } catch (err) {
       lastErr = err;
       if (attempt > retries) break;
