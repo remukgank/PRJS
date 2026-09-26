@@ -289,3 +289,43 @@ takedown report"*, `extra.type = "copyright"`.
 Validasi file setelah unduh (magic bytes `ftyp` untuk MP4 + ukuran minimum)
 sebelum upload, supaya error-nya *"file hasil unduh bukan video (3.4 KB HTML)"*
 alih-alih pesan PHP dari sisi Vidoy.
+
+## I. KOREKSI: gofile BISA diunduh — header Authorization yang hilang (26 Sep 2026)
+
+### Kesalahan saya sebelumnya
+Saya menyimpulkan "gofile tidak bisa diunduh" karena fetch tanpa header tertentu
+menghasilkan 3358 byte HTML. **Kesimpulan itu salah** — saya tidak menguji dengan
+header `Authorization: Bearer $GOFILE_TOKEN`, padahal `GOFILE_TOKEN` **ada**
+(32 char) dan justru dikirim oleh jalur Telegram.
+
+### Bukti empiris (`store9.gofile.io/.../BlackTorch-01-FULLHD-SAMEHADAKU.CARE.mp4`)
+| Header | Hasil |
+|---|---|
+| `Referer` saja | 3358 byte, HTML `Gofile needs JavaScript to run` |
+| `Referer` + `Authorization: Bearer $GOFILE_TOKEN` | **MP4 asli, magic bytes `ftypisom`** |
+
+### Akar masalah sebenarnya
+Dua jalur mengunduh file gofile dengan cara berbeda:
+
+| Jalur | Fungsi | Header gofile | Hasil |
+|---|---|---|---|
+| Telegram (`target=tg`) | `handleGofileUrl` → `downloadWithAria2c(..., extraHeaders, ...)` | `Referer` + `Authorization: Bearer` ✅ | MP4 |
+| Vidoy (`target!=tg`) | `actionAnimeEpisode` → `ensureMp4` → `downloadTo` (`services/vidaraService.js:17`) | **hanya `User-Agent`** ❌ | HTML 3 KB → ditolak Vidoy |
+
+Jadi pesan `Vidoy CDN status invalid ... explode(): Passing null` adalah gejala
+file HTML, bukan masalah server Vidoy.
+
+### Perbaikan
+`downloadTo()` mendeteksi host toko gofile
+(`^((cold|store|file)[\w-]*)\.gofile\.io$`) lalu menambah
+`Referer: https://gofile.io/` + `Authorization: Bearer $GOFILE_TOKEN`.
+
+### Verifikasi end-to-end
+`ensureMp4()` ke link gofile Black Torch Ep 1 → file tumbuh normal, magic bytes
+`"....ftypisom...."`, MP4 valid. `test-vidoy-uploader` **133 pass** (+3 tes),
+suite lain 0 fail.
+
+### Catatan
+Episode 1 & 3 tetap perlu mirror lain: file-nya **di-takedown copyright** di
+pixeldrain. gofile bisa dibaca setelah header di atas, tapi ketersediaannya
+bergantung pada mirror.
