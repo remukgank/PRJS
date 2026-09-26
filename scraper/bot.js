@@ -3564,9 +3564,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
             try {
               const direct = await _downloadHandlers.resolveDirectUrl(servers[server]);
               if (!direct) { lastErr = 'gagal resolve link file'; rp.updateEpisode(key, 'fail', `${server}: ${lastErr}`); continue; }
-              const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
-                target, title, ep: e.ep, sameInfo, directUrl: direct.url, episodeUrl: e.url, silent: true,
-              });
+                const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+                  target, title, ep: e.ep, sameInfo, directUrl: direct.url, episodeUrl: e.url, silent: true,
+                  resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(servers[server])) || direct.url,
+                });
               if (res && res.error) { lastErr = res.error; rp.updateEpisode(key, 'fail', `${server}: ${String(res.error).slice(0, 40)}`); continue; }
               r = { ok: true, sizeMb: null, link: res && res.vidoy && res.vidoy.link, summary: res && res.summary };
               break;
@@ -3767,6 +3768,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
         target, title: animeTitle, ep: animeEp, sameInfo: sameInfoG,
         directUrl: direct.url, episodeUrl: episodeUrlG,
+        resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(fileUrlG)) || direct.url,
       });
       if (res && res.error) {
         return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});
@@ -4254,6 +4256,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
       target, title: animeTitle, ep: animeEp, sameInfo: null,
       directUrl: direct.url, episodeUrl: url,
+      resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(url)) || direct.url,
     });
     if (res && res.error) {
       return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});

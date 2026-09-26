@@ -613,3 +613,41 @@ dari Vidoy supaya bisa di-upload ulang dengan benar.
 `test-vidoy-uploader` **155 pass** (+3), suite lain 0 fail.
 Juga: record basi Naruto Shippuuden Ep 1 (link ke file yang sudah dihapus user)
 sudah dibersihkan → run berikutnya akan upload ulang dengan file MP4 benar.
+
+## R. Retry download gagal karena resolveFresh tidak re-resolve (27 Sep 2026)
+
+### Gejala
+Download Shippuden sangat lama lalu gagal. Log:
+```
+WARN: ensureMp4 gagal — retry dengan URL fresh  attempt: 1
+  err: "unduhan bukan video — dapat HTML (92403 byte)"
+```
+
+### Root cause
+`actionAnimeEpisode` mengoper `resolveFresh: async () => directUrl` — yaitu
+**URL yang sama persis**. Padahal gdriveplayer memberi URL ber-token yang
+**berubah tiap resolve** dan cepat kedaluwarsa. Terbukti:
+| resolve | token |
+|---|---|
+| ke-1 | `t=RXk2afk9gQjxmwDmMA` |
+| ke-2 | `t=uSNhz9ZfhY0uDipH99` |
+(token sama kadaluarsa → HTML 92 KB)
+
+Jadi retry 3x + backoff 15s/30s = **selalu gagal** dan terasa lama.
+
+### Perbaikan
+`actionAnimeEpisode` kini menerima `opts.resolveFreshDirectUrl` dan
+`ensureMp4` memakai hasilnya (fallback ke `directUrl` bila tidak diberi).
+Tiga pemanggil (batch anime, `sam_go`, `dl_go`) mengirim resolver yang
+re-resolve provider URL → dapat token baru.
+
+### Verifikasi
+- Download 57,2 MB sukses → `ftyp` MP4, remux dari `container: ts` ✓
+- re-resolve terpakai 2x selama percobaan
+- `test-vidoy-uploader` **157 pass** (+2), suite lain 0 fail
+- Sekalian: test detektor "fungsi tak terdefinisi" salah mengira `async () =>`
+  sebagai pemanggilan fungsi → kata kunci `async` ditambahkan ke pengecualian
+
+### Catatan soal kecepatan
+Sisa lamaanya itu **batas server**, bukan kode: 57 MB butuh 205 dtk
+(±280 KB/s) pada percobaan ini, tergantung kondisi (200-900 KB/s terukur).

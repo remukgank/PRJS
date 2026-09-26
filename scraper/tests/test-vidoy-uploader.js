@@ -478,6 +478,32 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── KRITIS: retry harus RE-RESOLVE, bukan pakai URL basi ────────────────────
+// gdriveplayer memberi URL ber-token yang berubah tiap resolve. Dulu
+// resolveFresh mengembalikan directUrl yang SAMA → retry mustahil, 3x gagal
+// + backoff → terasa "lama" tanpa pernah berhasil.
+t('actionAnimeEpisode: resolveFresh mewarisi resolveFreshDirectUrl', () => {
+  const V = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  if (!/opts\.resolveFreshDirectUrl/.test(V)) throw new Error('tidak membaca opts.resolveFreshDirectUrl');
+  if (!/resolveFresh: async \(\) => \(await reResolve\(\)\) \|\| directUrl/.test(V)) {
+    throw new Error('resolveFresh harus memakai hasil re-resolve');
+  }
+  if (/resolveFresh: async \(\) => directUrl \}/.test(V)) {
+    throw new Error('masih memakai URL lama → retry tidak berguna');
+  }
+});
+
+t('semua pemanggil actionAnimeEpisode lewat non-TG memberi resolveFreshDirectUrl', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const n = (B.match(/resolveFreshDirectUrl: async \(\) => \(await _downloadHandlers\.resolveDirectUrl\(/g) || []).length;
+  if (n < 3) throw new Error('panggil anime (batch, sam_go, dl_go) harus semua memberi re-resolve: ' + n);
+  // tidak boleh meniru bug: mengembalikan direct.url apa adanya
+  if (/resolveFreshDirectUrl: async \(\) => direct\.url/.test(B)) {
+    throw new Error('resolveFreshDirectUrl wajib re-resolve provider, bukan mengembalikan direct.url');
+  }
+});
+
+
 // ── REGRESSION: !vdell hapus file VIDOY (bukan library) ─────────────────────
 t('!vdell ada: parsing judul + ep opsional + konfirmasi', () => {
   const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
@@ -1412,7 +1438,7 @@ t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () 
     .replace(/\/\/[^\n]*/g, ' ');                  // buang komentar baris
   // hanya bare call: nama yang TIDAK didahului titik
   const bare = [...body.matchAll(/(^|[^.\w$])([a-z][A-Za-z0-9_]{2,})\s*\(/g)].map((m) => m[2]);
-  for (const kw of ['for', 'if', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'do', 'else']) {
+  for (const kw of ['for', 'if', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'do', 'else', 'async', 'function', 'catch']) {
     METHODS.add(kw);
   }
   const missing = [...new Set(bare)].filter((n) => !known.has(n) && !METHODS.has(n));

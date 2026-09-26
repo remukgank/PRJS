@@ -234,11 +234,20 @@ async function actionAnimeEpisode(chatId, opts) {
   try {
     fs.mkdirSync(outDir, { recursive: true });
     const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
-    if (!fs.existsSync(destPath)) {
-      p.update('⬇️ download');
-      const ok = await ensureMp4(directUrl, destPath, { resolveFresh: async () => directUrl });
-      if (!ok) throw new Error('gagal mengunduh video');
-    }
+      if (!fs.existsSync(destPath)) {
+        p.update('⬇️ download');
+        // resolveFresh WAJIB re-resolve, bukan memakai ulang directUrl: beberapa
+        // provider (gdriveplayer) memberi URL ber-token yang berubah tiap resolve
+        // dan cepat kedaluwarsa. Retry dengan URL sama = MUSTAHILH (percobaan
+        // selalu balas HTML 92 KB → 3× gagal + backoff, terasa "lama").
+        const reResolve = typeof opts.resolveFreshDirectUrl === 'function'
+          ? opts.resolveFreshDirectUrl
+          : async () => directUrl;
+        const ok = await ensureMp4(directUrl, destPath, {
+          resolveFresh: async () => (await reResolve()) || directUrl,
+        });
+        if (!ok) throw new Error('gagal mengunduh video');
+      }
     if (needVidoy) {
       p.update('📤 upload Vidoy');
       const res = await vidoyService.uploadSingle({
