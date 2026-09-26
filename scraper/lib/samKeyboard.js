@@ -1,5 +1,7 @@
 'use strict';
 
+const BTN = require('./btn');
+
 // Pembuat keyboard picker episode Samehadaku yang PAGED.
 // Telegram memotong keyboard >100 tombol → default 20 ep/halaman (5 baris × 4)
 // sehingga total tombol per halaman selalu ≤ 25 (batch 1 + ep 20 + nav) < 100.
@@ -20,10 +22,12 @@ function buildPicker(eps, { urlId, page = 0, pageSize = 20, done = new Set(), mk
   const doneCount = eps.filter((e) => done.has(Number(e.ep))).length;
   const missing = eps.length - doneCount;
   const keyboard = [];
-  keyboard.push([{
-    text: missing > 0 ? `⬇️ Download Semua (${missing})` : '✅ Semua episode sudah di library',
-    callback_data: `${prefix}_all:${urlId}`,
-  }]);
+  // Aksi utama layar ini (primary). Kalau semua episode sudah ada, tombolnya
+  // mati (disabled) — bukan disembunyikan, supaya user paham statusnya.
+  const allDone = missing <= 0;
+  keyboard.push([allDone
+    ? BTN.btnOff(`✅ Semua episode sudah di library`)
+    : BTN.btn(`⬇️ Download Semua (${missing})`, `${prefix}_all:${urlId}`, 'primary')]);
   for (let i = 0; i < slice.length; i += 5) {
     keyboard.push(slice.slice(i, i + 5).map((e) => mkEp(e)));
   }

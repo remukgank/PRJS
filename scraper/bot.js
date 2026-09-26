@@ -2710,10 +2710,10 @@ bot.on('message', safeHandler('message')(async (msg) => {
       const caption = `📺 <b>Samehadaku ${quality}</b>\n\nPilih server untuk download:`;
       const urlId = cacheUrl(text);
       const keyboard = [
-        ...(servers.gofile ? [[{ text: `⬇️ Gofile (${quality})`, callback_data: `sam_dl:gofile:${urlId}` }]] : []),
-        ...(servers.krakenfiles ? [[{ text: `⬇️ Krakenfiles (${quality})`, callback_data: `sam_dl:krakenfiles:${urlId}` }]] : []),
-        ...(servers.pixeldrain ? [[{ text: `⬇️ Pixeldrain (${quality})`, callback_data: `sam_dl:pixeldrain:${urlId}` }]] : []),
-        ...(servers.filedon ? [[{ text: `⬇️ Filedon (${quality})`, callback_data: `sam_dl:filedon:${urlId}` }]] : []),
+        ...(servers.gofile ? [[BTN.btn(`⬇️ Gofile (${quality})`, `sam_dl:gofile:${urlId}`, 'success')]] : []),
+        ...(servers.krakenfiles ? [[BTN.btn(`⬇️ Krakenfiles (${quality})`, `sam_dl:krakenfiles:${urlId}`, 'success')]] : []),
+        ...(servers.pixeldrain ? [[BTN.btn(`⬇️ Pixeldrain (${quality})`, `sam_dl:pixeldrain:${urlId}`, 'success')]] : []),
+        ...(servers.filedon ? [[BTN.btn(`⬇️ Filedon (${quality})`, `sam_dl:filedon:${urlId}`, 'success')]] : []),
       ];
       if (statusMsg) {
         return bot.editMessageText(caption, {
@@ -3198,7 +3198,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const urlId = cacheUrl(episodeUrl);
       const labelOf = (k) => k.charAt(0).toUpperCase() + k.slice(1);
       const keyboard = Object.entries(servers || {}).map(([k, url]) => [
-        { text: `⬇️ ${labelOf(k)} (${quality})`, callback_data: `sam_dl:${k}:${urlId}` },
+        BTN.btn(`⬇️ ${labelOf(k)} (${quality})`, `sam_dl:${k}:${urlId}`, 'success'),
       ]);
       if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       const epInfoBack = parseSamehadakuEpisode(episodeUrl);
