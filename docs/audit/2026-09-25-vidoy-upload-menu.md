@@ -640,3 +640,54 @@ Konsekuensi yang sudah disepakati:
 
 Referensi: §20 (bug kolom pointer) — duplikat Telegram di situ **diizinkan**,
 yang tidak boleh terjadi hanya duplikat di Vidoy.
+
+## 22. REGRESI: season merusak slug library (26 Sep 2026)
+
+### Gejala
+User: "deteksi yang udah masuk juga gak work kenapa jadi hancur total logikaku
+setelah penambahan vidoy".지 Anime bergaya URL `-season-N`/`-part-N` tidak lagi
+terdeteksi "sudah masuk" di library.
+
+### Akar masalah
+`bot.js:1818` `samehadakuAnimeSlug()` menyusun slug library dari judul + season:
+```js
+const base = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
+```
+Luego saya mengubah `parseSamehadakuEpisode`/`parseSamehadakuAnime` supaya
+**judul ikut memuat** season (`-season-4` → "… S4"). Akibatnya season ditambahkan
+**dua kali**:
+
+| URL | slug sebelum | slug setelah (rusak) |
+|---|---|---|
+| `naruto-kecil` | `anime:naruto-kecil` | sama ✓ |
+| `…-s3` (format situs) | `anime:…-s3` | sama ✓ |
+| `…-season-4` | `anime:…-s4` | **`anime:…-s4-s4`** ❌ |
+| `…-season-2-part-2` | `anime:…-s2-p2` | **`anime:…-s2-p2-s2-p2`** ❌ |
+
+Slug berbeda → part yang sudah tersimpan tidak ketemu → unduhan ulang & library
+terpecah. Data di DB diverifikasi **tidak rusak** (0 slug terduplikasi dari 146).
+
+### Perbaikan
+- Parser **kembali** ke perilaku semula: judul polos, `season`/`part` di field
+  terpisah. `samehadakuAnimeSlug` tidak berubah lagi.
+- Suffix season untuk **folder/nama file/mediaKey Vidoy** dipindah ke
+  `handlers/vidoy.js` lewat `withSeasonSuffix(title, season, part)` yang
+  **idempoten** (tidak menghasilkan "S4 S4").
+
+### Tes (7 assertion baru)
+- 4 kasus slug library harus identik dengan sebelum perubahan
+- judul parser harus polos + season di field terpisah
+- `withSeasonSuffix` idempoten (dipanggil 2x tetap 1 suffix)
+- `actionAnimeEpisode` wajib memakai `vidoyTitle` untuk mediaKey & nama file
+- 3 test lama yang mengunci perilaku salah dikoreksi
+
+`test-vidoy-uploader` 110 pass, 0 fail. `test-media-contract` 10,
+`test-html-safety` 22, `test-samehadaku-parse-ep1` 14,
+`test-samehadaku-slugtail-fallbacks` 28, `test-samehadaku-movie-link` 15,
+`test-anime-topic-router` 18, `test-libmenu-grid` 14, `test-btn-style` 10,
+`test-caption-html-escape` 6 — 0 fail.
+
+### Pelajaran
+Perubahan pada parser yang dipakai banyak jalur harus dicek terhadap **semakipemanggil**
+terutama yang menyusun slug/kunci DB. Regresi ini hanya terlihat setelah-user,
+karena simulasi saya tidak memeriksa slug library.

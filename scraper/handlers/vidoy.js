@@ -202,6 +202,8 @@ async function actionAnimeEpisode(chatId, opts) {
   const needVidoy = target === 'vyt' || target === 'vv';
   const needVidara = target === 'vt' || target === 'vv';
   const needTg = target === 'tg' || target === 'vt' || target === 'vyt';
+  // Judul Vidoy (folder + nama file + mediaKey) memakai suffix season/part.
+  const vidoyTitle = withSeasonSuffix(title, sameInfo && sameInfo.season, sameInfo && sameInfo.part);
   if (needVidoy && !V.isConfigured()) {
     return silent
       ? { vidoy: null, vidara: null, tg: false, error: 'VIDOY_USERNAME/PASSWORD belum diset' }
@@ -221,14 +223,14 @@ async function actionAnimeEpisode(chatId, opts) {
     }
     _ctx.vidaraBusy.set(busyKey, true);
   }
-  const outDir = path.join(TMP_DIR, 'anime', String(title || 'anime').replace(/[^\w-]+/g, '_'), `ep${ep}`);
+  const outDir = path.join(TMP_DIR, 'anime', String(vidoyTitle || 'anime').replace(/[^\w-]+/g, '_'), `ep${ep}`);
   const p = silent
     ? { update() {}, done: async () => {}, fail: async () => {} }
     : await new _ctx.Progress(chatId, `Anime Ep ${ep} — ${targetLabel(target)}`).start();
   const out = { vidoy: null, vidara: null, tg: false, error: null };
   try {
     fs.mkdirSync(outDir, { recursive: true });
-    const destPath = path.join(outDir, `${V.sanitizeFolderName(title || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
+    const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
     if (!fs.existsSync(destPath)) {
       p.update('⬇️ download');
       const ok = await ensureMp4(directUrl, destPath, { resolveFresh: async () => directUrl });
@@ -237,7 +239,7 @@ async function actionAnimeEpisode(chatId, opts) {
     if (needVidoy) {
       p.update('📤 upload Vidoy');
       const res = await vidoyService.uploadSingle({
-        kind: 'anime', mediaKey: String(title), title: String(title), ep, episodeUrl, outDir,
+        kind: 'anime', mediaKey: String(vidoyTitle), title: String(vidoyTitle), ep, episodeUrl, outDir,
         onProgress: (pc) => p.update(`📤 upload Vidoy ${pc}%`),
       });
       if (!res.ok) throw new Error(res.error || 'Vidoy upload gagal');
@@ -277,9 +279,9 @@ async function actionAnimeEpisode(chatId, opts) {
       const msgId = sent && (sent.message_id || (sent.result && sent.result.message_id));
       if (msgId && out.vidoy) {
         const num = Number(ep) || 0;
-        await db.setVidoyTelegramPointer(String(title), 'anime', num, chatId, msgId).catch(() => {});
+        await db.setVidoyTelegramPointer(String(vidoyTitle), 'anime', num, chatId, msgId).catch(() => {});
         await db.saveVidoyUpload({
-          mediaKey: String(title), kind: 'anime', part: num, epStart: num, epEnd: num, title,
+          mediaKey: String(vidoyTitle), kind: 'anime', part: num, epStart: num, epEnd: num, title: vidoyTitle,
           folderId: out.vidoy.folderId, folderUrl: out.vidoy.folderUrl, link: out.vidoy.link,
           dashboard: out.vidoy.dashboard, tgChatId: chatId, tgMessageId: msgId,
           provider: animeProvider, caption,
@@ -302,6 +304,20 @@ async function actionAnimeEpisode(chatId, opts) {
     _ctx.vidaraBusy.delete(busyKey);
     try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+  return out;
+}
+
+// Judul untuk folder/nama file/mediaKey Vidoy: judul + suffix season/part
+// bentuk pendek (S4 / P2) supaya Season 3 & Season 4 tidak saling menimpa.
+// IDEMPOTEN: kalau pemanggil sudah menyertakan suffix-nya, tidak ditambahkan
+// lagi (mencegah "… S4 S4"). Parser samehadaku sengaja TIDAK menaruh season
+// di judul karena itu akan merusak slug library.
+function withSeasonSuffix(title, season, part) {
+  let out = String(title || '').trim();
+  const s = Number(season) || 0;
+  const p = Number(part) || 0;
+  if (s && !new RegExp(`\\sS${s}(?:$|\\s)`).test(out)) out += ` S${s}`;
+  if (p && !new RegExp(`\\sP${p}(?:$|\\s)`).test(out)) out += ` P${p}`;
   return out;
 }
 
@@ -351,6 +367,7 @@ function targetLabel(target) {
 module.exports = {
   initVidoy,
   buildCaption,
+  withSeasonSuffix,
   replaceLinkLine,
   partEpisodeLabel,
   shortLinkLabel,

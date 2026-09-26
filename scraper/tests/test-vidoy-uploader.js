@@ -477,6 +477,57 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: season TIDAK boleh merusak slug library ─────────────────────
+t('KRITIS: parser TIDAK menaruh season/part di judul (slug library utuh)', () => {
+  const P = require('../providers/samehadaku');
+  const { sanitizeSlug } = require('../lib/parser');
+  const slugOf = (u) => {
+    const i = P.parseSamehadakuAnime(u);
+    if (!i) return null;
+    return 'anime:' + sanitizeSlug(`${i.title}${i.season ? ' S' + i.season : ''}${i.part ? ' P' + i.part : ''}`);
+  };
+  const cases = [
+    ['naruto-kecil', 'anime:naruto-kecil'],
+    ['tensei-shitara-slime-datta-ken-s3', 'anime:tensei-shitara-slime-datta-ken-s3'],
+    ['tensei-shitara-slime-datta-ken-season-4', 'anime:tensei-shitara-slime-datta-ken-s4'],
+    ['tensei-shitara-slime-datta-ken-season-2-part-2', 'anime:tensei-shitara-slime-datta-ken-s2-p2'],
+  ];
+  for (const [slug, want] of cases) {
+    const got = slugOf('https://v2.samehadaku.how/anime/' + slug + '/');
+    if (got !== want) throw new Error(`slug berubah untuk ${slug}:\n     dapat  ${got}\n     harus ${want}`);
+  }
+  // season tetap terbaca di field terpisah
+  const info = P.parseSamehadakuEpisode('https://v2.samehadaku.how/anime/x-season-4-episode-1/');
+  if (info.title !== 'X') throw new Error('judul harus polos, dapat: ' + info.title);
+  if (info.season !== 4) throw new Error('season harus terpisah, dapat: ' + info.season);
+});
+
+t('KRITIS: withSeasonSuffix idempoten (tidak jadi "S4 S4")', () => {
+  const w = vidoyHandlers.withSeasonSuffix;
+  const a = w('Tensei Shitara Slime Datta Ken', 4, null);
+  if (a !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('suffix season salah: ' + a);
+  if (w(a, 4, null) !== a) throw new Error('tidak idempoten: ' + w(a, 4, null));
+  if (w('Tensei Shitara Slime Datta Ken S2 P2', 2, 2) !== 'Tensei Shitara Slime Datta Ken S2 P2') {
+    throw new Error('sufiks yang sudah ada digandakan');
+  }
+  if (w('Naruto Kecil', null, null) !== 'Naruto Kecil') throw new Error('tanpa season harus tetap polos');
+  if (w('X', 2, 2) !== 'X S2 P2') throw new Error('season+part salah');
+  if (w('X S3', 3, null) !== 'X S3') throw new Error('season sama harus idempoten');
+});
+
+t('KRITIS: actionAnimeEpisode memakai vidoyTitle (season ikut) untuk folder & mediaKey', () => {
+  const src = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  const i = src.indexOf('async function actionAnimeEpisode');
+  const body = src.slice(i, src.indexOf('\n}\n', i));
+  if (!/withSeasonSuffix\(title, sameInfo && sameInfo\.season/.test(body)) {
+    throw new Error('vidoyTitle tidak disusun dari season');
+  }
+  if (!/mediaKey: String\(vidoyTitle\)/.test(body)) throw new Error('mediaKey harus vidoyTitle');
+  if (/mediaKey: String\(title\)/.test(body)) throw new Error('masih pakai title polos untuk mediaKey');
+  if (!/sanitizeFolderName\(vidoyTitle/.test(body)) throw new Error('nama file harus pakai vidoyTitle');
+});
+
+
 t('KRITIS: listVidoyUploads WAJIB mengambil tg_chat_id & tg_message_id', () => {
   const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
   const i = src.indexOf('async function listVidoyUploads');
@@ -916,20 +967,30 @@ t('anime season: kedua gaya slug → judul SINGKAT & BERBEDA (S3 vs S4)', () => 
   if (s3.title !== 'Tensei Shitara Slime Datta Ken S3') throw new Error('gaya -s3 salah: ' + s3.title);
   if (s4.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('gaya -s4 salah: ' + s4.title);
   if (s3.title === s4.title) throw new Error('S3 & S4 judul sama → akan menimpa file');
-  // gaya -season-N harus jadi SINGKAT juga, bukan "Season 4"
+  // gaya -season-N: judul HARUS polos (season di field terpisah) supaya slug
+  // library tidak terduplikasi; pembeda season disusun di handlers/vidoy.js
   const l4 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-season-4'));
   const l3 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-season-3'));
-  if (l4.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('gaya -season-4 harus jadi "S4": ' + l4.title);
-  if (l3.title === l4.title) throw new Error('season-3 & season-4 judul sama');
-  if (/Season\s/i.test(l4.title)) throw new Error('label panjang "Season" tidak boleh: ' + l4.title);
+  if (l4.title !== 'Tensei Shitara Slime Datta Ken') throw new Error('gaya -season-4 judul harus polos: ' + l4.title);
+  if (l4.season !== 4) throw new Error('season harus di field season: ' + l4.season);
+  if (l3.season !== 3) throw new Error('season salah: ' + l3.season);
 });
 
-t('anime season+part: "S2 P2" singkat, kedua gaya sama', () => {
+t('anime season+part: dua gaya slug menghasilkan SLUG YANG SAMA', () => {
+  const { sanitizeSlug } = require('../lib/parser');
   const u = (slug) => 'https://v2.samehadaku.how/anime/' + slug + '-episode-2/';
+  const slugOf = (i) => 'anime:' + sanitizeSlug(`${i.title}${i.season ? ' S' + i.season : ''}${i.part ? ' P' + i.part : ''}`);
   const a = SA.parseSamehadakuEpisode(u('naruto-kecil-s2-p2'));
-  const b = SA.parseSamehadakuEpisode(u('naruto-kecil-season-2-part-2'));
-  if (a.title !== 'Naruto Kecil S2 P2') throw new Error('gaya -s2-p2 salah: ' + a.title);
-  if (b.title !== a.title) throw new Error('dua gaya beda: "' + a.title + '" vs "' + b.title + '"');
+  const c = SA.parseSamehadakuEpisode(u('naruto-kecil-season-2-part-2'));
+  // Gaya "-s2-p2": season/part sudah jadi kata di judul, season/part = null
+  if (a.title !== 'Naruto Kecil S2 P2') throw new Error('judul gaya -s2-p2: ' + a.title);
+  if (a.season !== null || a.part !== null) throw new Error('gaya -s2-p2 tidak boleh punya season/part');
+  // Gaya "-season-2-part-2": season/part di field terpisah
+  if (c.title !== 'Naruto Kecil') throw new Error('judul gaya -season-2-part-2 harus polos: ' + c.title);
+  if (c.season !== 2 || c.part !== 2) throw new Error('season/part tidak terbaca: ' + JSON.stringify([c.season, c.part]));
+  // WAJIB menghasilkan slug yang sama
+  if (slugOf(a) !== slugOf(c)) throw new Error(`slug beda: ${slugOf(a)} vs ${slugOf(c)}`);
+  if (slugOf(a) !== 'anime:naruto-kecil-s2-p2') throw new Error('slug salah: ' + slugOf(a));
 });
 
 t('anime tanpa season/part: judul polos, season tetap null', () => {
@@ -937,7 +998,8 @@ t('anime tanpa season/part: judul polos, season tetap null', () => {
   if (r.title !== 'Naruto Kecil') throw new Error('judul polos berubah: ' + r.title);
   if (r.season !== null) throw new Error('season harus null');
   const m = SA.parseSamehadakuAnime('https://v2.samehadaku.how/anime/tensei-shitara-slime-datta-ken-season-4/');
-  if (m.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('parseSamehadakuAnime: ' + m.title);
+  if (m.title !== 'Tensei Shitara Slime Datta Ken') throw new Error('parseSamehadakuAnime judul harus polos: ' + m.title);
+  if (m.season !== 4) throw new Error('parseSamehadakuAnime season: ' + m.season);
 });
 
 t('anime judul: tidak ada spasi ganda / huruf kecil pada sufiks season', () => {
