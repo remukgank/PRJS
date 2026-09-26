@@ -477,6 +477,47 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: deteksi "sudah ada" di picker = library ∪ Telegram ─────────
+t('KRITIS: episodeStatusMap menggabungkan library + Telegram', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('async function episodeStatusMap');
+  if (i < 0) throw new Error('episodeStatusMap tidak ada');
+  let d = 0, j = BOT.indexOf('{', i);
+  for (let k = j; k < BOT.length; k++) { if (BOT[k] === '{') d++; else if (BOT[k] === '}') { d--; if (!d) { j = k; break; } } }
+  const code = BOT.slice(i, j + 1);
+  const f = new Function('listPartsWithFile', 'listVidoyUploads', code + '\nreturn episodeStatusMap;')(
+    async () => ([{ part: 1 }, { part: 2 }]),
+    async () => ([
+      { part: 2, link: 'l2', tg_chat_id: -100, tg_message_id: 5 },
+      { part: 3, link: 'l3', tg_chat_id: -100, tg_message_id: 6 },
+      { part: 4, link: 'l4', tg_chat_id: null, tg_message_id: null },
+    ]),
+  );
+  return f('anime:x', 'X').then((m) => {
+    assert.strictEqual(m.get(1).lib, true, 'Ep1 harus lib');
+    assert.strictEqual(m.get(1).tg, false);
+    assert.strictEqual(m.get(2).lib, true, 'Ep2 ada di library DAN telegram');
+    assert.strictEqual(m.get(2).tg, true);
+    assert.strictEqual(m.get(3).lib, false);
+    assert.strictEqual(m.get(3).tg, true, 'Ep3 hanya Telegram');
+    assert.strictEqual(m.get(4).tg, false, 'Ep4 pointer kosong → belum terkirim');
+    assert.strictEqual(m.get(4).link, 'l4', 'link tetap diambil walau pointer kosong');
+    assert.strictEqual(m.has(5), false);
+  });
+});
+
+t('KRITIS: picker memakai status gabungan (bukan hanya library)', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const calls = (BOT.match(/await episodeStatusMap\(/g) || []).length;
+  if (calls < 2) throw new Error('kedua picker (samehadaku & kuronime) harus memakai episodeStatusMap: ' + calls);
+  if (!/if \(st\.lib \|\| st\.tg\) done\.add\(ep\)/.test(BOT)) throw new Error('done harus union lib ∪ tg');
+  if ((BOT.match(/📨 \$\{e\.ep\}/g) || []).length < 2) throw new Error('label 📨 (Telegram) di kedua picker');
+  // picker lama (hanya listPartsWithFile) tidak boleh lagi jadi sumber tunggal
+  const oldStyle = (BOT.match(/const rows = await listPartsWithFile\(slug\);\s*\n\s*for \(const r of rows \|\| \[\]\) done\.add/g) || []).length;
+  if (oldStyle > 0) throw new Error('masih ada picker yang hanya membaca library');
+});
+
+
 // ── REGRESSION: season TIDAK boleh merusak slug library ─────────────────────
 t('KRITIS: parser TIDAK menaruh season/part di judul (slug library utuh)', () => {
   const P = require('../providers/samehadaku');

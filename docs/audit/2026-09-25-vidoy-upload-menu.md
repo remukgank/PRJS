@@ -691,3 +691,40 @@ terpecah. Data di DB diverifikasi **tidak rusak** (0 slug terduplikasi dari 146)
 Perubahan pada parser yang dipakai banyak jalur harus dicek terhadap **semakipemanggil**
 terutama yang menyusun slug/kunci DB. Regresi ini hanya terlihat setelah-user,
 karena simulasi saya tidak memeriksa slug library.
+
+## 23. Deteksi "sudah ada" di menu picker = library ∪ Telegram (26 Sep 2026)
+
+### Permintaan user
+"semua wajib ada tidak boleh ada yang bolong, dan di menu itu buat deteksi yang
+sudah ada di Telegram."
+
+### Fakta sebelum perubahan
+Picker episode menandai episode dari **library saja**:
+`bot.js` → `listPartsWithFile(slug)` → `SELECT … FROM media_parts WHERE file_id IS NOT NULL`.
+Jalur upload Vidoy anime **tidak pernah** menulis `media_parts` (0 kemunculan
+`media_parts`/`savePartFileId` di `handlers/vidoy.js` & `services/vidoyService.js`).
+Akibatnya 62 episode Naruto yang sudah terkirim ke Telegram tetap terlihat "belum
+ada" di menu, dan `Download Semua` menghitung 220.
+
+### Perubahan
+- `episodeStatusMap(slug, vidoyTitle)` — sumber gabungan:
+  `lib` dari `media_parts`, `tg` dari `vidoy_uploads` (hanya bila pointer
+  `tg_chat_id` + `tg_message_id` masih tersimpan), `link` selalu diambil.
+  Kunci/library: `anime:<slug>`; kunci Vidoy: judul (`"Naruto Kecil"`).
+- Kedua picker (samehadaku & kuronime) memakai `done = lib ∪ tg`.
+- Label tombol episode: `✅ N` (di library) · `📨 N` (di Telegram saja) ·
+  `Ep N` (belum). Caption picker menyebut jumlah keduanya.
+- Tidak ada penulisan ke `media_parts` dari jalur Vidoy (mempertahankan
+  pemisahan: library = penyimpanan library; Vidoy = status pengiriman).
+
+### Verifikasi
+Uji nyata ke DB untuk `anime:naruto-kecil` / `Naruto Kecil`:
+```
+✅ library       : 0
+📨 Telegram saja: 62
+belum            : 158  (43 di antaranya sudah ada di Vidoy, pointer sengaja dikosongkan)
+contoh Ep 18     : { lib: false, tg: false, link: 'https://vski.cc/e/8hn3e2ok9ulw' }
+```
+`test-vidoy-uploader` 112 pass (+2 tes), `test-media-contract` 10,
+`test-btn-style` 10, `test-anime-topic-router` 18, `test-sam-*` exit 0,
+`test-libmenu-grid` 14 — 0 fail.

@@ -1038,6 +1038,38 @@ function batchTargetLabel(target) {
 // pointer Telegram-nya kosong = video-nya hilang di Telegram (user menghapusnya)
 // → hanya itu yang perlu dikirim ulang. Yang link + pointer-nya lengkap dilewati
 // total (tidak diunduh, tidak dikirim) supaya tidak sia-sia.
+// Status "sudah ada" per episode untuk picker episode.
+// Sumber GABUNGAN: media_parts (library) + vidoy_uploads (sudah dikirim ke
+// Telegram lewat jalur Vidoy). Tanpa ini, episode yang sudah ada di Telegram
+// tapi dikirim lewat jalur Vidoy tetap terlihat "belum ada" di menu.
+//   lib = ada di library · tg = ada di Telegram (pointer pesan tersimpan)
+// vidoyTitle = kunci vidoy_uploads (judul), slug = kunci library (media_parts).
+async function episodeStatusMap(slug, vidoyTitle) {
+  const map = new Map();
+  const set = (part, patch) => {
+    const n = Number(part);
+    if (!Number.isFinite(n)) return;
+    const prev = map.get(n) || { lib: false, tg: false, link: null };
+    map.set(n, Object.assign(prev, patch));
+  };
+  const libKey = String(slug || '').startsWith('anime:') ? String(slug) : 'anime:' + String(slug || '');
+  const vidoyKey = String(vidoyTitle || slug || '');
+  const [libRows, vRows] = await Promise.all([
+    listPartsWithFile(libKey).catch(() => []),
+    listVidoyUploads(vidoyKey, 'anime').catch(() => []),
+  ]);
+  for (const r of libRows || []) set(r.part, { lib: true });
+  for (const r of vRows || []) {
+    const prev = map.get(Number(r.part)) || {};
+    set(r.part, {
+      link: r.link || prev.link || null,
+      // "sudah ada di Telegram" hanya bila pointer pesannya masih tersimpan
+      tg: !!(r.tg_chat_id && r.tg_message_id),
+    });
+  }
+  return map;
+}
+
 async function animeDoneMap(mediaKey) {
   const map = new Map();
   const rows = await listVidoyUploads(String(mediaKey), 'anime').catch(() => []);
@@ -1833,12 +1865,14 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     if (info?.title) title = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
   } catch {}
   if (title === 'Samehadaku') title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Samehadaku';
+  // done = sudah ada di library ATAU sudah terkirim ke Telegram (jalur Vidoy)
   const done = new Set();
+  let statusMap = new Map();
   try {
     const slug = samehadakuAnimeSlug(animeUrl);
     if (slug) {
-      const rows = await listPartsWithFile(slug);
-      for (const r of rows || []) done.add(Number(r.part));
+      statusMap = await episodeStatusMap(slug, title);
+      for (const [ep, st] of statusMap) if (st.lib || st.tg) done.add(ep);
     }
   } catch (err) {
     logger.warn({ err: err.message }, 'episode picker done-state gagal, tampil tanpa centang');
@@ -1852,7 +1886,11 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-      return { text: done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`, callback_data: `sam_ep:${epId}` };
+      const st = statusMap.get(Number(e.ep));
+      const label = st
+        ? (st.lib ? `✅ ${e.ep}` : (st.tg ? `📨 ${e.ep}` : `Ep ${e.ep}`))
+        : (done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`);
+      return { text: label, callback_data: `sam_ep:${epId}` };
     },
   });
   const { first, last, doneCount } = meta;
@@ -1861,7 +1899,10 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     const filled = Math.round((doneCount / total) * 10);
     const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
     const pct = Math.round((doneCount / total) * 100);
-    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
+    let tgOnly = 0;
+    for (const [, st] of statusMap) if (st.tg && !st.lib) tgOnly++;
+    const tgNote = tgOnly > 0 ? ` · 📨 ${tgOnly} di Telegram` : '';
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah ada${tgNote}\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   } else {
     caption = `📺 <b>${title}</b>\n🎞 ${total} episode — episode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   }
@@ -1888,12 +1929,14 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     if (info?.title) title = info.title;
   } catch {}
   if (title === 'Kuronime') title = eps[0]?.title?.split('Episode')[0]?.trim() || 'Kuronime';
+  // done = library ATAU sudah terkirim ke Telegram (sumber gabungan)
   const done = new Set();
+  let statusMap = new Map();
   try {
     const slug = kuronimeAnimeSlug(animeUrl);
     if (slug) {
-      const rows = await listPartsWithFile(slug);
-      for (const r of rows || []) done.add(Number(r.part));
+      statusMap = await episodeStatusMap(slug, title);
+      for (const [ep, st] of statusMap) if (st.lib || st.tg) done.add(ep);
     }
   } catch (err) {
     logger.warn({ err: err.message }, 'kuronime picker done-state gagal, tampil tanpa centang');
@@ -1908,7 +1951,11 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       kuronimeEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-      return { text: done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`, callback_data: `kur_ep:${epId}` };
+      const st = statusMap.get(Number(e.ep));
+      const label = st
+        ? (st.lib ? `✅ ${e.ep}` : (st.tg ? `📨 ${e.ep}` : `Ep ${e.ep}`))
+        : (done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`);
+      return { text: label, callback_data: `kur_ep:${epId}` };
     },
   });
   const { first, last, doneCount } = meta;
