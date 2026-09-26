@@ -419,3 +419,32 @@ pilihan target). Opsi target (tg/vt/vyt/vv) cuma ada di alur Samehadaku.
 - `node --check` CLEAN (bot.js, vidoy.js)
 - `test-vidoy-uploader` **142 pass** (+3), suite lain 0 fail
 - semua pemanggil `animeTargetKeyboard` 3 argumen, tidak ada sisa `vt`
+
+## M. BUG KETIGA KELAS SAMA: gdriveplayer (dan mega) di resolveDirectUrl (27 Sep 2026)
+
+### Gejala
+User: `sam_go:vyt` untuk Naruto Shippuden Ep 1 (server gdriveplayer) →
+`⚠️ Gagal resolve link file untuk upload.`
+
+### Root cause — kelas bug yang sama
+`resolveDirectUrl()` membaca field yang tidak dikembalikan provider:
+
+| Provider | Yang dikembalikan | Yang dibaca dispatcher |
+|---|---|---|
+| gofile | `{ url, name, size }` | `file?.link` | ← fix `320bbfd`
+| pixeldrain | `{ ..., directUrl }` | `info?.url` | ← fix `320bbfd`
+| **gdriveplayer** | `{ fileUrl, fileName, quality, cookies }` | `f?.url` | ← **fix ini** |
+| **mega** | `{ name, size, file }` (file = objek streaming) | `f?.url` | ← **fix ini** |
+
+### Perbaikan
+- gdriveplayer → `f.fileUrl || f.url`
+- mega → `return null` (tidak ada URL langsung; pemanggil fallback ke handleMegaUrl)
+
+### Pelajaran penting
+Kelas bug ini sudah terjadi **3x**. Test anti-drift sekarang mengunci **SEMUA**
+provider sekaligus (bukan hanya yang ditemukan), supaya tidak terulang.
+
+### Verifikasi
+- gdriveplayer resolve OK → fileUrl download
+- `test-vidoy-uploader` **144 pass** (+1 tes anti-drift semua provider)
+- suite lain 0 fail

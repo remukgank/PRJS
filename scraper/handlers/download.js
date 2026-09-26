@@ -1118,15 +1118,21 @@ async function resolveDirectUrl(url) {
     }
     if (isGdrivePlayerUrl(url)) {
       const f = await resolveGdrivePlayerFile(url);
-      return f?.url ? { url: f.url, name: f.name } : null;
+      // resolveGdrivePlayerFile() mengembalikan { fileUrl, fileName, quality,
+      // cookies } — field URL-nya "fileUrl", bukan "url".
+      const link = f && (f.fileUrl || f.url);
+      return link ? { url: link, name: f.fileName || f.name } : null;
     }
     if (isGdriveUrl(url)) {
       const f = await resolveGdriveFile(url);
       return f?.url ? { url: f.url, name: f.name } : null;
     }
     if (isMegaUrl(url)) {
-      const f = await resolveMegaFile(url);
-      return f?.url ? { url: f.url, name: f.name } : null;
+      // resolveMegaFile() mengembalikan { name, size, file } — "file" adalah
+      // objek mega.File untuk streaming, BUKAN URL langsung. Jalur Vidoy butuh
+      // URL, jadi mega tidak support di sini. Pemanggil harus fallback ke
+      // handleMegaUrl (jalur Telegram) yang sudah streaming dengan benar.
+      return null;
     }
   } catch (err) {
     logger.warn({ err: err.message, url: String(url).slice(0, 80) }, 'resolveDirectUrl gagal');

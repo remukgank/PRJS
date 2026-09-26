@@ -478,6 +478,49 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── KRITIS: resolveDirectUrl harus baca field yang BENAR untuk SEMUA provider ──
+// Kelas bug: provider mengembalikan { fileUrl } tapi dispatcher baca .url → null.
+// Sudah terjadi 3x (gofile, pixeldrain, gdriveplayer). Test ini mengunci SEMUA.
+t('resolveDirectUrl: field URL dibaca benar untuk SEMUA provider', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('async function resolveDirectUrl');
+  const body = D.slice(i, D.indexOf('\n}', i));
+  // gofile → provider kembalikan { url, name, size }
+  if (!/isGofileUrl\(url\)[\s\S]*?file\.url \|\| file\.link/.test(body)) throw new Error('gofile: harus baca file.url');
+  // pixeldrain → provider kembalikan { directUrl }
+  if (!/isPixeldrainUrl\(url\)[\s\S]*?info\.directUrl \|\| info\.url/.test(body)) throw new Error('pixeldrain: harus baca info.directUrl');
+  // filedon → provider kembalikan { url }
+  if (!/isFiledonUrl\(url\)[\s\S]*?f\?\.url/.test(body)) throw new Error('filedon: harus baca f.url');
+  // gdriveplayer → provider kembalikan { fileUrl, fileName }
+  if (!/isGdrivePlayerUrl\(url\)[\s\S]*?f\.fileUrl \|\| f\.url/.test(body)) throw new Error('gdriveplayer: harus baca f.fileUrl');
+  // gdrive → provider kembalikan { url }
+  if (!/isGdriveUrl\(url\)[\s\S]*?f\?\.url/.test(body)) throw new Error('gdrive: harus baca f.url');
+  // mega → tidak ada URL langsung, harus return null (bukan baca f.url yang undefined)
+  const mega = body.slice(body.indexOf('isMegaUrl(url)'), body.indexOf('}', body.indexOf('isMegaUrl(url)')));
+  if (/f\?\.url/.test(mega)) throw new Error('mega: tidak boleh membaca f.url (tidak ada URL langsung)');
+});
+
+t('anti-drift: return shape provider cocok dengan yang dibaca dispatcher', () => {
+  const fs = require('fs');
+  const rd = (f) => fs.readFileSync(require.resolve(f), 'utf8');
+  const checks = [
+    ['../providers/gofile', /files\.push\(\{[\s\S]{0,140}?\}\)/, /\burl:/, 'gofile harus kembalikan key "url"'],
+    ['../providers/pixeldrain', /return \{[^}]*directUrl:/, /\bdirectUrl:/, 'pixeldrain harus kembalikan "directUrl"'],
+    ['../providers/filedon', /return \{ url: /, /return \{ url: /, 'filedon harus kembalikan { url }'],
+    ['../providers/gdriveplayer', /return \{[^}]*fileUrl:/, /\bfileUrl:/, 'gdriveplayer harus kembalikan "fileUrl"'],
+    ['../providers/gdrive', /return \{ url/, /return \{ url/, 'gdrive harus kembalikan { url }'],
+  ];
+  for (const [f, retRe, fieldRe, msg] of checks) {
+    const src = rd(f);
+    const ret = (src.match(retRe) || []).join(' ');
+    if (!ret || !fieldRe.test(ret)) throw new Error(msg + ' — ditemukan: ' + ret.slice(0, 60));
+  }
+  // mega: TIDAK boleh mengembalikan { url } (karena butuh streaming)
+  const mega = rd('../providers/mega');
+  if (/return \{[^}]*url:/.test(mega)) throw new Error('mega tidak boleh mengembalikan { url } — butuh streaming');
+});
+
+
 // ── REGRESSION: alur provider langsung punya pilihan target (konsisten) ──────
 t('provider langsung: setelah judul, tampilkan pilihan target (bukan langsung TG)', () => {
   const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
