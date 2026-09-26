@@ -477,6 +477,42 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: parser callback "Download Semua" (bug off-by-one slice) ──
+t('KRITIS: parseBatchPick memecah callback dengan benar', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('function parseBatchPick');
+  const code = BOT.slice(i, BOT.indexOf('\n}', i) + 2);
+  const f = new Function(code + '\nreturn parseBatchPick;')();
+  const cases = [
+    ['sam_all:2', 'sam', { target: '', urlId: '2' }],
+    ['sam_allgo:tg:2', 'sam', { target: 'tg', urlId: '2' }],
+    ['sam_allgo:vt:2', 'sam', { target: 'vt', urlId: '2' }],
+    ['sam_allgo:vyt:2', 'sam', { target: 'vyt', urlId: '2' }],
+    ['sam_allgo:vv:2', 'sam', { target: 'vv', urlId: '2' }],
+    ['kur_all:9', 'kur', { target: '', urlId: '9' }],
+    ['kur_allgo:vyt:9', 'kur', { target: 'vyt', urlId: '9' }],
+    ['sam_allgo:vyt:abc123', 'sam', { target: 'vyt', urlId: 'abc123' }],
+  ];
+  for (const [data, prefix, want] of cases) {
+    const got = f(data, prefix);
+    assert.strictEqual(got.target, want.target, `target salah untuk ${data}: ${got.target} (harus ${want.target})`);
+    assert.strictEqual(got.urlId, want.urlId, `urlId salah untuk ${data}: ${got.urlId} (harus ${want.urlId})`);
+    if (want.urlId !== '' && got.urlId === '') throw new Error('urlId kosong → link kadaluarsa palsu: ' + data);
+  }
+});
+
+t('KRITIS: handler batch TIDAK lagi pakai slice index tetap', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  for (const branch of ['sam', 'kur']) {
+    const start = BOT.indexOf(`data.startsWith('${branch}_all:'`);
+    if (start < 0) throw new Error('branch ' + branch + ' tidak ditemukan');
+    const body = BOT.slice(start, start + 900);
+    if (/data\.slice\(\d+\)/.test(body)) throw new Error(branch + ': masih pakai slice index tetap → ' + body.match(/data\.slice\(\d+\)/)[0]);
+    if (!body.includes(`parseBatchPick(data, '${branch}')`)) throw new Error(branch + ': tidak memakai parseBatchPick');
+  }
+});
+
+
 // ── REGRESSION: linkAlive harus benar-benar cek player, bukan cuma HTTP 200 ──
 t('KRITIS: linkAlive bukan lagi sekadar cek status HTTP', () => {
   const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');

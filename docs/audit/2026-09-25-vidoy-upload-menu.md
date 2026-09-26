@@ -361,3 +361,43 @@ Artinya "Perbarui" tidak pernah bisa menemukan link mati.
   pageHasPlayer, interstitialTarget, dan **vidoy.asia hanya boleh sebagai
   VIDOY_BASE** di seluruh file), `test-btn-style` 10, `test-html-safety` 22,
   `test-caption-html-escape` 6, `test-libmenu-grid` 14 — 0 fail.
+
+## 14. Bug: callback "Download Semua" tidak terbaca (off-by-one) — 26 Sep 2026, 01:00
+
+### Gejala
+User menekan `⬇️ Download Semua` → menu target **muncul** (perbaikan spread
+berhasil) → menekan `📥 Vidoy + TG` → **tidak terjadi apa-apa** (tombol ditekan
+dua kali). Log hanya mencatat callback, tanpa "Menyiapkan batch download…",
+tanpa pre-scan, tanpa unduhan; CPU 0%, tanpa socket, `media_parts` tetap 0.
+
+### Akar masalah
+Parser callback memakai index tetap:
+```js
+const rawUrl = isTargetPick ? data.slice(11) : data.slice(8);          // ✗
+const batchTarget = isTargetPick ? (data.slice(8, 11).split(':')[0]) : ''; // ✗
+```
+Panjang prefix `"sam_allgo:"` = **10** karakter, bukan 11. Untuk
+`data = "sam_allgo:vyt:2"`:
+- `data.slice(11)` → `"yt:2"` → `resolveUrl` gagal → `animeUrl` kosong
+- `data.slice(8, 11)` → `"o:v"` → target tidak valid
+
+Akibatnya bot menjawab toast `⚠️ Link kadaluarsa, kirim ulang` (tidak terlihat
+di log) dan **tidak pernah menjalankan batch**. Salah sama berlaku untuk
+`kur_allgo`.
+
+### Perbaikan
+Fungsi `parseBatchPick(data, prefix)` — memecah berdasarkan panjang prefix
+string, bukan index tetap:
+- `sam_all:2` → `{ target: '', urlId: '2' }`
+- `sam_allgo:vyt:2` → `{ target: 'vyt', urlId: '2' }`
+- `kur_allgo:vyt:9` → `{ target: 'vyt', urlId: '9' }`
+
+Kedua handler (`sam_all`/`sam_allgo`, `kur_all`/`kur_allgo`) memakai helper ini.
+
+### Verifikasi
+- 8 kasus parser (termasuk `urlId` non-numerik) + assertion bahwa handler tidak
+  lagi memakai `data.slice(<angka>)`; `test-vidoy-uploader` 94 pass.
+- `test-btn-style` 10, `test-anime-topic-router` 18, `test-sam-picker-pagination`
+  exit 0 — 0 fail.
+- PM2 restart (01:01:46), `Bot running`.
+- **Belum diverifikasi live** — user perlu menekan ulang `📥 Vidoy + TG`.

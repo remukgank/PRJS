@@ -1023,6 +1023,23 @@ function targetBtn(text, data, enabled, style = 'success') {
   return enabled ? BTN.btn(text, data, style) : BTN.btnOff(text, style);
 }
 
+// Parse callback tombol "Download Semua".
+//   "sam_all:2"        → { target: '',   urlId: '2' }  (langkah pilih target)
+//   "sam_allgo:vyt:2"  → { target: 'vyt', urlId: '2' }
+// Panjang prefix_prefix varies, jadi TIDAK pakai index tetap.
+function parseBatchPick(data, prefix) {
+  const head = `${prefix}_allgo:`;
+  if (String(data).startsWith(head)) {
+    const rest = String(data).slice(head.length);
+    const i = rest.indexOf(':');
+    return i < 0
+      ? { target: '', urlId: rest }
+      : { target: rest.slice(0, i), urlId: rest.slice(i + 1) };
+  }
+  const base = `${prefix}_all:`;
+  return { target: '', urlId: String(data).startsWith(base) ? String(data).slice(base.length) : '' };
+}
+
 function animeTargetKeyboard(tgData, vtData, vytData, vvData) {
   const Vidoy = require('./vidoy-uploader');
   const Vidara = require('./vidara-uploader');
@@ -3195,9 +3212,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const isTargetPick = data.startsWith('sam_allgo:');
-    const rawUrl = isTargetPick ? data.slice(11) : data.slice(8);
-    const batchTarget = isTargetPick ? (data.slice(8, 11).split(':')[0] || '') : '';
+    const pickParsed = parseBatchPick(data, 'sam');
+    const isTargetPick = !!pickParsed.target;
+    const rawUrl = pickParsed.urlId;
+    const batchTarget = pickParsed.target;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
     let animeTitle = 'Samehadaku';
@@ -3644,9 +3662,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const isTargetPick = data.startsWith('kur_allgo:');
-    const rawUrl = isTargetPick ? data.slice(11) : data.slice(8);
-    const batchTarget = isTargetPick ? (data.slice(8, 11).split(':')[0] || '') : '';
+    const pickParsed = parseBatchPick(data, 'kur');
+    const isTargetPick = !!pickParsed.target;
+    const rawUrl = pickParsed.urlId;
+    const batchTarget = pickParsed.target;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
     let animeTitle = 'Kuronime';
