@@ -477,6 +477,49 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: fungsi yang dipanggil harus terdefinisi (bug ReferenceError) ──
+t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const declared = new Set([...BOT.matchAll(/function ([A-Za-z0-9_]+)/g)].map((m) => m[1]));
+  const consts = new Set([...BOT.matchAll(/(?:const|let|var) ([A-Za-z0-9_]+)\s*=/g)].map((m) => m[1]));
+  const destructured = new Set([...BOT.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim().split(':')[0].trim()).filter(Boolean)));
+  const imported = new Set([...BOT.matchAll(/const \{([^}]*)\} = require/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim().split(':')[0].trim())));
+  const known = new Set([...declared, ...consts, ...destructured, ...imported]);
+  const METHODS = new Set(['slice', 'push', 'join', 'map', 'filter', 'forEach', 'keys', 'values', 'entries',
+    'toFixed', 'includes', 'split', 'trim', 'replace', 'match', 'test', 'then', 'catch', 'finally',
+    'log', 'error', 'warn', 'info', 'sendMessage', 'editMessageText', 'start', 'updateEpisode', 'update',
+    'done', 'fail', 'resolve', 'reject', 'stringify', 'parse', 'floor', 'ceil', 'round', 'min', 'max',
+    'get', 'set', 'has', 'padStart', 'flat', 'flatMap', 'at', 'find', 'some', 'every', 'reduce', 'call', 'apply']);
+  const start = BOT.indexOf('const rows2 = viable.map');
+  const end = BOT.indexOf("logger.info({ chatId, title, target, ok, fail, skip }", start);
+  const body = BOT.slice(start, end > start ? end : start + 3000)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')          // buang komentar blok
+    .replace(/\/\/[^\n]*/g, ' ');                  // buang komentar baris
+  // hanya bare call: nama yang TIDAK didahului titik
+  const bare = [...body.matchAll(/(^|[^.\w$])([a-z][A-Za-z0-9_]{2,})\s*\(/g)].map((m) => m[2]);
+  for (const kw of ['for', 'if', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'do', 'else']) {
+    METHODS.add(kw);
+  }
+  const missing = [...new Set(bare)].filter((n) => !known.has(n) && !METHODS.has(n));
+  if (missing.length) throw new Error('fungsi tak terdefinisi di jalur batch: ' + missing.join(', '));
+  if (!/function batchTargetLabel/.test(BOT)) throw new Error('batchTargetLabel hilang');
+  if (/(^|[^.\w])targetLabel\(/.test(BOT)) throw new Error('masih memanggil targetLabel yang tidak di-import');
+});
+
+t('KRITIS: batchTargetLabel memetakan 4 target dengan benar', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('function batchTargetLabel');
+  const f = new Function(BOT.slice(i, BOT.indexOf('\n}', i) + 2) + '\nreturn batchTargetLabel;')();
+  assert.strictEqual(f('tg'), 'Telegram');
+  assert.strictEqual(f('vt'), 'Vidara + Telegram');
+  assert.strictEqual(f('vyt'), 'Vidoy + Telegram');
+  assert.strictEqual(f('vv'), 'Vidara + Vidoy');
+  assert.ok(f(''), 'target kosong tidak boleh crash');
+});
+
+
 // ── REGRESSION: parser callback "Download Semua" (bug off-by-one slice) ──
 t('KRITIS: parseBatchPick memecah callback dengan benar', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');

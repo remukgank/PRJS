@@ -401,3 +401,37 @@ Kedua handler (`sam_all`/`sam_allgo`, `kur_all`/`kur_allgo`) memakai helper ini.
   exit 0 — 0 fail.
 - PM2 restart (01:01:46), `Bot running`.
 - **Belum diverifikasi live** — user perlu menekan ulang `📥 Vidoy + TG`.
+
+## 15. Bug: `targetLabel is not defined` di bot.js (26 Sep 2026, 01:02)
+
+### Gejala
+User menekan `Download Semua` → `📥 Vidoy + TG`:
+```
+📦 Menyiapkan batch download...
+🔎 Pre-scan selesai: 220 ep layak unduh, 0 dilewati
+❌ Error: targetLabel is not defined
+```
+Log: `ReferenceError: targetLabel is not defined at scraper/bot.js:3297:61`
+
+### Akar masalah
+Saat menambahkan judul progress & laporan batch (slice "target di Download
+Semua"), saya memanggil `targetLabel(target)` — fungsi itu **ada di
+`handlers/vidoy.js`**, tapi tidak di-import ke `bot.js`, dan tidak ada
+`require` untuknya. Batch sudah mulai (pre-scan jalan) lalu crash saat membuat
+judul RichProgress, sehingga tidak ada episode yang diunduh.
+
+### Perbaikan
+Fungsi lokal `batchTargetLabel(target)` di `bot.js` (dipakai di 3 titik: judul
+progress + 2 laporan batch) — tidak lagi bergantung silang antar modul.
+
+### Pencegahan
+Tes statis baru: mengambil seluruh badANode runner batch, membuang komentar,
+lalu memastikan **tidak ada bare call fungsi yang tak terdefinisi** di sana
+(buat obrigado calls member & keyword). Test ini akan menangkap
+`ReferenceError` serupa sebelum runtime. `batchTargetLabel` juga diuji untuk
+4 target.
+
+### Verifikasi
+- `test-vidoy-uploader` 96 pass, `test-btn-style` 10, `test-anime-topic-router` 18,
+  `test-sam-picker-pagination` exit 0 — 0 fail.
+- PM2 restart (01:04:29), `Bot running`.

@@ -1023,6 +1023,15 @@ function targetBtn(text, data, enabled, style = 'success') {
   return enabled ? BTN.btn(text, data, style) : BTN.btnOff(text, style);
 }
 
+// Label target untuk judul progress & laporan batch.
+// (Fungsi serupa ada di handlers/vidoy.js; yang ini dipakai di bot.js karena
+//  batch runner berada di sini — sebelumnya hanya salah memanggil fungsi yang
+//  tidak ter-import → ReferenceError: targetLabel is not defined.)
+function batchTargetLabel(target) {
+  const map = { tg: 'Telegram', vt: 'Vidara + Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidara + Vidoy' };
+  return map[target] || String(target || 'Telegram');
+}
+
 // Parse callback tombol "Download Semua".
 //   "sam_all:2"        → { target: '',   urlId: '2' }  (langkah pilih target)
 //   "sam_allgo:vyt:2"  → { target: 'vyt', urlId: '2' }
@@ -3294,7 +3303,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }
       const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
       const vidoyLinks = [];
-      const rp = await new RichProgress(chatId, `📥 Batch ${title} — ${targetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      const rp = await new RichProgress(chatId, `📥 Batch ${title} — ${batchTargetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
       let ok = 0, fail = 0;
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
@@ -3367,7 +3376,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const linkBlock = vidoyLinks.length
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${vidoyLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
-      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${targetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
       logger.info({ chatId, title, target, ok, fail, skip }, 'sam_all batch selesai');
     } finally {
@@ -3826,7 +3835,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const linkBlock = kurLinks.length
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${kurLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
-      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${targetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
       logger.info({ chatId, title, target, ok, fail, skip }, 'kur_all batch selesai');
     } finally {
