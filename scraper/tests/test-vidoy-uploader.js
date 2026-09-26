@@ -477,6 +477,64 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: file hasil unduh WAJIB divalidasi sebelum upload ─────────────
+t('validasi unduhan: HTML / JSON / indeterminate-kecil ditolak, MP4 sah lolos', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { assertLooksLikeVideo } = require('../services/vidaraService');
+  const tmp = (buf) => os.tmpdir() + '/_mv_' + Math.random().toString(36).slice(2) + '.bin';
+  const mk = (buf) => { const p = tmp(); fs.writeFileSync(p, buf); return p; };
+  const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypisom'), Buffer.alloc(2000)]);
+  const MKV = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(2000)]);
+  const HTML = Buffer.from('<!doctype html>\n<html><head><title>Gofile needs JavaScript to run</title></head><body>' + 'x'.repeat(3200) + '</body></html>');
+  const TAKEDOWN = Buffer.from(JSON.stringify({ success: false, value: 'unavailable_for_legal_reasons', message: 'takedown report' }));
+
+  // harus LOLOS: signature container otoritatif, ukuran sekecil apa pun
+  for (const [label, buf] of [['MP4 kecil', MP4], ['MKV/Matroska', MKV]]) {
+    const p = mk(buf);
+    try { assertLooksLikeVideo(p); }
+    catch (e) { throw new Error(label + ' seharusnya lolos, tapi ditolak: ' + e.message); }
+    finally { try { fs.unlinkSync(p); } catch {} }
+  }
+  // harus TERTOLAK
+  const harusGagal = [
+    ['HTML 3 KB', HTML, /bukan video/i],
+    ['JSON takedown', TAKEDOWN, /ditolak provider/i],
+    ['kecil tanpa signature', Buffer.alloc(2048, 0x41), /tidak dikenali dan terlalu kecil/i],
+  ];
+  for (const [label, buf, pola] of harusGagal) {
+    const p = mk(buf);
+    let err = null;
+    try { assertLooksLikeVideo(p); } catch (e) { err = e; }
+    finally { try { fs.unlinkSync(p); } catch {} }
+    if (!err) throw new Error(label + ' seharusnya ditolak, tapi LOLOS → file palsu akan ikut terupload');
+    if (!pola.test(err.message)) throw new Error(label + ' pesan error tidak jelas: ' + err.message.slice(0, 70));
+  }
+});
+
+t('validasi unduhan dipanggil di ensureMp4 (bukan cuma tersedia)', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('async function ensureMp4');
+  const body = V.slice(i, V.indexOf('\n}\n', i + 10));
+  if (!/assertLooksLikeVideo\(destPath\)/.test(body)) {
+    throw new Error('ensureMp4 tidak memvalidasi hasil unduh → bug HTML 3 KB bisa terulang');
+  }
+  // validasi harus DI SETELAH download, SEBELUM return
+  const dl = body.indexOf('await downloadTo(url, destPath)');
+  const va = body.indexOf('assertLooksLikeVideo(destPath)');
+  if (va < dl) throw new Error('validasi harus dijalankan setelah download');
+});
+
+t('gofile: kedua jalur (Telegram & Vidoy) kirim header auth yang sama', () => {
+  // Jalur Telegram sudah bekerja lebih dulu — Vidoy WAJIB menirunya.
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  if (!/Authorization':\s*`Bearer \$\{gofileToken\}`/.test(D)) throw new Error('jalur Telegram kehilangan header auth gofile');
+  if (!/Authorization = `Bearer \$\{gofileTok\}`/.test(V)) throw new Error('jalur Vidoy tidak meniru header auth gofile');
+  if (!/gofileToken/.test(D) || !/gofileTok/.test(V)) throw new Error('sumber token harus GOFILE_TOKEN di kedua jalur');
+});
+
+
 // ── REGRESSION: jalur Vidoy harus bisa unduh file gofile (header auth) ───────
 t('vidaraService.downloadTo mengirim header auth gofile', () => {
   const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');

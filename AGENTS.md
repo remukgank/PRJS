@@ -71,6 +71,21 @@ Semuanya berasal dari kegagalan nyata (lihat `docs/audit/`).
 - **Caption drama gagal diedit dengan `editMessageText`** → harus
   `editMessageCaption`. `400 message is not modified` = **sukses** (bukan gagal).
 
+- **Verifikasi di HASIL, bukan di batas yang kamu ubah.** Fakta: menambahkan
+  `resolveDirectUrl` untuk gofile/pixeldrain lalu "diverifikasi" hanya dengan
+  mengecek fungsi itu mengembalikan URL — padahal file-nya tetap HTML 3 KB dan
+  gagal di Vidoy. Aturannya: sebelum menambah/mengubah satu jalur, **baca dulu
+  jalur yang sudah jalan dan tiru persis**. Contoh nyata: jalur Telegram sudah
+  mengirim `Authorization: Bearer $GOFILE_TOKEN`; jalur Vidoy (`downloadTo`)
+  tidak — dan itu akar bug-nya.
+- **Unduhan wajib divalidasi sebelum di-upload.** `assertLooksLikeVideo()` di
+  `services/vidaraService.js` menolak HTML/JSON/file kecil tanpa signature.
+  Provider yang balas HTTP 200 dengan halaman error tidak boleh diteruskan ke
+  upload — kalau tanpa ini, errornya muncul sebagai pesan server yang menyesatkan
+  (`Vidoy CDN status invalid ... explode(): Passing null`).
+- **Signature format lebih otoritatif daripada ukuran.** MP4 sah boleh kecil
+  (fragmen/clip); jangan menolak hanya karena kecil kalau `ftyp`/Matroska ada.
+
 ## 5. Kontrak media (tidak boleh dilanggar)
 
 Dikunci oleh `scraper/tests/test-media-contract.js`:

@@ -115,6 +115,43 @@ function collectVerdict(failedEps, resolveErrors, chunkLength, providerLabel) {
 // Pastikan video jadi .mp4 lokal: HLS (.m3u8) → ffmpeg stream-copy; bukan HLS → download langsung.
 // Retry + resolveFresh: backend bisa flip-flop (URL valid saat probe tapi
 // sampah saat download) — coba ulang dengan URL fresh per attempt.
+// File hasil unduh WAJIB dicek sebelum di-upload. Tanpa ini, provider yang
+// membalas halaman error dengan HTTP 200 (mis. gofile tanpa header auth →
+// "Gofile needs JavaScript to run", 3358 byte HTML) akan diteruskan ke
+// Vidoy dan baru gagal di sana dengan pesan yang tidak jelas
+// ("Vidoy CDN status invalid ... explode(): Passing null").
+// Yang dipulihkan di sini: error menyebut provider/ukuran/awal file.
+const MIN_VIDEO_BYTES = 100 * 1024;
+function assertLooksLikeVideo(destPath) {
+  let st;
+  try { st = fs.statSync(destPath); } catch { return; } // belum ada → biarkan
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(destPath, 'r');
+    const buf = Buffer.alloc(256);
+    const n = fs.readSync(fd, buf, 0, 256, 0);
+    fs.closeSync(fd);
+    head = buf.slice(0, n);
+  } catch { return; }
+  const txt = head.toString('utf8').trimStart().slice(0, 120).toLowerCase();
+  const isContainer = head.indexOf(Buffer.from('ftyp')) >= 0          // MP4/MOV
+    || head.readUInt32BE(0) === 0x1a45dfa3;                           // Matroska/WebM
+  // Signature container = bukti otoritatif. MP4 sah boleh kecil (fragmen/clip),
+  // jadi JANGAN ditolak karena ukuran — hanya signature yang menentukan.
+  if (isContainer) return;
+  if (txt.startsWith('<!doctype') || txt.startsWith('<html') || txt.startsWith('<')) {
+    throw new Error(`unduhan bukan video — dapat HTML (${st.size} byte, awal: "${txt.slice(0, 48).replace(/\s+/g, ' ')}"). Provider butuh header auth yang sesuai.`);
+  }
+  if (txt.startsWith('{') || txt.startsWith('[')) {
+    let msg = '';
+    try { msg = String(JSON.parse(head.toString('utf8')).message || '').slice(0, 80); } catch {}
+    throw new Error(`unduhan ditolak provider — dapat JSON (${st.size} byte)${msg ? `: ${msg}` : ''}`);
+  }
+  if (st.size < MIN_VIDEO_BYTES) {
+    throw new Error(`unduhan tidak dikenali dan terlalu kecil (${st.size} byte, minimal ${MIN_VIDEO_BYTES}) — kemungkinan halaman error, bukan file video.`);
+  }
+}
+
 // opts: { retries=2, backoffMs=15000, resolveFresh=null (async()=>url), logCtx={} }
 async function ensureMp4(url, destPath, opts = {}) {
   const retries = opts.retries ?? 2;
@@ -135,6 +172,7 @@ async function ensureMp4(url, destPath, opts = {}) {
       } else {
         await downloadTo(url, destPath);
       }
+      assertLooksLikeVideo(destPath);
       return destPath;
     } catch (err) {
       lastErr = err;
@@ -363,4 +401,5 @@ async function uploadToVidara(opts) {
   return { done, fail, skipped, total, filecodes, fldId, folderName, subDir };
 }
 
-module.exports = { uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };
+module.exports = {
+  assertLooksLikeVideo, uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };
