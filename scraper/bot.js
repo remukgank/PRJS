@@ -15,6 +15,7 @@ const { cleanupStaleSessions } = require('./providers/dramafren');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFiles } = require('./providers/gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./providers/pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./providers/samehadaku');
+const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
@@ -1099,32 +1100,6 @@ function episodeButton(st, ep, fallbackDone) {
   return { text: `Ep ${ep}`, style: null };
 }
 
-async function episodeStatusMap(slug, vidoyTitle) {
-  const map = new Map();
-  const set = (part, patch) => {
-    const n = Number(part);
-    if (!Number.isFinite(n)) return;
-    const prev = map.get(n) || { lib: false, tg: false, link: null };
-    map.set(n, Object.assign(prev, patch));
-  };
-  const libKey = String(slug || '').startsWith('anime:') ? String(slug) : 'anime:' + String(slug || '');
-  const vidoyKey = String(vidoyTitle || slug || '');
-  const [libRows, vRows] = await Promise.all([
-    listPartsWithFile(libKey).catch(() => []),
-    listVidoyUploads(vidoyKey, 'anime').catch(() => []),
-  ]);
-  for (const r of libRows || []) set(r.part, { lib: true });
-  for (const r of vRows || []) {
-    const prev = map.get(Number(r.part)) || {};
-    set(r.part, {
-      link: r.link || prev.link || null,
-      // "sudah ada di Telegram" hanya bila pointer pesannya masih tersimpan
-      tg: !!(r.tg_chat_id && r.tg_message_id),
-    });
-  }
-  return map;
-}
-
 async function animeDoneMap(mediaKey) {
   const map = new Map();
   const rows = await listVidoyUploads(String(mediaKey), 'anime').catch(() => []);
@@ -1953,9 +1928,9 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
   const done = new Set();
   let statusMap = new Map();
   try {
-    const slug = samehadakuAnimeSlug(animeUrl);
-    if (slug) {
-      statusMap = await episodeStatusMap(slug, title);
+      const slug = samehadakuAnimeSlug(animeUrl);
+      if (slug) {
+        statusMap = await episodeStatusMap(slug, title, vidoyKeysFromEpisodes(eps, parseSamehadakuEpisode));
       // "sudah ada" = punya pesan Telegram. Episode yang hanya ada di Vidoy atau
       // library TIDAK dihitung selesai (videonya belum ada di topic).
       for (const [ep, st] of statusMap) if (st.tg) done.add(ep);
@@ -2013,9 +1988,9 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
   const done = new Set();
   let statusMap = new Map();
   try {
-    const slug = kuronimeAnimeSlug(animeUrl);
-    if (slug) {
-      statusMap = await episodeStatusMap(slug, title);
+      const slug = kuronimeAnimeSlug(animeUrl);
+      if (slug) {
+        statusMap = await episodeStatusMap(slug, title, vidoyKeysFromEpisodes(eps, parseKuronimeEpisode));
       for (const [ep, st] of statusMap) if (st.tg) done.add(ep);
     }
   } catch (err) {

@@ -799,3 +799,67 @@ skrip uji yang disusun sendiri.**
 | **mutasi** (`url = fresh`) | **6 pass / 1 fail** — `downloadTo: url bukan string (dapat object)` |
 
 Suite penuh: **204 pass / 0 fail**.
+
+---
+
+## §V — Menu picker tidak menandai episode yang sudah sukses (27 Sep 2026, malam)
+
+### Gejala
+Ep 1–3 *Naruto Shippuuden* sukses: Vidoy terverifikasi (`vski.cc/e/oyosofiqmp1c`,
+`vidkud.com/f/qzmxbzgx1sp`), Telegram terkirim ke topic 655 (`tg_message_id` 6352/6361/6363),
+pointer tersimpan di DB. **Tapi menu picker menampilkan semuanya "belum ada".**
+
+### Root cause (terbukti dengan query nyata)
+Selisih **ejaan judul** antara dua parser Samehadaku:
+
+| sumber | judul |
+|---|---|
+| `parseSamehadakuAnime` (halaman anime) — dipakai picker | `Naruto Shipp**u**den` |
+| `parseSamehadakuEpisode` (halaman episode) — dipakai jalur download | `Naruto Shipp**uu**den` |
+| `vidoy_uploads.media_key` di DB | versi **episode** |
+
+`listVidoyUploads` mencocokkan `media_key = $1` (**PERSIS**). Picker mencari dengan
+ejaan versi anime → **0 baris** → `statusMap` kosong → semua tombol "belum".
+
+```
+listVidoyUploads("Naruto Shippuuden")  → 3 baris   ← kunci DB
+listVidoyUploads("Naruto Shippuden")   → 0 baris   ← kunci yang dipakai menu
+```
+
+### Kenapa Vidoy TIDAK duplikat
+`uploadSingle` memakai kunci dari **parser episode** (sama dengan DB) → record
+ditemukan → `skipped: true`. Jadi aturan keras "1 episode = 1 file" tetap aman;
+yang rusak hanya **tampilan** menu.
+
+### Perbaikan
+- `episodeStatusMap(slug, vidoyTitle, extraVidoyKeys = [])` — mencoba **semua**
+  kandidat kunci lalu menggabung hasilnya. `tg` di-OR antar kunci (satu baris
+  punya pointer → dihitung terkirim).
+- `vidoyKeysFromEpisodes(eps, parseEpisode)` — menurunkan kandidat dari URL
+  episode memakai parser yang **sama** dengan jalur download (ep pertama/tengah/akhir).
+- Kedua picker (samehadaku **dan** kuronime) memakai kandidat itu.
+- Fungsi dipindah ke `lib/episode-status.js` supaya bisa diuji langsung —
+  `bot.js` tidak bisa di-require dalam test karena langsung mulai polling.
+
+### Verifikasi (fungsi nyata + DB nyata)
+```
+episodeStatusMap(slug, "Naruto Shippuden")              → 0 episode   ← bug lama
+episodeStatusMap(slug, "Naruto Shippuden", ["Naruto Shippuuden"])
+                                                        → 3 episode, semua tg:true
+```
+
+`test-episode-status.js` **11 pass / 0 fail** (fixture sendiri, di-cleanup → 0 baris tersisa).
+
+| | hasil |
+|---|---|
+| dengan fix | **11 pass / 0 fail** |
+| **mutasi** (extraVidoyKeys diabaikan) | **8 pass / 3 fail** |
+| **mutasi** (wiring picker dilepas) | **10 pass / 1 fail** |
+
+`test-vidoy-uploader.js` **157 pass / 0 fail** (diperbarui membaca sumber dari
+`lib/episode-status.js`, plus assertion bot.js wajib import dari sana).
+
+Suite penuh: **0 file gagal**. Dikecualikan 4 file pre-existing yang tidak
+tersentuh perubahan ini: `test-rich*.js` (butuh `TELEGRAM_CHAT_ID`+token env),
+`test-all-subdomains.js` (jaringan dramafren), `test-watchdog-aria2c.js`
+(desainnya >300 dtk per sub-test).

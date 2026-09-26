@@ -1139,12 +1139,19 @@ t('kedua picker memakai episodeButton + style, dan label "sudah ada"', () => {
 
 // ── REGRESSION: deteksi "sudah ada" di picker = library ∪ Telegram ─────────
 t('KRITIS: episodeStatusMap menggabungkan library + Telegram', () => {
-  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
-  const i = BOT.indexOf('async function episodeStatusMap');
+  const fs = require('fs');
+  // 27 Sep 2026: fungsi ini dipindah ke lib/episode-status.js supaya bisa
+  // diuji tanpa menjalankan polling bot.js. bot.js hanya meng-import.
+  const BOT = fs.readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/require\('\.\/lib\/episode-status'\)/.test(BOT)) {
+    throw new Error('bot.js harus import episodeStatusMap dari lib/episode-status');
+  }
+  const SRC = fs.readFileSync(require.resolve('../lib/episode-status'), 'utf8');
+  const i = SRC.indexOf('async function episodeStatusMap');
   if (i < 0) throw new Error('episodeStatusMap tidak ada');
-  let d = 0, j = BOT.indexOf('{', i);
-  for (let k = j; k < BOT.length; k++) { if (BOT[k] === '{') d++; else if (BOT[k] === '}') { d--; if (!d) { j = k; break; } } }
-  const code = BOT.slice(i, j + 1);
+  let d = 0, j = SRC.indexOf('{', i);
+  for (let k = j; k < SRC.length; k++) { if (SRC[k] === '{') d++; else if (SRC[k] === '}') { d--; if (!d) { j = k; break; } } }
+  const code = SRC.slice(i, j + 1);
   const f = new Function('listPartsWithFile', 'listVidoyUploads', code + '\nreturn episodeStatusMap;')(
     async () => ([{ part: 1 }, { part: 2 }]),
     async () => ([
