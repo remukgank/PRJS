@@ -243,3 +243,49 @@ selalu `fail`. Jalur `target === 'tg'` tidak terpengaruh karena memanggil
 `test-vidoy-uploader` **130 pass** (+3 tes, termasuk tes anti-drift yang
 memastikan nama field di dispatcher sama dengan yang ditulis provider).
 Suite lain 0 fail. Tidak ada kode produksi lain yang diubah.
+
+## H. Kenapa episode Black Torch 1–4 gagal (26 Sep 2026, 16:05 UTC)
+
+Setelah log pm2 aktif, error aslinya terlihat:
+```
+ERROR: Anime episode upload gagal  ep:1  target:"vyt"
+  err: "Vidoy CDN status invalid: <br /><b>Deprecated</b>:
+       explode(): Passing null to parameter #2 ($string) of type string"
+```
+
+### Rantai penyebab
+1. `resolveDirectUrl()` sudah benar (fix di `f4dd597`) → flowQH jalan sampai upload.
+2. Link gofile yang di-resolve **tidak melayani video**: fetching
+   `store9.gofile.io/download/web/…` memberi **3358 byte HTML**
+   (`"Gofile needs JavaScript to run"`), bukan MP4 — tetap HTML walau
+   memakai `Cookie: accountToken`.
+3. Bot mengunduh HTML itu, lalu mengirimkannya ke CDN Vidoy sebagai video →
+   Vidoy menolak, dan pesannya muncul sebagai PHP deprecation (menyesatkan).
+
+### Status tiap mirror (dicek langsung ke provider)
+| Episode | pixeldrain | gofile | filedon |
+|---|---|---|---|
+| ep 1 | **BLOKIR** `unavailable_for_legal_reasons` (copyright) | HTML, bukan video | tidak ada |
+| ep 2 | **DATA (MP4)** | — | tidak ada |
+| ep 3 | **BLOKIR** (copyright) | — | tidak ada |
+| ep 4 | **DATA (MP4)** | — | tidak ada |
+| ep 5 | **BLOKIR** (copyright) | — | OK (batch sukses) |
+
+Pesan takedown: *"This file cannot be downloaded because it has received a
+takedown report"*, `extra.type = "copyright"`.
+
+### Kesimpulan
+- **ep 2 & 4**: gagalnya karena bug `resolveDirectUrl` → **sudah terperbaiki**, harusnya tembus.
+- **ep 1 & 3**: file-nya **di-takedown di semua mirror yang tersedia**.
+  - pixeldrain: diblokir copyright
+  - gofile: tidak bisa diunduh (halaman JS)
+  - krakenfiles: ada di listing tapi di balik Cloudflare Turnstile → tidak praktis
+  - filedon: tidak tersedia untuk episode ini
+
+  Tidak ada perbaikan kode yang bisa mengunduh 2 episode ini dari mirror yang ada.
+  Butuh sumber lain (mis. menunggu samehadakucelluloseganti file, atau provider baru).
+
+### Saran perbaikan (belum dikerjakan)
+Validasi file setelah unduh (magic bytes `ftyp` untuk MP4 + ukuran minimum)
+sebelum upload, supaya error-nya *"file hasil unduh bukan video (3.4 KB HTML)"*
+alih-alih pesan PHP dari sisi Vidoy.
