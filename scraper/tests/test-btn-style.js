@@ -53,6 +53,19 @@ t('btn: callback_data divalidasi (1–64 byte)', () => {
   assert(ok.callback_data.length === 64, '64 byte harus boleh');
 });
 
+t('btnUrl: tombol url boleh styled, tanpa callback_data', () => {
+  const b = B.btnUrl('💳 Tarik', 'https://fragment.com/', 'primary');
+  assert(b.url === 'https://fragment.com/');
+  assert(b.style === 'primary');
+  assert(b.callback_data === undefined, 'tombol url tidak boleh punya callback_data');
+  let threw = false;
+  try { B.btnUrl('X', ''); } catch { threw = true; }
+  assert(threw, 'btnUrl tanpa url harus ditolak');
+  threw = false;
+  try { B.btnUrl('X', 'https://x/', 'link'); } catch { threw = true; }
+  assert(threw, 'style takAhead valid harus ditolak');
+});
+
 t('grid: melempar error kalau row berisi array (bug InlineKeyboardButton)', () => {
   const rows = [[{ text: 'A', callback_data: 'a:1' }]];
   let threw = false;

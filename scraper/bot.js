@@ -42,6 +42,7 @@ const { sleep, floodRetryMs, initTelegram, apiPost } = require('./lib/telegram')
 const { safeHtml } = require('./lib/html');
 const { initProgress, Progress, RichProgress } = require('./lib/progress');
 const { buildPicker } = require('./lib/samKeyboard');
+const BTN = require('./lib/btn');
 const { scanSupportedServers, viableFromScanned } = require('./lib/samPrescan');
 
 function isUcDriveUrl(text) {
@@ -981,34 +982,34 @@ function parseDramaUrl(text) {
 }
 
 function mainMenuKeyboard(isAdminUser = false) {
+  // primary = aksi utama (Cari), success = hasil yang_CREATE file (kategori),
+  // sisanya navigasi → tanpa warna.
   const buttons = [
-    [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
-    [{ text: '🎬 Drama', callback_data: 'act:lib_list_c:drama:1' }, { text: '🎌 Anime', callback_data: 'act:lib_list_c:anime:1' }],
-    [{ text: '💎 VIP', callback_data: 'act:vip' }, { text: '💬 Live Chat', callback_data: 'act:ai' }],
-    [{ text: '❓ Bantuan', callback_data: 'act:help' }],
+    [BTN.btn('📚 Cari Drama/Anime', 'act:lib_search', 'primary')],
+    [BTN.btn('🎬 Drama', 'act:lib_list_c:drama:1', 'success'), BTN.btn('🎌 Anime', 'act:lib_list_c:anime:1', 'success')],
+    [BTN.nav('💎 VIP', 'act:vip'), BTN.nav('💬 Live Chat', 'act:ai')],
+    [BTN.nav('❓ Bantuan', 'act:help')],
   ];
   if (isAdminUser) {
-    buttons.push([{ text: '🛠 Admin Panel', callback_data: 'act:admin_panel' }]);
+    buttons.push([BTN.nav('🛠 Admin Panel', 'act:admin_panel')]);
   }
-  return { inline_keyboard: buttons };
+  return BTN.kb(buttons);
 }
 
 function replyMainKeyboard(isAdminUser = false) {
   const rows = [
-    [{ text: '📚 Katalog' }, { text: '🔍 Cari' }],
+    [{ text: '📚 Katalog', style: 'primary' }, { text: '🔍 Cari' }],
     [{ text: '💬 Live Chat' }, { text: '👤 Akun' }],
   ];
   if (isAdminUser) rows.push([{ text: '🛠 Admin Panel' }]);
   return { keyboard: rows, resize_keyboard: true, is_persistent: true, one_time_keyboard: false };
 }
 
-function breadcrumbKeyboard(isAdminUser = false) {
-  return {
-    inline_keyboard: [
-      [{ text: '📚 Katalog', callback_data: 'act:lib_list' }, { text: '🔍 Cari', callback_data: 'act:lib_search' }],
-      [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
-    ],
-  };
+function breadcrumbKeyboard() {
+  return BTN.kb([
+    [BTN.nav('📚 Katalog', 'act:lib_list'), BTN.nav('🔍 Cari', 'act:lib_search')],
+    [BTN.nav('🏠 Menu Utama', 'act:main_menu')],
+  ]);
 }
 
 function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = null, aiKey = null) {
@@ -1144,12 +1145,10 @@ function aiKeyboard() {
 }
 
 function balanceKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: '💳 Tarik Saldo via Fragment', url: 'https://fragment.com/' }],
-      [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
-    ],
-  };
+  return BTN.kb([
+    [BTN.btnUrl('💳 Tarik Saldo via Fragment', 'https://fragment.com/', 'primary')],
+    [BTN.nav('🏠 Menu Utama', 'act:main_menu')],
+  ]);
 }
 
 function episodeListKeyboard(episodes) {

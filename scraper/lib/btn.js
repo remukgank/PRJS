@@ -28,6 +28,17 @@ function btn(text, data, style) {
   return b;
 }
 
+// Tombol URL (tanpa callback_data).
+function btnUrl(text, url, style) {
+  if (!url) throw new Error('btnUrl butuh url');
+  const b = { text: String(text), url: String(url) };
+  if (style !== undefined && style !== null) {
+    if (!STYLES.has(style)) throw new Error('style tidak valid: ' + style);
+    b.style = style;
+  }
+  return b;
+}
+
 // Navigasi: sengaja tanpa warna.
 function nav(text, data) {
   return btn(text, data);
@@ -71,4 +82,4 @@ function countStyle(keyboard, style) {
   return n;
 }
 
-module.exports = { btn, nav, btnOff, grid, kb, countStyle, STYLES };
+module.exports = { btn, btnUrl, nav, btnOff, grid, kb, countStyle, STYLES };
