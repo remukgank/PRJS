@@ -1039,16 +1039,22 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
   };
 }
 
+// Tombol target upload: Vidoy+TG = primary (rekomendasi terbaik), target lain
+// = success (menghasilkan berkas), yang belum terkonfigurasi = disabled tapi
+// tetap berwarna agar jelas itu "mati karena belum diset".
+function targetBtn(text, data, enabled, style = 'success') {
+  return enabled ? BTN.btn(text, data, style) : BTN.btnOff(text, style);
+}
+
 function animeTargetKeyboard(tgData, vtData, vytData, vvData) {
   const Vidoy = require('./vidoy-uploader');
   const Vidara = require('./vidara-uploader');
   const vidoyOk = Vidoy.isConfigured();
   const vidaraOk = !!Vidara.VIDARA_KEY;
-  const b = (text, data, enabled) => (enabled ? { text, callback_data: data, style: 'primary' } : { text, disabled: {} });
-  return [
-    [b('📥 Telegram', tgData, true), b('📥 Vidara + TG', vtData, vidaraOk)],
-    [b('📥 Vidoy + TG', vytData, vidoyOk), b('📥 Vidara + Vidoy', vvData, vidaraOk && vidoyOk)],
-  ];
+  return BTN.grid([
+    [targetBtn('📥 Telegram', tgData, true), targetBtn('📥 Vidara + TG', vtData, vidaraOk)],
+    [targetBtn('📥 Vidoy + TG', vytData, vidoyOk, 'primary'), targetBtn('📥 Vidara + Vidoy', vvData, vidaraOk && vidoyOk)],
+  ]);
 }
 
 function mainActionKeyboard(kind = 'drama') {
@@ -1056,49 +1062,39 @@ function mainActionKeyboard(kind = 'drama') {
   const Vidara = require('./vidara-uploader');
   const vidoyOk = Vidoy.isConfigured();
   const vidaraOk = !!Vidara.VIDARA_KEY;
-  const target = (text, act, enabled) => (enabled
-    ? { text, callback_data: act, style: 'primary' }
-    : { text, disabled: {} });
   if (kind === 'anime') {
-    return {
-      inline_keyboard: [
-        [target('📥 Telegram', 'act:a_tg', true)],
-        [target('📥 Vidara + Telegram', 'act:a_vt', vidaraOk)],
-        [target('📥 Vidoy + Telegram', 'act:a_vyt', vidoyOk)],
-        [target('📥 Vidara + Vidoy', 'act:a_vv', vidaraOk && vidoyOk)],
-        [{ text: '🔢 Pilih episode', callback_data: 'act:list' }],
-        [{ text: '💬 Live Chat', callback_data: 'act:ai' }],
-        [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
-      ],
-    };
+    return BTN.kb([
+      [targetBtn('📥 Telegram', 'act:a_tg', true)],
+      [targetBtn('📥 Vidara + Telegram', 'act:a_vt', vidaraOk)],
+      [targetBtn('📥 Vidoy + Telegram', 'act:a_vyt', vidoyOk, 'primary')],
+      [targetBtn('📥 Vidara + Vidoy', 'act:a_vv', vidaraOk && vidoyOk)],
+      [BTN.nav('🔢 Pilih episode', 'act:list')],
+      [BTN.nav('💬 Live Chat', 'act:ai')],
+      [BTN.nav('🏠 Menu Utama', 'act:main_menu')],
+    ]);
   }
-  return {
-    inline_keyboard: [
-      [{ text: '🗜 Telegram — gabung 10', callback_data: 'act:merge10', style: 'primary' }],
-      [target('🗜 Vidara — gabung 10', 'act:v_merge10', vidaraOk)],
-      [target('🗜 Vidara+TG — gabung 10', 'act:vt_merge10', vidaraOk)],
-      [target('🗜 Vidoy — gabung 10', 'act:vy_merge10', vidoyOk)],
-      [target('🗜 Vidoy+TG — gabung 10', 'act:vyt_merge10', vidoyOk)],
-      [{ text: '⚙️ Opsi per episode', callback_data: 'act:drama_legacy' }],
-      [{ text: '🔢 Pilih episode', callback_data: 'act:list' }],
-      [{ text: '💬 Live Chat', callback_data: 'act:ai' }],
-      [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
-    ],
-  };
+  return BTN.kb([
+    [targetBtn('🗜 Telegram — gabung 10', 'act:merge10', true)],
+    [targetBtn('🗜 Vidara — gabung 10', 'act:v_merge10', vidaraOk)],
+    [targetBtn('🗜 Vidara+TG — gabung 10', 'act:vt_merge10', vidaraOk)],
+    [targetBtn('🗜 Vidoy — gabung 10', 'act:vy_merge10', vidoyOk)],
+    [targetBtn('🗜 Vidoy+TG — gabung 10', 'act:vyt_merge10', vidoyOk, 'primary')],
+    [BTN.nav('⚙️ Opsi per episode', 'act:drama_legacy')],
+    [BTN.nav('🔢 Pilih episode', 'act:list')],
+    [BTN.nav('💬 Live Chat', 'act:ai')],
+    [BTN.nav('🏠 Menu Utama', 'act:main_menu')],
+  ]);
 }
 
 function dramaLegacyKeyboard() {
   const Vidara = require('./vidara-uploader');
   const vidaraOk = !!Vidara.VIDARA_KEY;
-  const target = (text, act, enabled) => (enabled ? { text, callback_data: act } : { text, disabled: {} });
-  return {
-    inline_keyboard: [
-      [{ text: '📥 Telegram — per episode', callback_data: 'act:per_ep', style: 'primary' }],
-      [target('📥 Vidara — per episode', 'act:v_per_ep', vidaraOk)],
-      [target('📥 Vidara+TG — per episode', 'act:vt_per_ep', vidaraOk)],
-      [{ text: '⬅️ Kembali', callback_data: 'act:back_menu' }],
-    ],
-  };
+  return BTN.kb([
+    [targetBtn('📥 Telegram — per episode', 'act:per_ep', true, 'primary')],
+    [targetBtn('📥 Vidara — per episode', 'act:v_per_ep', vidaraOk)],
+    [targetBtn('📥 Vidara+TG — per episode', 'act:vt_per_ep', vidaraOk)],
+    [BTN.nav('⬅️ Kembali', 'act:back_menu')],
+  ]);
 }
 
 // ─── Slug cache (Telegram callback_data max 64 bytes, slug bisa 73+) ──────────
@@ -1128,12 +1124,10 @@ function titlePromptKeyboard(fileName, url, detectedTitle = null) {
     ? (detectedTitle.length > 32 ? detectedTitle.slice(0, 29) + '...' : detectedTitle)
     : (fileName.length > 40 ? fileName.slice(0, 37) + '...' : fileName);
   const urlId = cacheUrl(url);
-  return {
-    inline_keyboard: [
-      [{ text: `📥 Download: ${label}`, callback_data: `dl_title_use:${urlId}` }],
-      [{ text: '✏️ Ganti Judul', callback_data: `dl_title_custom:${urlId}` }],
-    ],
-  };
+  return BTN.kb([
+    [BTN.btn(`📥 Download: ${label}`, `dl_title_use:${urlId}`, 'primary')],
+    [BTN.nav('✏️ Ganti Judul', `dl_title_custom:${urlId}`)],
+  ]);
 }
 
 function aiKeyboard() {

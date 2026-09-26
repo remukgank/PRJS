@@ -111,8 +111,14 @@ function loadMenuFns() {
     const end = botSrc.indexOf('\n}', start);
     return botSrc.slice(start, end + 2);
   };
-  const code = [grab('animeTargetKeyboard'), grab('mainActionKeyboard'), grab('dramaLegacyKeyboard')].join('\n');
-  return new Function('require', `${code}; return { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard };`);
+  const code = [
+    grab('targetBtn'),
+    grab('animeTargetKeyboard'),
+    grab('mainActionKeyboard'),
+    grab('dramaLegacyKeyboard'),
+  ].join('\n');
+  const BTN = require(path.join(__dirname, '..', 'lib', 'btn.js'));
+  return new Function('require', 'BTN', `${code}; return { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard };`);
 }
 const makeRequire = (vidoyOk, vidaraOk) => (p) => {
   if (p.includes('vidoy-uploader')) return { isConfigured: () => vidoyOk };
@@ -121,7 +127,7 @@ const makeRequire = (vidoyOk, vidaraOk) => (p) => {
 };
 
 t('menu drama: 9 baris, 5 opsi gabung-10 + sub-menu', () => {
-  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const kb = mainActionKeyboard('drama');
   assert.strictEqual(kb.inline_keyboard.length, 9);
   const texts = kb.inline_keyboard.flat().map((b) => b.text);
@@ -134,19 +140,19 @@ t('menu drama: 9 baris, 5 opsi gabung-10 + sub-menu', () => {
   }
 });
 t('menu anime: 4 target (Telegram / Vidara+TG / Vidoy+TG / Vidara+Vidoy)', () => {
-  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const kb = mainActionKeyboard('anime');
   const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
   for (const a of ['act:a_tg', 'act:a_vt', 'act:a_vyt', 'act:a_vv']) assert.ok(datas.includes(a), a);
 });
 t('sub-menu per-episode drama: 3 opsi + kembali', () => {
-  const { dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const { dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const kb = dramaLegacyKeyboard();
   const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
   for (const a of ['act:per_ep', 'act:v_per_ep', 'act:vt_per_ep', 'act:back_menu']) assert.ok(datas.includes(a), a);
 });
 t('kredensial kosong → tombol target disabled ({}), bukan hilang', () => {
-  const { animeTargetKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(false, false));
+  const { animeTargetKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(false, false), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const btns = animeTargetKeyboard('a', 'b', 'c', 'd').flat();
   assert.ok(btns[0].callback_data === 'a', 'Tombol Telegram tetap aktif');
   for (let i = 1; i < btns.length; i++) {
@@ -157,7 +163,7 @@ t('kredensial kosong → tombol target disabled ({}), bukan hilang', () => {
   assert.ok(legacy[0].callback_data === 'act:per_ep', 'Telegram tetap aktif');
 });
 t('semua callback_data <= 64 byte (dokumen resmi: 1-64 bytes)', () => {
-  const { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const all = [
     ...mainActionKeyboard('drama').inline_keyboard.flat(),
     ...mainActionKeyboard('anime').inline_keyboard.flat(),
@@ -169,13 +175,31 @@ t('semua callback_data <= 64 byte (dokumen resmi: 1-64 bytes)', () => {
     assert.ok(Buffer.byteLength(b.callback_data, 'utf8') <= 64, `terlalu panjang: ${b.callback_data}`);
   }
 });
-t('tombol aktif pakai style (Bot API 10.3) & nilai valid', () => {
-  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
-  const btn = mainActionKeyboard('drama').inline_keyboard[0][0];
-  assert.strictEqual(btn.style, 'primary');
+t('gaya tombol: nilai style valid, tepat 1 primary, navigasi polos', () => {
+  const BTN = require(path.join(__dirname, '..', 'lib', 'btn.js'));
+  const { mainActionKeyboard, animeTargetKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true), BTN);
   const styles = ['danger', 'success', 'primary'];
-  for (const b of mainActionKeyboard('drama').inline_keyboard.flat()) {
-    if (b.style) assert.ok(styles.includes(b.style), 'style tak valid: ' + b.style);
+  const kbs = [
+    ['drama', mainActionKeyboard('drama')],
+    ['anime', mainActionKeyboard('anime')],
+    ['legacy', dramaLegacyKeyboard()],
+    ['animeTarget', { inline_keyboard: animeTargetKeyboard('t', 'v', 'y', 'w') }],
+  ];
+  for (const [label, kb] of kbs) {
+    const all = kb.inline_keyboard.flat();
+    for (const b of all) {
+      if (b.style) assert.ok(styles.includes(b.style), label + ': style tak valid ' + b.style);
+    }
+    assert.strictEqual(BTN.countStyle(kb, 'primary'), 1, label + ': harus tepat 1 primary');
+  }
+  // primary drama & anime = target Vidoy+TG (rekomendasi terbaik)
+  const d = mainActionKeyboard('drama').inline_keyboard.flat();
+  assert.strictEqual(d.find((x) => x.style === 'primary').text, '🗜 Vidoy+TG — gabung 10');
+  const a = mainActionKeyboard('anime').inline_keyboard.flat();
+  assert.strictEqual(a.find((x) => x.style === 'primary').text, '📥 Vidoy + Telegram');
+  // navigasi tidak boleh berwarna
+  for (const txt of ['🏠 Menu Utama', '💬 Live Chat', '🔢 Pilih episode', '⚙️ Opsi per episode']) {
+    for (const b of d) if (b.text === txt) assert.strictEqual(b.style, undefined, txt + ' tidak boleh berwarna');
   }
 });
 
