@@ -4,7 +4,7 @@
 // Tidak ada require('../bot') — cegah cyclical (pola E4/E5a/E5b).
 const { logger } = require('../logger');
 const BTN = require('../lib/btn');
-const { getSetting, setSetting, listRecentVidoyUploads, updateVidoyLink } = require('../db');
+const { getSetting, setSetting, listRecentVidoyUploads, updateVidoyLink, clearVidoyTelegramPointer } = require('../db');
 const Vidoy = require('../vidoy-uploader');
 const { execFile } = require('child_process');
 const { VIP_PACKAGES, VIP_STAR_PRICES, VIP_PACKAGE_ORDER } = require('../services/vipPackages');
@@ -114,6 +114,16 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// "message is not modified" = isi sudah sama → bukan kegagalan.
+function isNotModified(err) {
+  return /message is not modified/i.test(String(err || ''));
+}
+
+// "message to edit not found" = pesan sudah dihapus user.
+function isMessageGone(err) {
+  return /message to edit not found|message to be edited not found|message not found/i.test(String(err || ''));
+}
+
 function recordToken(row) {
   const raw = `${row.media_key}|${row.kind}|${row.part}`;
   return require('crypto').createHash('sha1').update(raw).digest('hex').slice(0, 8);
@@ -214,22 +224,38 @@ async function refreshVidoyLink(row, chatId) {
     await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
   }
   let captionUpdated = false;
+  let messageMissing = false;
   if (row.tg_chat_id && row.tg_message_id) {
     const base = row.caption && String(row.caption).trim()
       ? String(row.caption)
       : buildFallbackCaption(row, link);
     const caption = replaceLinkLine(base, link);
     // Pesan video harus diedit lewat editMessageCaption; editMessageText akan
-    // gagal dengan "there is no text in the message to edit". Coba caption dulu,
-    // lalu jatuh ke text (mis. bilazeh_bytes media_type-nya berubah).
-    const direct = await _ctx.bot.editMessageCaption(row.tg_chat_id, row.tg_message_id, caption, {
+    // selalu gagal dengan "there is no text in the message to edit".
+    const capRes = await _ctx.bot.editMessageCaption(row.tg_chat_id, row.tg_message_id, caption, {
       parse_mode: 'HTML',
-    }).then(() => true).catch(() => false);
-    captionUpdated = direct || await _ctx.bot.editMessageText(caption, {
-      chat_id: row.tg_chat_id, message_id: row.tg_message_id, parse_mode: 'HTML',
-    }).then(() => true).catch(() => false);
+    }).then(() => ({ ok: true })).catch((e) => ({ ok: false, err: String(e && e.message || e) }));
+    if (capRes.ok) {
+      captionUpdated = true;
+    } else if (isNotModified(capRes.err)) {
+      // Caption sudah sama persis dengan yang tersimpan di Telegram → ini
+      // SUKSES, bukan kegagalan. Selain itu Hindari jatuh ke editMessageText
+      // yang pasti 400 (dan memunculkan warning palsu).
+      captionUpdated = true;
+    } else if (isMessageGone(capRes.err)) {
+      // Pesan sudah dihapus di Telegram → bersihkan pointer supaya part ini
+      // bisa dikirim ulang di run berikutnya (tidak hilang permanen).
+      messageMissing = true;
+      await clearVidoyTelegramPointer(row.media_key, row.kind, row.part).catch(() => {});
+    } else {
+      // Fallback untuk pesan ber-teks (bukan video).
+      const txtRes = await _ctx.bot.editMessageText(caption, {
+        chat_id: row.tg_chat_id, message_id: row.tg_message_id, parse_mode: 'HTML',
+      }).then(() => true).catch(() => false);
+      captionUpdated = txtRes;
+    }
   }
-  return { ok: true, alive, link, changed: link !== row.link, captionUpdated };
+  return { ok: true, alive, link, changed: link !== row.link, captionUpdated, messageMissing };
 }
 
 async function handleAdminPanel({ chatId }) {
@@ -414,6 +440,8 @@ module.exports = {
   refreshVidoyLink,
   recordToken,
   findRowByToken,
+  isNotModified,
+  isMessageGone,
   replaceLinkLine,
   buildFallbackCaption,
   partEpisodeLabel,

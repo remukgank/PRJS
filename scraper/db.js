@@ -303,6 +303,19 @@ async function saveVidoyUpload(rec) {
   }
 }
 
+// Pesan Telegram dihapus user → pointer dibersihkan agar part bisa dikirim ulang.
+async function clearVidoyTelegramPointer(mediaKey, kind, part) {
+  try {
+    await pool.query(
+      `UPDATE vidoy_uploads SET tg_chat_id = NULL, tg_message_id = NULL
+        WHERE media_key = $1 AND kind = $2 AND part = $3`,
+      [mediaKey, kind, Number(part) || 0]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind, part }, 'Failed to clear vidoy telegram pointer');
+  }
+}
+
 async function setVidoyTelegramPointer(mediaKey, kind, part, chatId, messageId) {
   try {
     await pool.query(
@@ -547,6 +560,7 @@ module.exports = {
   saveVidoyUpload,
   listVidoyUploads,
   setVidoyTelegramPointer,
+  clearVidoyTelegramPointer,
   updateVidoyLink,
   listRecentVidoyUploads,
   getVidaraUpload,

@@ -75,6 +75,7 @@ function wrapHtmlSafety(bot) {
         return await original(...args);
       } catch (err) {
         if (!isTelegramBadRequest(err) || !options || options.parse_mode !== 'HTML') throw err;
+        if (!isHtmlEntityError(err)) throw err;
         const fallback = args.slice();
         const plainOptions = { ...options };
         delete plainOptions.parse_mode;
@@ -90,6 +91,14 @@ function wrapHtmlSafety(bot) {
     };
   }
   Object.defineProperty(bot, HTML_SAFETY_WRAP_MARK, { value: true, enumerable: false });
+}
+
+// Retry plain-text hanya berguna kalau 400-nya memang soal parse entities.
+// "message is not modified" / "there is no text in the message to edit" adalah
+// masalah lain (bukan HTML) — me-retry-nya hanya menghasilkan warning palsu.
+function isHtmlEntityError(err) {
+  const msg = String((err && err.message) || err || '');
+  return /can't parse entities|can't parse message text|can't parse caption|unsupported start tag|unclosed tag|parse entities|entity parsing/i.test(msg);
 }
 
 function wrapAnswerCallbackQuery(bot, sleepFn = sleep) {
@@ -192,6 +201,7 @@ function apiPost(method, payload, _retry, _transient, _htmlFallbackDone) {
               !_htmlFallbackDone
               && json.error_code === 400
               && outgoing.parse_mode === 'HTML'
+              && isHtmlEntityError({ message: json.description || '' })
             ) {
               logger.warn({ method, err: err.message }, 'apiPost 400 pada parse_mode HTML — retry sebagai plain text');
               resolve(await apiPost(method, toPlainTextPayload(outgoing), _retry, _transient, true));

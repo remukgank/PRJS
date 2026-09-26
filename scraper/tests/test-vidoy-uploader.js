@@ -477,6 +477,47 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: interpretasi hasil edit caption ──
+t('KRITIS: "message is not modified" dianggap SUKSES (bukan gagal)', () => {
+  assert.strictEqual(require('../handlers/admin').isNotModified('ETELEGRAM: 400 Bad Request: message is not modified: specified new message content and reply markup are exactly the same'), true);
+  assert.strictEqual(require('../handlers/admin').isNotModified('ETELEGRAM: 400 Bad Request: there is no text in the message to edit'), false);
+  assert.strictEqual(require('../handlers/admin').isNotModified(''), false);
+});
+
+t('KRITIS: "message to edit not found" terdeteksi (pesan dihapus user)', () => {
+  assert.strictEqual(require('../handlers/admin').isMessageGone('ETELEGRAM: 400 Bad Request: message to edit not found'), true);
+  assert.strictEqual(require('../handlers/admin').isMessageGone('ETELEGRAM: 400 Bad Request: message is not modified'), false);
+});
+
+t('KRITIS: refresh tidak jatuh ke editMessageText saat caption tak berubah', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  const fn = admin.slice(admin.indexOf('async function refreshVidoyLink'), admin.indexOf('async function handleAdminPanel'));
+  if (!/isNotModified\(capRes\.err\)/.test(fn)) throw new Error('tidak menangani "not modified"');
+  if (!/isMessageGone\(capRes\.err\)/.test(fn)) throw new Error('tidak menangani pesan hilang');
+  // cabang "not modified" harus Setel captionUpdated = true
+  const notMod = fn.slice(fn.indexOf('isNotModified(capRes.err)'));
+  if (!/captionUpdated = true/.test(notMod.slice(0, 400))) throw new Error('not modified tidak dihitung sukses');
+});
+
+t('KRITIS: db punya clearVidoyTelegramPointer (pesan dihapus → bisa kirim ulang)', () => {
+  const dbSrc = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  if (!/async function clearVidoyTelegramPointer/.test(dbSrc)) throw new Error('fungsi tidak ada');
+  if (!/tg_chat_id = NULL, tg_message_id = NULL/.test(dbSrc)) throw new Error('tidak membersihkan kedua kolom');
+  const exp = require('../db');
+  if (typeof exp.clearVidoyTelegramPointer !== 'function') throw new Error('tidak diekspor');
+});
+
+t('KRITIS: retry plain-text HANYA untuk error parse entities', () => {
+  const src = require('fs').readFileSync(require.resolve('../lib/telegram'), 'utf8');
+  if (!/function isHtmlEntityError/.test(src)) throw new Error('helper tidak ada');
+  if (!/isHtmlEntityError\(err\)/.test(src)) throw new Error('wrapper editMessage tidak memfilter');
+  if (!/isHtmlEntityError\(\{ message: json\.description/.test(src)) throw new Error('apiPost tidak memfilter');
+  // harus menolak 400 non-HTML
+  const m = src.match(/function isHtmlEntityError[\s\S]{0,500}/);
+  if (!/can't parse entities/.test(m[0])) throw new Error('pola error HTML tidak dikenali');
+});
+
+
 t('KRITIS: pilihan target batch tidak boleh ditelan diam-diam (.catch(() => {}))', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   for (const tag of ['sam_all', 'kur_all']) {

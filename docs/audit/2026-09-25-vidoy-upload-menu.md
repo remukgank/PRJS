@@ -258,3 +258,37 @@ baru ketahuan karena user memakai `Download Semua`.
 ### Belum diuji live
 - Target `📥 Vidoy + TG` pada batch anime (`sam_allgo` / `kur_allgo`) — belum
   pernah dijalankan sungguhan; menunggu user. Saran: mulai dari anime pendek.
+
+## 11. Refresh link: "not modified" bukan kegagalan (26 Sep 2026, 00:46)
+
+### Gejala
+User menekan `🔄 Perbarui Semua` → 7 warning per tekanan:
+`400 Bad Request: there is no text in the message to edit` (method `editMessageText`).
+Total 58 warning, padahal caption sudah benar semua.
+
+### Akar masalah (2 lapis)
+1. `editMessageCaption` **berhasil** secara fungsional tetapi Telegram membalas
+   `400 message is not modified` karena caption yang dikirim identik dengan yang
+   ada. Kode memperlakukannya sebagai kegagalan, lalu jatuh ke fallback
+   `editMessageText` yang pada pesan video **pasti** 400 → warning palsu.
+2. `lib/telegram.js` me-retry sebagai plain text pada **setiap** 400 saat
+   `parse_mode: HTML`, termasuk 400 yang sama sekali tidak soal HTML.
+
+### Perbaikan
+- `refreshVidoyLink` membaca hasil edit secara eksplisit:
+  - sukses → `captionUpdated = true`
+  - `message is not modified` → **sukses** (caption sudah benar), tidak jatuh
+    ke fallback
+  - `message to edit not found` → pesan sudah dihapus user → pointer
+    `tg_chat_id`/`tg_message_id` **dibersihkan** (fitur `clearVidoyTelegramPointer`)
+    supaya part bisa dikirim ulang di run berikutnya
+  - error lain → fallback `editMessageText` (untuk pesan ber-teks)
+- `lib/telegram.js`: retry plain-text hanya bila 400-nya memang parse entities
+  (`isHtmlEntityError`), sehingga warning palsu tidak muncul lagi.
+
+### Verifikasi
+- Uji nyata: `editMessageCaption` ke msg#5615/5616/5617 membalas
+  `message is not modified` → kini dibaca sebagai sukses.
+- `test-vidoy-uploader` 87 pass, `test-btn-style` 10, `test-html-safety` 22,
+  `test-caption-html-escape` 6, `test-libmenu-grid` 14,
+  `test-telegram-callback-retry` / `transient-retry` (9/9) / `apiPost` (4/4) — 0 fail.
