@@ -538,3 +538,47 @@ Sekarang `title || '—'`. Caption dengan judul valid **tidak berubah format**.
 - `test-media-contract` 10 pass; `test-vidoy-uploader` 103; `test-caption-html-escape` 6;
   `test-html-safety` 22; `test-btn-style` 10; `test-anime-topic-router` 18;
   `test-libmenu-grid` 14; `test-sam-*` & telegram retry suites exit 0 — 0 fail.
+
+## 19. Bug: `db is not defined` di batch anime (26 Sep 2026, 01:28)
+
+### Gejala
+```
+📦 Menyiapkan batch download...
+🔎 Pre-scan selesai: 220 ep layak unduh, 0 dilewati
+❌ Error: db is not defined
+```
+
+### Akar masalah
+`animeDoneMap()` (ditambahkan di §16) memanggil `db.listVidoyUploads(...)`,
+tapi di `bot.js` modul db di-import **destructuring**:
+```js
+const { pool, ..., listRecentVidoyUploads } = require('./db');
+```
+Tidak ada objek bernama `db` → `ReferenceError` setiap kali batch dijalankan.
+
+### Perbaikan
+- `listVidoyUploads` ditambahkan ke import destructuring.
+- `animeDoneMap` memanggil `listVidoyUploads(...)` langsung.
+
+### Pencegahan
+Tes statis diperluas (yang sebelumnya hanya mengecek **fungsi** tak terdefinisi,
+karena itu yang menangkap `targetLabel`):
+- sekarang mengecek juga **alias modul** yang dipanggil sebagai objek
+  (`db.`, `_vidoyHandlers.`, `Vidoy.`, dll) di jalur runner batch
+- plus tes khusus: `bot.js` **dilarang** memakai `db.` dan wajib meng-import
+  `listVidoyUploads`
+
+Artinya kelas bug "X is not defined" — yang sudah menimpa dua kali
+(`targetLabel`, lalu `db`) — sekarang dicek sebelum runtime.
+
+### Catatan lain (tidak terkait kode)
+Instance Replit di-restart (pm2 state + log hilang). Setelah start ulang, bot
+lama ternyata masih hidup sebagai proses liar di luar pm2 (PID 219) →
+`409 Conflict: terminated by other getUpdates request`. Orfan tersebut di-kill
+(SIGTERM), pm2 `save` ulang, dan start pakai `--max-memory-restart 700M`.
+
+### Verifikasi
+- `test-vidoy-uploader` 105 pass, `test-media-contract` 10, `test-btn-style` 10,
+  `test-html-safety` 22, `test-caption-html-escape` 6, `test-anime-topic-router` 18,
+  `test-libmenu-grid` 14, `test-sam-*` exit 0 — 0 fail.
+- PM2 restart 01:30:21, `Bot running`, tanpa 409.

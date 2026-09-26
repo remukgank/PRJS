@@ -477,6 +477,61 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: identifier yang dipakai WAJIB terdefinisi (objek & fungsi) ──
+t('KRITIS: tidak ada identifier tak-terdefinisi di jalur batch anime', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const declared = new Set([...BOT.matchAll(/function ([A-Za-z0-9_]+)/g)].map((m) => m[1]));
+  const consts = new Set([...BOT.matchAll(/(?:const|let|var) ([A-Za-z0-9_]+)\s*=/g)].map((m) => m[1]));
+  const destructured = new Set([...BOT.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim().split(':')[0].trim()).filter(Boolean)));
+  const params = new Set([...BOT.matchAll(/\(([^)]*)\)\s*(?:=>|\{)/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim().replace(/[{}[\].]/g, '').split('=')[0].trim()).filter(Boolean)));
+  const imports = new Set([...BOT.matchAll(/(?:const|let)\s*\{([^}]*)\}\s*=\s*require/g)]
+    .flatMap((m) => m[1].split(',').map((x) => x.trim().split(':')[0].trim())));
+  const defaultImports = new Set([...BOT.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*require/g)].map((m) => m[1]));
+  const known = new Set([...declared, ...consts, ...destructured, ...params, ...imports, ...defaultImports]);
+  const start = BOT.indexOf('const doneMap = await animeDoneMap');
+  const end = BOT.indexOf('logger.info({ chatId, title, target, ok, fail, skip, skippedDone }', start);
+  const body = BOT.slice(start, end > start ? end : start + 6000)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+  // identifier yang dipanggil sebagai fungsi ATAU dipanggil sebagai objek
+  const called = new Set([...body.matchAll(/(^|[^.\w$])([a-zA-Z_$][\w$]{1,})\s*\(/g)].map((m) => m[2]));
+  const METHODS = new Set(['slice', 'push', 'join', 'map', 'filter', 'forEach', 'keys', 'values', 'entries',
+    'toFixed', 'includes', 'split', 'trim', 'replace', 'match', 'test', 'then', 'catch', 'finally', 'log', 'warn', 'info',
+    'sendMessage', 'editMessageText', 'start', 'updateEpisode', 'update', 'done', 'fail', 'resolve', 'reject',
+    'stringify', 'floor', 'get', 'set', 'has', 'padStart', 'flat', 'find', 'some', 'every', 'call', 'apply',
+    'for', 'if', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'do', 'else',
+    'Number', 'String', 'Boolean', 'Object', 'Array', 'JSON', 'Math', 'Date', 'Promise', 'Set', 'Map', 'RegExp',
+    'decodeURIComponent', 'encodeURIComponent', 'parseInt', 'parseFloat', 'isNaN', 'Error',
+    // kata kunci dari teks pesan Indonesia yang mengandung "("
+    'dilewati', 'didukung', 'layak', 'terdaftar', 'async']);
+  const missingFns = [...called].filter((n) => !known.has(n) && !METHODS.has(n));
+  if (missingFns.length) throw new Error('fungsi tak terdefinisi: ' + missingFns.join(', '));
+  // Alias modul yang dipakai sebagai `X.yyy` di jalur ini WAJIB terdefinisi.
+  // Scan hanya nama alias yang umum dipakai di repo ini agar tidak kena teks biasa.
+  const MODULE_ALIASES = ['db', '_db', '_vidoyHandlers', '_downloadHandlers', '_adminHandlers', '_libraryHandlers',
+    'Vidoy', 'Vdara', 'V', 'B', 'BTN', 'db2', 'logger', 'RichProgress', 'Progress'];
+  const usedAliases = MODULE_ALIASES.filter((a) => new RegExp('(^|[^.\\w$])' + a + '\\.').test(body));
+  const badAliases = usedAliases.filter((a) => !known.has(a));
+  if (badAliases.length) {
+    throw new Error('objek tak terdefinisi → ReferenceError: ' + badAliases.join(', '));
+  }
+});
+
+t('KRITIS: db tidak dipakai sebagai objek di bot.js (import-nya destructuring)', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const hits = [...BOT.matchAll(/(^|[^.\w$])db\.[A-Za-z_]/g)].map((m) => m[0]);
+  if (hits.length) throw new Error('bot.js memakai `db.` padahal import-nya destructuring → ReferenceError: ' + hits[0].trim());
+  // listVidoyUploads harus di-import karena dipakai animeDoneMap
+  if (!/listVidoyUploads[^\n]*\}\s*=\s*require\('\.\/db'\)/.test(BOT)) {
+    throw new Error('listVidoyUploads tidak di-import dari ./db');
+  }
+  if (!/await listVidoyUploads\(String\(mediaKey\), 'anime'\)/.test(BOT)) {
+    throw new Error('animeDoneMap harus memanggil listVidoyUploads yang di-import');
+  }
+});
+
+
 // ── REGRESSION: anime harus masuk topic Anime, bukan General ──
 t('KRITIS: kirim anime lewat sendAnimeMedia (topic Anime, bukan General)', () => {
   const src = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
