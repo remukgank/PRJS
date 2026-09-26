@@ -1098,12 +1098,19 @@ async function resolveDirectUrl(url) {
     if (isGofileUrl(url)) {
       if (isGofileDirectUrl(url)) return { url, name: resolveFileName(url) || filenameFromGofileUrl(url) };
       const file = await resolveGofileFirstFile(url);
-      if (!file?.link) return null;
-      return { url: file.link, name: file.name || filenameFromGofileUrl(file.link) };
+      // resolveGofileFiles() mengembalikan { url, name, size } — field URL-nya
+      // "url", bukan "link". Dulu dispatcher membaca file.link sehingga gofile
+      // SELALU gagal (episode tanpa filedon langsung marked failed).
+      const link = file && (file.url || file.link);
+      if (!link) return null;
+      return { url: link, name: file.name || filenameFromGofileUrl(link) };
     }
     if (isPixeldrainUrl(url)) {
       const info = await getPixeldrainInfo(url);
-      return info?.url ? { url: info.url, name: info.name } : null;
+      // getPixeldrainInfo() mengembalikan { id, name, size, mimeType, directUrl }
+      // — field URL-nya "directUrl", bukan "url".
+      const link = info && (info.directUrl || info.url);
+      return link ? { url: link, name: info.name } : null;
     }
     if (isFiledonUrl(url)) {
       const f = await resolveFiledonFile(url);

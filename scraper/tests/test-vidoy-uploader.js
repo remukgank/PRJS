@@ -477,6 +477,51 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: resolveDirectUrl harus baca field yang BENAR-BENAR dikembalikan provider ──
+t('gofile: dispatcher baca file.url (bukan file.link)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('async function resolveDirectUrl');
+  const body = D.slice(i, D.indexOf('\n}', i));
+  const seg = body.slice(body.indexOf('isGofileUrl(url)'), body.indexOf('isPixeldrainUrl(url)'));
+  if (!/file\.url \|\| file\.link/.test(seg)) {
+    throw new Error('harus menerima file.url DAN file.link — resolveGofileFiles() mengembalikan { url, name, size }');
+  }
+  //-file.link boleh muncul HANYA sebagai fallback setelah file.url, bukan sebagai sumber utama
+  if (/if \(!file\?\.link\) return null/.test(seg)) throw new Error('masih menolak file tanpa file.link');
+  if (/return \{ url: file\.link/.test(seg)) throw new Error('url diambil dari file.link → gofile selalu gagal');
+});
+
+t('pixeldrain: dispatcher baca info.directUrl (bukan info.url)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('async function resolveDirectUrl');
+  const body = D.slice(i, D.indexOf('\n}', i));
+  const seg = body.slice(body.indexOf('isPixeldrainUrl(url)'), body.indexOf('isFiledonUrl(url)'));
+  if (!/info\.directUrl \|\| info\.url/.test(seg)) {
+    throw new Error('harus menerima info.directUrl DAN info.url — getPixeldrainInfo() mengembalikan { directUrl }');
+  }
+  if (/return info\?\.url \?/.test(seg)) throw new Error('masih membaca info.url → pixeldrain selalu gagal');
+});
+
+t('anti-drift: nama field yang dibaca dispatcher = field yang ditulis provider', () => {
+  // gofile: fungsi push file harus memakai key "url"
+  const G = require('fs').readFileSync(require.resolve('../providers/gofile'), 'utf8');
+  const gofilePush = (G.match(/files\.push\(\{[\s\S]{0,140}?\}\)/g) || []).join(' ');
+  if (!/\burl:/.test(gofilePush)) {
+    throw new Error('resolveGofileFiles() tidak lagi mengembalikan key "url" — dispatcher harus ikut diperbarui: ' + gofilePush.slice(0, 80));
+  }
+  // pixeldrain: return block harus punya directUrl
+  const P = require('fs').readFileSync(require.resolve('../providers/pixeldrain'), 'utf8');
+  const i = P.indexOf('async function getPixeldrainInfo');
+  const ret = P.slice(i, P.indexOf('\n  }', i));
+  if (!/\bdirectUrl:/.test(ret)) {
+    throw new Error('getPixeldrainInfo() tidak lagi mengembalikan "directUrl" — dispatcher harus ikut diperbarui');
+  }
+  // filedon tetap url (dipakai dispatcher)
+  const F = require('fs').readFileSync(require.resolve('../providers/filedon'), 'utf8');
+  if (!/return \{ url: /.test(F)) throw new Error('filedon bentuk return berubah — cek dispatcher filedon');
+});
+
+
 // ── REGRESSION: link + pointer vidoy di choke point sendAnimeMedia ──────────
 t('link: withVidoyLink memakai keyPart (formula sama dgn vidoy.js:207)', () => {
   const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');

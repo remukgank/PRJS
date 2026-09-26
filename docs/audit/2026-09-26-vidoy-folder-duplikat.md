@@ -194,3 +194,52 @@ episode cocok dengan episodenya. Dugaan "duplikat" yang initially dilaporkan tid
 terkonfirmasi — yang terlihat hanyalah selisih 20 file per tampilan, karena
 halaman folder publik membatasi tampilan di 20 item per halaman (bukan paginasi
 yang bisa diproses).
+
+---
+
+## G. BUG: gofile & pixeldrain selalu gagal di jalur Vidoy (26 Sep 2026, 16:00 UTC)
+
+### Gejala
+Batch "Black Torch" (`sam_allgo:vyt`): 12 episode, **episode 1–4 gagal**, 5–12 sukses.
+
+### Trace
+1. Log bot **hilang**: stdout diarahkan ke `/dev/pts/2`, tidak ada file log.
+   Setelah instance restart, bot juga **tidak di bawah pm2** (proses telanjang).
+   Jejak `/tmp/vidoy-*` juga ikut terhapus.
+2. Sumber normal: samehadaku punya 12 episode (`black-torch-episode-N/`),
+   halaman ep 1 dan ep 5 identik secara struktur.
+3. `resolveSamehadakuFullhd()` untuk ep 1 & 2 mengembalikan server
+   `gofile, pixeldrain` (ep 1 punya tambahan `krakenfiles` yang tak didukung).
+   Jadi **bukan** "no supported server" — ep 5 sukses karena punya `filedon`.
+4. `resolveDirectUrl()` → `null` untuk gofile & pixeldrain, `OK` untuk filedon.
+
+### Root cause — ketidakcocokan nama field
+`scraper/handlers/download.js:resolveDirectUrl()`
+
+| Provider | Yang dikembalikan | Yang dibaca dispatcher | Hasil |
+|---|---|---|---|
+| gofile | `{ url, name, size }` | `file?.link` | **null → gagal** |
+| pixeldrain | `{ id, name, size, mimeType, directUrl }` | `info?.url` | **null → gagal** |
+| filedon | `{ url, name, size }` | `f?.url` | benar → jalan |
+
+Dampak: di jalur `target != 'tg'` (upload Vidoy), **hanya `filedon` dan
+`gdriveplayer` yang bisa dipakai**. Episode yang hanya punya gofile/pixeldrain
+selalu `fail`. Jalur `target === 'tg'` tidak terpengaruh karena memanggil
+`downloadSamehadakuFile()` yang memanggil provider secara langsung.
+
+### Perbaikan
+`resolveDirectUrl()` kini menerima kedua nama field:
+- gofile → `file.url || file.link`
+- pixeldrain → `info.directUrl || info.url`
+
+### Verifikasi
+| Uji | Sebelum | Sesudah |
+|---|---|---|
+| ep 1 gofile | `null (gagal resolve)` | `OK → BlackTorch-01-FULLHD-SAMEHADAKU.CARE.mp4` |
+| ep 1 pixeldrain | `null (gagal resolve)` | `OK → BlackTorch-01-FULLHD-SAMEHADAKU.CARE.mp4` |
+| ep 2 gofile | — | `OK → BlackTorch-02-FULLHD-SAMEHADAKU.CARE.mp4` |
+| ep 2 pixeldrain | — | `OK → BlackTorch-02-FULLHD-SAMEHADAKU.CARE.mp4` |
+
+`test-vidoy-uploader` **130 pass** (+3 tes, termasuk tes anti-drift yang
+memastikan nama field di dispatcher sama dengan yang ditulis provider).
+Suite lain 0 fail. Tidak ada kode produksi lain yang diubah.
