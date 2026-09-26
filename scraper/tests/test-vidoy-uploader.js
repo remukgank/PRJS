@@ -477,6 +477,33 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: validasi unduhan berlaku di SEMUA jalur, termasuk Telegram ────
+t('validasi juga aktif di downloadWithAria2c (jalur Telegram)', () => {
+  const D = require('fs').readFileSync(require.resolve('../downloader'), 'utf8');
+  if (!/assertLooksLikeVideo\(outPath\)/.test(D)) {
+    throw new Error('downloadWithAria2c tidak memvalidasi hasil unduh — celah yang sama seperti vidaraService');
+  }
+  const i = D.indexOf('assertLooksLikeVideo(outPath)');
+  const sizeCheck = D.indexOf("sizeBytes < 1024", i - 600);
+  if (i < 0 || sizeCheck < 0 || i < sizeCheck) {
+    throw new Error('validasi harus dijalankan setelah download selesai');
+  }
+  if (!/require\('\.\/services\/vidaraService'\)/.test(D)) {
+    throw new Error('assertLooksLikeVideo tidak diimpor dari vidaraService');
+  }
+});
+
+t('satu sumber validasi untuk semua jalur', () => {
+  // Semua titik unduh wajib memakai validator yang sama — kalau ada duplikat
+  // logika validasi, jalur yang tidak ter-update akan diam-diam tertinggal.
+  const files = ['downloader', 'services/vidaraService', 'handlers/download'];
+  const n = files.map((f) => (require('fs').readFileSync(require.resolve('../' + f), 'utf8').match(/assertLooksLikeVideo/g) || []).length);
+  if (n[0] < 1) throw new Error('downloader.js tidak memanggil validator');
+  if (n[1] < 2) throw new Error('vidaraService.js harus mendefinisikan DAN memanggil validator');
+  if (n[2] !== 0) throw new Error('handlers/download.js tidak boleh punya logika validasi sendiri');
+});
+
+
 // ── REGRESSION: file hasil unduh WAJIB divalidasi sebelum upload ─────────────
 t('validasi unduhan: HTML / JSON / indeterminate-kecil ditolak, MP4 sah lolos', () => {
   const fs = require('fs');

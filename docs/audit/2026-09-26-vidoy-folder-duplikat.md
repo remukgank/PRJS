@@ -329,3 +329,37 @@ suite lain 0 fail.
 Episode 1 & 3 tetap perlu mirror lain: file-nya **di-takedown copyright** di
 pixeldrain. gofile bisa dibaca setelah header di atas, tapi ketersediaannya
 bergantung pada mirror.
+
+## J. TRACE LENGKAP SEMUA JALUR UNDUH (26 Sep 2026)
+
+Dipetakan semua titik unduh di kode, lalu diverifikasi fungsional dengan server
+lokal yang membalas HTTP 200 (MP4 asli vs HTML error).
+
+### Titik unduh yang ada
+| Fungsi | Dipakai jalur | Header | Validasi |
+|---|---|---|---|
+| `downloadWithAria2c` (`downloader.js:306`) | Telegram semua leaf handler | `extraHeaders` dari pemanggil ✅ | **baru ditambahkan** |
+| `downloadTo` (`vidaraService.js:17`) | Vidoy (`actionAnimeEpisode`) & Vidara (`downloadChunk`) | gofile auth ✅ (commit `320bbfd`) | `assertLooksLikeVideo` ✅ |
+| `ensureMp4` ffmpeg (HLS) | Vidoy/Vidara | — | (via ffmpeg) |
+
+### Temuan trace
+1. **Celah terakhir**: jalur Telegram tidak memvalidasi hasil unduh — persis
+   bug yang baru diperbaiki di jalur Vidoy. `downloadWithAria2c` hanya punya
+   pengecekan `sizeBytes < 1024`, jadi HTML 4 KB lolos. Sudah ditutup dengan
+   `assertLooksLikeVideo` di `downloader.js`.
+2. **Tidak ada jalur unduh lain yang terlewat.** Semua pemanggil
+   `downloadWithAria2c` (baris 120/245/357/530/680/851/998) mengirim
+   `extraHeaders` yang benar; hanya ada 2 definisi `extraHeaders` dan keduanya
+   berisi `Referer` + `Authorization: Bearer $GOFILE_TOKEN`.
+3. `uploadSingle` (Vidoy) dan `uploadToVidara` **tidak mengunduh** — hanya
+   menerima file yang sudah ada, jadi tidak perlu validasi di sana.
+
+### Verifikasi fungsional (server lokal, HTTP 200)
+| Jalur | MP4 asli | HTML error |
+|---|---|---|
+| Vidoy (`ensureMp4`) | LOLOS ✓ | TERTOLAK ✓ |
+| Vidara (`downloadChunk`) | OK ✓ | TERTOLAK ✓ |
+| Telegram (`downloadWithAria2c`) | LOLOS ✓ | TERTOLAK ✓ |
+
+`test-vidoy-uploader` **138 pass** (+2), suite lain 0 fail.
+Aturan baru di AGENTS.md: satu sumber validasi untuk semua jalur.

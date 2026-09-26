@@ -13,6 +13,7 @@ const axios = require('axios');
 
 const { logger: appLogger, ffmpegLogger } = require('./logger');
 const backpressure = require('./lib/backpressure'); // lapis 1+2 gate sebelum tiap download
+const { assertLooksLikeVideo } = require('./services/vidaraService');
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 // UA browser penuh (bukan "Mozilla/5.0" saja): CDN galak (farsunpteltd dkk)
 // menolak request ffmpeg default/Lavf maupun UA terpotong -> 403.
@@ -438,13 +439,22 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSizeOrOp
         cleanupFiles(outPath);
         return reject(new Error(killReason));
       }
-      if (code === 0 && fs.existsSync(outPath)) {
-        const sizeBytes = fs.statSync(outPath).size;
-        if (sizeBytes < 1024) {
-          cleanupFiles(outPath);
-          return reject(new Error('File terlalu kecil — URL mungkin expired'));
-        }
-        const sizeMb = (sizeBytes / 1024 / 1024).toFixed(1);
+if (code === 0 && fs.existsSync(outPath)) {
+  const sizeBytes = fs.statSync(outPath).size;
+  if (sizeBytes < 1024) {
+    cleanupFiles(outPath);
+    return reject(new Error('File terlalu kecil — URL mungkin expired'));
+  }
+  // Validasi isi, bukan cuma ukuran. Provider yang balas HTTP 200 dengan halaman
+  // error (mis. gofile tanpa header auth → "Gofile needs JavaScript to run")
+  // lolos pengecekan ukuran 1 KB, lalu diteruskan ke upload/Telegram sebagai video.
+  try {
+    assertLooksLikeVideo(outPath);
+  } catch (err) {
+    cleanupFiles(outPath);
+    return reject(err);
+  }
+  const sizeMb = (sizeBytes / 1024 / 1024).toFixed(1);
         appLogger.info({ file: fileName, sizeMb, status: 'done' }, 'aria2c download complete');
         resolve(outPath);
       } else {
