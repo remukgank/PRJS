@@ -619,3 +619,24 @@ Tidak ada duplikat di **Vidoy** (uploadSingle tetap skip). Pointer lama
 
 ### Verifikasi
 `test-vidoy-uploader` 107 pass, `test-media-contract` 10 pass — 0 fail.
+
+## 21. ATURAN KERAS (ditetapkan user, 26 Sep 2026)
+
+> **ATURAN KERAS #1 — VIDOY**
+> Dilarang keras ada **duplikat di Vidoy**. Satu episode = satu file di Vidoy,
+> untuk selamanya. Kalau record-nya sudah ada → **dilewati**, tidak pernah
+> di-upload ulang. Tidak ada pengecualian.
+>
+> **ATURAN KERAS #2 — TELEGRAM**
+> Telegram **boleh** mengirim ulang. Duplikat di Telegram **tidak masalah**,
+> tidak perlu dicegah, tidak perlu dihindari. Kalau episode dikirim ulang ke
+> Telegram, itu dianggap normal dan tidak dianggap bug.
+
+Konsekuensi yang sudah disepakati:
+- Kalau pointer Telegram kosong (pesan dihapus) → episode **dikirim ulang**
+  (link Vidoy yang sudah dipakai, tanpa upload ke Vidoy).
+- Kalau `vidoy_uploads` sudah punya link → upload ke Vidoy **dilewati**,
+  playlist Telegram tetap boleh dikirim.
+
+Referensi: §20 (bug kolom pointer) — duplikat Telegram di situ **diizinkan**,
+yang tidak boleh terjadi hanya duplikat di Vidoy.
