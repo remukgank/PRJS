@@ -154,3 +154,43 @@ yang bisa diperiksa (lihat A3b). Jadi H2 **belum tersingkir**.
    (kosmetik, boleh dibundel).
 4. Fix path folder + migrasi file — **hanya setelah** H1 terkonfirmasi dan
    setelah fomo-drama dinyatakan aman oleh user.
+
+---
+
+## F. VERIFIKASI FINAL — 26 Sep 2026 (browser sungguhan, 220/220)
+
+### Metode
+Checker: `scraper/tools/check-vidoy-links.js` — satu Chromium headless per link
+(`--dump-dom`), verdict-nya bukan "halaman tidak 404" tapi **apakah `videq_iframe`
+bertoken terbentuk**, lalu token di-decode untuk diambil nama file asli.
+
+### Hasil
+| Metrik | Hasil |
+|---|---|
+| Episode diperiksa | **220 / 220** (seluruh seri) |
+| Punya pemutar + token | **220** |
+| Mati / tanpa pemutar / error | **0** |
+| Nama file di token ≠ nomor episode | **0** |
+| Hasil mentah | `docs/audit/2026-09-26-vidoy-link-check-220.csv` |
+
+### Koreksi penting atas klaim sebelumnya
+Saya sempat menyatakan "Ep 01 file-nya rusak" berdasarkan halaman 404. **Itu SALAH.**
+Terbukti: Ep 01 punya pemutar dan token `Naruto Kecil — Ep 01.mp4`.
+
+Penyebabnya: **`vidmonstr.com` serving 404 secara intermiten** untuk file yang
+valid — episode yang sama balas 404 pada satu request dan playable pada request
+berikutnya. Terukur:
+- curl ke `soit3jakr51l` (Ep 01): 0/20 hidup di satu jendela, 20/20 hidup di jendela lain
+- Chromium: 404 sekali, lalu `punya-pemutar` di pemeriksaan berikutnya
+- Satu kali cek link **tidak bisa dipercaya** sebagai bukti file mati
+
+### Konsekuensi untuk `link_alive`
+Satu kali cek = positif palsu (`false negative`). `link_alive=false` baru layak
+dipakai sebagai bukti kalau link **diulang minimal 2–3× dan tetap 404**.
+
+### Kesimpulan
+Tidak ada file korup, tidak ada file duplikat di sisi Vidoy, dan nama file tiap
+episode cocok dengan episodenya. Dugaan "duplikat" yang initially dilaporkan tidak
+terkonfirmasi — yang terlihat hanyalah selisih 20 file per tampilan, karena
+halaman folder publik membatasi tampilan di 20 item per halaman (bukan paginasi
+yang bisa diproses).
