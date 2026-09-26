@@ -316,7 +316,7 @@ function partEpisodeLabel(part, epStart, epEnd) {
 
 function buildCaption({ title, provider, part, epStart, epEnd, link }) {
   return [
-    `➧ Judul :- <b>${safeHtml(title)}</b>`,
+    `➧ Judul :- <b>${safeHtml(title || '\u2014')}</b>`,
     `➧ ${partEpisodeLabel(part, epStart, epEnd)}`,
     `➧ Provider :- ${safeHtml(provider || '\u2014')}`,
     ...(link ? [`➧ Link :- <a href="${safeHtml(link)}">${safeHtml(shortLinkLabel(link))}</a>`] : []),

@@ -501,3 +501,40 @@ tidak memakai sender anime sama sekali.
   initVidoy menyuntikkannya, dan kontrak `lib/animeTopic`),
   `test-anime-topic-router` 18, `test-btn-style` 10 — 0 fail.
 - Restart dilakukan setelah job batch selesai agar tidak terputus.
+
+## 18. KONTRAK MEDIA — test pengunci streaming & format caption (26 Sep 2026)
+
+### Latar
+User angrily warned repeatedly: **video WAJIB streaming** dan **format caption
+WAJIB tidak berubah**. Kalau rusak lagi, user menyatakan akan menuntut
+pertanggungjawaban. Jadi ini harus dicek otomatis, bukan INGAT-ingat.
+
+### `scraper/tests/test-media-contract.js` (file baru, terpisah & diberi nama jelas)
+10断言:
+1. **Format caption persis karakter demi karakter** (golden):
+   - anime: `➧ Judul :- <b>…</b>` / `➧ Episode :- 5` / `➧ Provider :- …` / `➧ Link :- <a …>…</a>`
+   - drama: `➧ Part/Episode :- 1 (Ep 1–10)`
+2. Caption tanpa link tetap 3 baris (tidak ada baris Link kosong).
+3. Caption **tidak pernah** memuat `undefined`.
+4. **Setiap call site kirim video di seluruh repo** wajib punya
+   `supports_streaming` — pemindaian semua `.js` (kecuali `tests/`). Opsi yang
+   ditulis lewat variabel (`opts`, `options`, `mediaOpts`) ikut ditelusuri ke
+   definisinya. Call site `file_id` dikecualikan (kirim ulang file yang sudah ada
+   di Telegram → tidak ada upload, flag tidak berlaku). Wrapper passthrough
+   (`sendToTopicVideo`) ada di **allowlist** — dan allowlist ikut gagal bila
+   baris tersebut berubah, jadi wajib ditinjau manusia.
+5. `lib/animeTopic` tetap memaksa `supports_streaming`.
+6. `handlers/vidoy` punya minimal 2 `supports_streaming` (drama & anime) dan
+   anime lewat `sendAnimeMedia` (topic Anime).
+7. `lib/telegram` meneruskan `supports_streaming` ke API di semua jalur.
+8. Keluarannya **non-zero exit + pesan "KONTRAK MEDIA BERSYARAH"** kalau gagal.
+
+### Bug nyata yang langsung ketahuan oleh kontrak ini
+`buildCaption` tidak阐述了guard `title` → `title: undefined` menghasilkan
+`➧ Judul :- <b>undefined</b>` (persis kelas bug yang dikeluhkan user).
+Sekarang `title || '—'`. Caption dengan judul valid **tidak berubah format**.
+
+### Verifikasi
+- `test-media-contract` 10 pass; `test-vidoy-uploader` 103; `test-caption-html-escape` 6;
+  `test-html-safety` 22; `test-btn-style` 10; `test-anime-topic-router` 18;
+  `test-libmenu-grid` 14; `test-sam-*` & telegram retry suites exit 0 — 0 fail.
