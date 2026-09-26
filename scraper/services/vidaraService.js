@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { logger } = require('../logger');
 const V = require('../vidara-uploader');
 
@@ -152,6 +152,45 @@ function assertLooksLikeVideo(destPath) {
   }
 }
 
+// iOS/Telegram inline playback butuh H.264 + yuv420p. .ts (MPEG-TS) tidak bisa
+// diputar inline sama sekali (layar putih), jadi wajib dikonversi ke .mp4.
+function isIosCompatible(videoPath) {
+  try {
+    const out = execFileSync('ffprobe', [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name,pix_fmt',
+      '-of', 'json', videoPath,
+    ], { timeout: 30000 }).toString();
+    const stream = (JSON.parse(out).streams || [])[0];
+    return !!stream && stream.codec_name === 'h264' && stream.pix_fmt === 'yuv420p';
+  } catch {
+    return false;
+  }
+}
+
+function reencodeForIos(inputPath, onLog = null) {
+  return new Promise((resolve) => {
+    const outPath = inputPath.replace(/\.[^.]+$/, '') + '_ios.mp4';
+    execFile('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', inputPath,
+      '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-movflags', '+faststart',
+      outPath,
+    ], { maxBuffer: 100 * 1024 * 1024 }, (err) => {
+      if (err || !fs.existsSync(outPath)) {
+        if (onLog) onLog('re-encode iOS gagal: ' + String(err && err.message || 'file tidak ada').slice(0, 60));
+        return resolve(null);
+      }
+      try { fs.unlinkSync(inputPath); } catch {}
+      if (onLog) onLog('re-encode iOS selesai (h264+yuv420p)');
+      resolve(outPath);
+    });
+  });
+}
+
 // opts: { retries=2, backoffMs=15000, resolveFresh=null (async()=>url), logCtx={} }
 async function ensureMp4(url, destPath, opts = {}) {
   const retries = opts.retries ?? 2;
@@ -173,6 +212,22 @@ async function ensureMp4(url, destPath, opts = {}) {
         await downloadTo(url, destPath);
       }
       assertLooksLikeVideo(destPath);
+
+      // Konversi .ts/.mkv → .mp4 (iOS tidak bisa putar .ts inline → layar putih)
+      const ext = path.extname(destPath).toLowerCase();
+      if (ext !== '.mp4') {
+        // lazy require: memutus circular dependency downloader ↔ vidaraService
+        const { remuxToMp4 } = require('../downloader');
+        destPath = await remuxToMp4(destPath, (m) => logger.info({ ...logCtx, m }, 'remux ke .mp4'));
+        assertLooksLikeVideo(destPath);
+      }
+
+      // Pastikan iOS-compatible: H.264 + yuv420p
+      if (!isIosCompatible(destPath)) {
+        const iosPath = await reencodeForIos(destPath, (m) => logger.info({ ...logCtx, m }, 're-encode iOS'));
+        if (iosPath) destPath = iosPath;
+        assertLooksLikeVideo(destPath);
+      }
       return destPath;
     } catch (err) {
       lastErr = err;
@@ -402,4 +457,6 @@ async function uploadToVidara(opts) {
 }
 
 module.exports = {
+  isIosCompatible,
+  reencodeForIos,
   assertLooksLikeVideo, uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };

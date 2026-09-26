@@ -448,3 +448,32 @@ provider sekaligus (bukan hanya yang ditemukan), supaya tidak terulang.
 - gdriveplayer resolve OK → fileUrl download
 - `test-vidoy-uploader` **144 pass** (+1 tes anti-drift semua provider)
 - suite lain 0 fail
+
+## N. .ts → .mp4 + iOS COMPATIBILITY DI JALUR VIDOY (27 Sep 2026)
+
+### Masalah
+User: download 63 MB .ts (MPEG-TS) dari gdriveplayer lambat dan hasilnya tidak bisa
+diputar di iOS (layar putih). "Kita udah pernah diskusi masalah putih di dragonball."
+
+### Root cause
+`ensureMp4()` (jalur Vidoy/Vidara) hanya download dan upload — TIDAK mengonversi
+.ts/.mkv ke .mp4. Padahal jalur Telegram sudah melakukannya (`remuxToMp4` dipakai
+di gdriveplayer branch). Akibatnya file .ts di-upload ke Vidoy, dan iOS tidak bisa
+memutar .ts inline → layar putih.
+
+### Perbaikan
+`ensureMp4()` sekarang:
+1. Remux .ts/.mkv → .mp4 (`remuxToMp4` — stream copy dulu, re-encode jika gagal)
+2. Cek iOS compatibility (`isIosCompatible` — H.264 + yuv420p via ffprobe)
+3. Jika tidak compatible → re-encode (`reencodeForIos` — libx264 + yuv420p + aac)
+
+### Verifikasi fungsional (file nyata)
+| Skenario | Hasil |
+|---|---|
+| H.264 .ts → remux | .mp4 valid, isIosCompatible = true |
+| H.265 .ts → remux | .mp4 valid, isIosCompatible = false |
+| H.265 → re-encode | .mp4 H.264+yuv420p, isIosCompatible = true |
+
+Circular dependency `downloader ↔ vidaraService` diputus dengan lazy require.
+
+`test-vidoy-uploader` **147 pass** (+3), suite lain 0 fail.

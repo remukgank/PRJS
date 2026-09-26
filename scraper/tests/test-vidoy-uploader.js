@@ -478,6 +478,54 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── KRITIS: jalur Vidoy WAJIB konversi .ts/.mkv → .mp4 + iOS-compatible ────
+t('ensureMp4 mengonversi .ts/.mkv ke .mp4 sebelum upload', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('async function ensureMp4');
+  const body = V.slice(i, V.indexOf('\n}\n', i + 10));
+  if (!/remuxToMp4\(destPath/.test(body)) throw new Error('ensureMp4 tidak memanggil remuxToMp4');
+  if (!/ext !== '\.mp4'/.test(body)) {
+    throw new Error('tidak ada cek ekstensi sebelum remux');
+  }
+});
+
+t('ensureMp4 memastikan iOS-compatible (H.264 + yuv420p)', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('async function ensureMp4');
+  const body = V.slice(i, V.indexOf('\n}\n', i + 10));
+  if (!/isIosCompatible\(destPath\)/.test(body)) throw new Error('tidak ada cek iOS compatibility');
+  if (!/reencodeForIos/.test(body)) throw new Error('tidak ada re-encode untuk file non-compatible');
+  // urutan: remux dulu, baru cek iOS
+  const remux = body.indexOf('remuxToMp4');
+  const ios = body.indexOf('isIosCompatible');
+  if (ios < remux) throw new Error('cek iOS harus setelah remux');
+});
+
+t('isIosCompatible: H.264+yuv420p = true, H.265 = false', () => {
+  const { isIosCompatible } = require('../services/vidaraService');
+  const fs = require('fs');
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const dir = os.tmpdir() + '/_ios_test_' + Date.now();
+  fs.mkdirSync(dir, { recursive: true });
+  const mk = (name, codec) => {
+    const p = `${dir}/${name}.mp4`;
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=160x120:rate=10',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:v', codec, '-pix_fmt', 'yuv420p', '-c:a', 'aac', p, '-y'],
+      { timeout: 60000 });
+    return p;
+  };
+  try {
+    const h264 = mk('h264', 'libx264');
+    const h265 = mk('h265', 'libx265');
+    if (!isIosCompatible(h264)) throw new Error('H.264+yuv420p harus dianggap compatible');
+    if (isIosCompatible(h265)) throw new Error('H.265 harus dianggap TIDAK compatible (butuh re-encode)');
+  } finally {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+
 // ── KRITIS: resolveDirectUrl harus baca field yang BENAR untuk SEMUA provider ──
 // Kelas bug: provider mengembalikan { fileUrl } tapi dispatcher baca .url → null.
 // Sudah terjadi 3x (gofile, pixeldrain, gdriveplayer). Test ini mengunci SEMUA.
