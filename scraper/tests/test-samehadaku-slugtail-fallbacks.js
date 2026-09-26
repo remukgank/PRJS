@@ -34,12 +34,25 @@ async function loadWorker() {
 
 function freshWorkerFetch(worker, html, target = 'https://v2.samehadaku.how/dummy') {
   const prev = global.fetch;
-  global.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
-  try {
-    return worker.fetch(new Request('https://worker-test.local/samehadaku?url=' + encodeURIComponent(target)), {});
-  } finally {
-    global.fetch = prev;
-  }
+  // Listing memakai fixture. URL lain = probe gap healing → membalas halaman
+  // TANPA server (meniru episode yang memang tidak ada di situs), supaya probe
+  // tidak ikut "menemukan" episode dari fixture listing.
+  global.fetch = async (url) => {
+    if (String(url) === target) {
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+    }
+    return new Response('<html><head><title>placeholder</title></head><body></body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    });
+  };
+  // Restore HANYA setelah promise selesai — worker kini melakukan fetch async
+  // (gap healing) yang terjadi setelah worker.fetch() mengembalikan promise.
+  return worker
+    .fetch(new Request('https://worker-test.local/samehadaku?url=' + encodeURIComponent(target)), {})
+    .finally(() => {
+      global.fetch = prev;
+    });
 }
 
 let pass = 0, fail = 0;

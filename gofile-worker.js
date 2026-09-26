@@ -101,6 +101,143 @@ function detectSinglePageLink(html, scope) {
   return null;
 }
 
+// ── Gap healing: tutup nomor episode yang tidak ada di listing ──────────
+// Listing Samehadaku tidak selalu lengkap. Dua bentuk ketidaklengkapan yang
+// terverifikasi live (Naruto Shippuden, 26 Sep 2026):
+//   1. halaman batch 2 episode  → episode-N-(N+1), ditangani di epRe.
+//   2. episode yang tidak di-link → mis. ep 24 & 500 (500 hanya muncul di
+//      dalam HTML comment, bukan di listing).
+// Sebaliknya ada episode yang memang TIDAK PERNAH di-upload (mis. 82, 465,
+// 466) — semua varian slug-nya membalas halaman placeholder tanpa server.
+// Probe dibatasi ketat supaya satu listing tidak ratusan request.
+const GAP_PROBE_BUDGET = 5; // maks request tambahan per listing
+const GAP_MAX_GAP = 3; // hanya celah kecil di tengah range yang diprobe
+const gapProbeCache = new Map(); // target -> Map(num -> entry|null)
+
+// Slug dasar dari URL episode (buang "-episode-... "). Dipakai sebagai
+// kandidat ejaan: Samehadaku menulis slug beda ejaan per rentang episode
+// (naruto-shippuuden untuk ep 1-250, naruto-shippuden untuk ep 251-500).
+function episodeSlugOf(url) {
+  try {
+    const seg = String(new URL(url).pathname || "")
+      .replace(/\/+$/, "")
+      .split("/")
+      .pop() || "";
+    return seg.replace(/-episode-.*$/i, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+// Judul per episode. Anchor batch menyebut "Episode 57-58"; tiap entri batch
+// wajib punya judul sendiri. Anchor murni angka (di header listing) → "Episode N".
+function episodeTitleFor(title, num) {
+  const raw = String(title || "").replace(/\s+/g, " ").trim();
+  if (!raw || /^[\d\s\-]+$/.test(raw)) return `Episode ${num}`;
+  const t = raw.replace(/Episode\s*\d+(?:\s*-\s*\d+)?/i, `Episode ${num}`).trim();
+  return t || `Episode ${num}`;
+}
+
+// Probe satu nomor episode. Sukses bila halaman punya minimal satu server
+// (kriteria yang sama dengan halaman episode biasa di worker ini).
+async function probeEpisodePage(hdrs, origin, slug, num) {
+  const u = `${origin}/${slug}-episode-${num}/`;
+  try {
+    const r = await fetch(u, { headers: hdrs, cf: { cacheTtl: 60 } });
+    if (!r.ok) return null;
+    const body = await r.text();
+    if (!parseDownloadBlocks(body).preferred) return null;
+    return { ep: num, url: u, title: `Episode ${num}` };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tambahkan episode yang ada di situs tapi tidak di-link di listing.
+ * @param {object}   hdrs     header fetch (UA + cf_clearance)
+ * @param {string}   target   URL halaman anime
+ * @param {Array}    episodes array episode hasil parse (di-mutasi)
+ * @param {number}   rawMax   nomor episode TERAKIR yang muncul sebagai link
+ *                            listing (sebelum ekspansi batch) — dipakai sebagai
+ *                            dasar probe ekor, supaya ekor yang sebenarnya
+ *                            (mis. ep 500) ikut terlihat.
+ */
+async function healEpisodeGaps(hdrs, target, episodes, rawMax) {
+  if (!episodes.length) return;
+  const have = new Set(episodes.map((e) => e.ep));
+  const maxEp = Math.max(...have);
+
+  // Kandidat ejaan slug: yang benar-benar muncul di listing (bukan tebakan).
+  const knownSlugs = [];
+  for (const e of episodes) {
+    const s = episodeSlugOf(e.url);
+    if (s && !knownSlugs.includes(s)) knownSlugs.push(s);
+  }
+  const origin = new URL(target).origin;
+  if (!knownSlugs.length) return;
+  const cache = gapProbeCache.get(target) || new Map();
+
+  const tryNum = async (num) => {
+    if (cache.has(num)) return cache.get(num);
+    // slug episode terdekat dulu (ejaan mengikuti rentang), sisanya fallback
+    let nearest = null;
+    let best = Infinity;
+    for (const e of episodes) {
+      const s = episodeSlugOf(e.url);
+      if (!s) continue;
+      const d = Math.abs(e.ep - num);
+      if (d < best) {
+        best = d;
+        nearest = s;
+      }
+    }
+    const slugs = [];
+    if (nearest && !slugs.includes(nearest)) slugs.push(nearest);
+    for (const s of knownSlugs) if (!slugs.includes(s)) slugs.push(s);
+
+    let hit = null;
+    for (const slug of slugs) {
+      hit = await probeEpisodePage(hdrs, origin, slug, num);
+      if (hit) break;
+    }
+    cache.set(num, hit);
+    return hit;
+  };
+
+  // (a) ekor — listing sering berhenti sebelum episode terakhir yang benar
+  const tail = [rawMax + 1, rawMax + 2].filter((n) => !have.has(n));
+  // (b) tengah — hanya celah kecil; celah besar = memang tidak ada
+  const middle = [];
+  let run = [];
+  const flush = () => {
+    if (run.length && run.length <= GAP_MAX_GAP) middle.push(...run);
+    run = [];
+  };
+  for (let n = 1; n <= maxEp; n++) {
+    if (have.has(n)) {
+      flush();
+      continue;
+    }
+    run.push(n);
+  }
+  flush();
+  const tailSet = new Set(tail);
+  const middleFiltered = middle.filter((n) => !tailSet.has(n));
+
+  // ekor diprioritaskan; total dibatasi budget
+  const picked = [...tail, ...middleFiltered].slice(0, GAP_PROBE_BUDGET);
+  for (const num of picked) {
+    if (have.has(num)) continue;
+    const hit = await tryNum(num);
+    if (hit) {
+      episodes.push(hit);
+      have.add(num);
+    }
+  }
+  gapProbeCache.set(target, cache);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -178,22 +315,38 @@ export default {
         // Anime page: list episode (class lstepsiode) — termasuk -end/-END (episode terakhir).
         const isAnime = /\/anime\//i.test(target);
         if (isAnime) {
-          const epRe = /<a[^>]+href="([^"]+(?:-episode-|-エピソード-)(\d+)(?:-?(?:end|END|End))?\/?)"[^>]*>([^<]+)<\/a>/gi;
+          // Group 3 menangkap pasangan batch "-episode-N-M/" (halaman 2 episode,
+          // mis. naruto-shippuuden-episode-57-58/). Suffix non-angka seperti
+          // -selesai sengaja TIDAK ditangkap: link itu sering hanya hidup di
+          // dalam HTML comment, bukan listing yang bisa diandalkan.
+          const epRe = /<a[^>]+href="([^"]+(?:-episode-|-エピソード-)(\d+)(?:-(\d+))?(?:-?(?:end|END|End))?\/?)"[^>]*>([^<]+)<\/a>/gi;
           const episodes = [];
           const epByNum = new Map();
+          let rawMax = 0;
           let m2;
           while ((m2 = epRe.exec(html))) {
             const href = m2[1].trim();
             const num = parseInt(m2[2], 10);
-            const title = m2[3].trim().replace(/\s+/g, " ");
-            const prev = epByNum.get(num);
-            // Prefer anchor judul (bukan anchor angka di header), biar title jujur non-numerik.
-            if (!prev || (!/^\d+$/.test(title) && /^\d+$/.test(prev.title))) {
-              epByNum.set(num, { url: href.startsWith("http") ? href : new URL(href, target).href, title });
+            const numPair = m2[3] ? parseInt(m2[3], 10) : null;
+            const title = m2[4].trim().replace(/\s+/g, " ");
+            rawMax = Math.max(rawMax, num);
+            // Batch 2 episode HANYA bila berurutan (M == N+1). Pola seperti
+            // episode-23-2 / episode-467-2 (selisih jauh) bukan batch —
+            // meng-expand-nya akan mengarang episode yang memang tidak ada.
+            const nums = numPair !== null && numPair === num + 1 ? [num, numPair] : [num];
+            for (const n of nums) {
+              const prev = epByNum.get(n);
+              // Prefer anchor judul (bukan anchor angka di header), biar title jujur non-numerik.
+              if (!prev || (!/^\d+$/.test(title) && /^\d+$/.test(prev.title))) {
+                epByNum.set(n, {
+                  url: href.startsWith("http") ? href : new URL(href, target).href,
+                  title: episodeTitleFor(title, n),
+                });
+              }
             }
           }
           for (const [num, { url, title }] of epByNum) {
-            episodes.push({ ep: num, url, title: /^[\d\s\-]+$/.test(title) ? `Episode ${num}` : title });
+            episodes.push({ ep: num, url, title });
           }
           // Samehadaku kadang me-list episode dengan href /<slug>-<N>/ (tanpa -episode-), mis.
           // Dragon Ball Heroes: ep 20-42 = /super-dragon-ball-heroes-31/ dst. Pola slug-angka ini
@@ -267,6 +420,10 @@ export default {
               }
             }
           }
+          // Gap healing: episode yang ada di situs tapi tidak di-link di listing.
+          // Probe dibatasi (budget + ukuran celah) supaya satu listing tidak
+          // ratusan request. Hasil di-cache per URL listing.
+          await healEpisodeGaps(hdrs, target, episodes, rawMax);
           episodes.sort((a, b) => a.ep - b.ep);
           if (episodes.length) {
             return new Response(JSON.stringify({ ok: true, type: "anime", episodes }), {
