@@ -138,12 +138,75 @@ function vidoyIdFromLink(link) {
   return m ? m[1] : '';
 }
 
-function linkAlive(link) {
-  if (!link) return Promise.resolve(false);
+// Cek apakah link publik masih benar-benar punya video.
+//
+// Dulu hanya `curl -w %{http_code}` → selalu 200, karena domain depan
+// (mis. vski.cc) hanya menampilkan halaman "Validating browser…" yang
+// mengarahkan lewat JS ke domain asli. File yang sudah hilang tetap dianggap
+// hidup. Sekarang: ikuti redirect, lalu pastikan halaman tujuan benar-benar
+// memuat player.
+const DEAD_MARKERS = [
+  /404\s*page\s*not\s*found/i,
+  /page\s*not\s*found/i,
+  /(video|file)\s+(not\s+found|deleted|removed|unavailable)/i,
+  /\bexpired\b/i,
+  /tidak\s+ditemukan/i,
+];
+
+function pageHasPlayer(html) {
+  const low = String(html || '').toLowerCase();
+  if (low.includes('.m3u8') || low.includes('.mp4') || low.includes('<video')) return true;
+  return /\bplayer\b/.test(low) && /file|video|source/i.test(low);
+}
+
+// Ambil tujuan dari halaman interstitial (meta refresh atau location.replace).
+function interstitialTarget(html) {
+  const html2 = String(html || '');
+  const meta = html2.match(/http-equiv=["']?refresh["']?[^>]*url=([^"'\s>]+)/i);
+  if (meta) return meta[1];
+  const loc = html2.match(/location\.replace\(\s*["']([^"']+)["']/i);
+  if (loc) return loc[1];
+  return '';
+}
+
+function fetchPage(url, timeoutMs = 25000) {
   return new Promise((resolve) => {
-    execFile('curl', ['-sS', '-o', '/dev/null', '-w', '%{http_code}', '-m', '20', '-A', 'Mozilla/5.0', String(link)],
-      { timeout: 30000 }, (err, stdout) => resolve(!err && /^200/.test(String(stdout || ''))));
+    execFile('curl', ['-sSL', '-m', String(Math.round(timeoutMs / 1000)), '-A',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', '-w', '\n__HTTP__%{http_code} __URL__%{url_effective}', String(url)],
+    { timeout: timeoutMs + 5000, maxBuffer: 8 * 1024 * 1024 },
+    (err, stdout) => {
+      const out = String(stdout || '');
+      const m = out.match(/__HTTP__(\d{3}) __URL__(\S*)\s*$/);
+      const body = m ? out.slice(0, m.index) : out;
+      resolve({ err: err && err.message, code: m ? Number(m[1]) : 0, url: m ? m[2] : '', body });
+    });
   });
+}
+
+async function linkAlive(link) {
+  if (!link) return { alive: false, reason: 'link kosong' };
+  const first = await fetchPage(String(link));
+  if (first.err) return { alive: false, reason: 'gagal ambil: ' + first.err.slice(0, 60) };
+  for (const re of DEAD_MARKERS) {
+    if (re.test(first.body)) return { alive: false, reason: 'halaman: ' + (first.body.match(re) || [])[0].trim().slice(0, 40), finalUrl: first.url };
+  }
+  // Halaman interstitial: ikuti tujuan yang desirinjek oleh JS/meta refresh.
+  const target = interstitialTarget(first.body);
+  if (target && target !== first.url) {
+    const second = await fetchPage(target);
+    if (second.err) return { alive: false, reason: 'gagal ikut redirect: ' + second.err.slice(0, 50), finalUrl: first.url };
+    for (const re of DEAD_MARKERS) {
+      if (re.test(second.body)) {
+        return { alive: false, reason: 'file hilang (' + (second.body.match(re) || [])[0].trim().slice(0, 30) + ')', finalUrl: target };
+      }
+    }
+    if (second.code && second.code >= 400) return { alive: false, reason: 'HTTP ' + second.code, finalUrl: target };
+    if (!pageHasPlayer(second.body)) return { alive: false, reason: 'tidak ada player di halaman tujuan', finalUrl: target };
+    return { alive: true, reason: 'ok', finalUrl: target };
+  }
+  if (first.code >= 400) return { alive: false, reason: 'HTTP ' + first.code, finalUrl: first.url };
+  if (!pageHasPlayer(first.body)) return { alive: false, reason: 'tidak ada player', finalUrl: first.url };
+  return { alive: true, reason: 'ok', finalUrl: first.url };
 }
 
 function partEpisodeLabel(part, epStart, epEnd) {
@@ -219,16 +282,18 @@ async function handleVidoyLinks({ chatId, msgId, query }) {
 async function refreshVidoyLink(row, chatId) {
   const id = vidoyIdFromLink(row.link);
   if (!id) return { ok: false, error: 'id video tak terbaca dari link' };
-  const alive = await linkAlive(row.link);
+  const check = await linkAlive(row.link);
+  const alive = check.alive === true;
   let link = row.link;
-  if (!alive) {
+  if (alive) {
+    await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
+  } else {
+    // Link benar-benar tidak punya video → ambil ulang link publik dari dashboard.
     const fresh = await Vidoy.fetchPublicLink(id);
     if (fresh && fresh !== row.link) {
       link = fresh;
       await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
     }
-  } else {
-    await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
   }
   let captionUpdated = false;
   let messageMissing = false;
@@ -262,7 +327,16 @@ async function refreshVidoyLink(row, chatId) {
       captionUpdated = txtRes;
     }
   }
-  return { ok: true, alive, link, changed: link !== row.link, captionUpdated, messageMissing };
+  return {
+    ok: true,
+    alive,
+    reason: check.reason,
+    finalUrl: check.finalUrl || null,
+    link,
+    changed: link !== row.link,
+    captionUpdated,
+    messageMissing,
+  };
 }
 
 async function handleAdminPanel({ chatId }) {

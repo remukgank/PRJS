@@ -477,6 +477,68 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: linkAlive harus benar-benar cek player, bukan cuma HTTP 200 ──
+t('KRITIS: linkAlive bukan lagi sekadar cek status HTTP', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  if (!/function pageHasPlayer/.test(admin)) throw new Error('pageHasPlayer tidak ada');
+  if (!/function interstitialTarget/.test(admin)) throw new Error('interstitialTarget tidak ada');
+    // sudah tidak boleh pakai pola lama "%{http_code}" tanpa body
+  const fn = admin.slice(admin.indexOf('function linkAlive'), admin.indexOf('async function refreshVidoyLink'));
+  if (fn.includes("'-o', '/dev/null'")) throw new Error('masih pakai curl -o /dev/null (hanya cek status)');
+  if (!/pageHasPlayer\(/.test(fn)) throw new Error('linkAlive tidak memeriksa player');
+  if (!/interstitialTarget\(/.test(fn)) throw new Error('linkAlive tidak mengikuti redirect interstitial');
+});
+
+t('pageHasPlayer: hanya halaman ber-player yang dianggap hidup', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  const pick = (n) => { let i = admin.indexOf('function ' + n); let d = 0, j = admin.indexOf('{', i); for (let k = j; k < admin.length; k++) { if (admin[k] === '{') d++; else if (admin[k] === '}') { d--; if (!d) return admin.slice(i, k + 1); } } };
+  const start = admin.indexOf('const DEAD_MARKERS');
+  const consts = admin.slice(start, admin.indexOf('];', start) + 2);
+  const f = new Function(consts + '\n' + pick('pageHasPlayer') + '\nreturn { pageHasPlayer, DEAD_MARKERS };')();
+  const real = '<title>Terobsesi — Ep 01-10.mp4</title><div class=player data-src="https://cdn.x/file.mp4">';
+  const m3u8 = '<video src="https://cdn.x/hls.m3u8"></video>';
+  const notFound = '<title>404 Page Not Found - Videq</title>';
+  const interstitial = '<noscript><meta http-equiv="refresh" content="1;url=https://vidmonstr.com/e/abc"></noscript><script>location.replace("https://vidmonstr.com/e/abc")</script>';
+  if (!f.pageHasPlayer(real)) throw new Error('halaman nyata dianggap mati');
+  if (!f.pageHasPlayer(m3u8)) throw new Error('halaman m3u8 dianggap mati');
+  if (f.pageHasPlayer(notFound)) throw new Error('halaman 404 dianggap hidup');
+  if (f.pageHasPlayer(interstitial)) throw new Error('interstitial dianggap hidup');
+  for (const dead of ['404 Page Not Found', 'video deleted', 'file expired', 'tidak ditemukan']) {
+    if (!f.DEAD_MARKERS.some((r) => r.test(dead))) throw new Error('tanda mati tidak dikenali: ' + dead);
+  }
+});
+
+t('interstitialTarget: ambil tujuan dari meta refresh & location.replace', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  const pick = (n) => { const i = admin.indexOf('function ' + n); let d = 0, j = admin.indexOf('{', i); for (let k = j; k < admin.length; k++) { if (admin[k] === '{') d++; else if (admin[k] === '}') { d--; if (!d) return admin.slice(i, k + 1); } } };
+  const f = new Function(pick('interstitialTarget') + '\nreturn interstitialTarget;')();
+  const meta = '<meta http-equiv="refresh" content="1;url=https://vidmonstr.com/e/abc">';
+  const js = '<script>setTimeout(function(){location.replace("https://vidmonstr.com/e/xyz")},500)</script>';
+  if (f(meta) !== 'https://vidmonstr.com/e/abc') throw new Error('meta refresh gagal: ' + f(meta));
+  if (f(js) !== 'https://vidmonstr.com/e/xyz') throw new Error('location.replace gagal: ' + f(js));
+  if (f('<p>halaman biasa</p>') !== '') throw new Error('harus kosong saat tidak ada redirect');
+});
+
+t('vidoy.asia HANYA sebagai base URL upload, bukan web publik', () => {
+  const files = ['../vidoy-uploader', '../handlers/vidoy', '../handlers/admin', '../services/vidoyService', '../db', '../bot'];
+  for (const f of files) {
+    const s = require('fs').readFileSync(require.resolve(f), 'utf8');
+    const hits = [...s.matchAll(/.{0,40}vidoy\.asia.{0,40}/gi)].map((m) => m[0]);
+    for (const h of hits) {
+      // occurrence di komentar penjelasan juga boleh
+      if (/^\s*(\/\/|\*)/.test(h.trim()) || h.includes('dulu dipatok') || h.includes('masih pakai domain')) continue;
+      if (!/VIDOY_BASE|process\.env\.VIDOY_BASE/.test(h)) {
+        throw new Error(f + ': vidoy.asia dipakai di luar base URL upload → ' + h.trim());
+      }
+    }
+  }
+  const up = require('fs').readFileSync(require.resolve('../vidoy-uploader'), 'utf8');
+  if (!/VIDOY_BASE = \(process\.env\.VIDOY_BASE \|\| 'https:\/\/vidoy\.asia'\)/.test(up)) {
+    throw new Error('VIDOY_BASE tidak lagi configurable lewat env');
+  }
+});
+
+
 t('KRITIS: label link di panel & caption pakai domain ASLI (bukan "vidoy.asia" hardcode)', () => {
   const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
   if (/vidoy\.asia\/\$\{/.test(admin)) throw new Error('admin.js masih mempatok domain vidoy.asia');

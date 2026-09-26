@@ -320,3 +320,44 @@ halaman tujuan benar-benar memuat player.
 
 ### Verifikasi
 - 4 varian link → label domain benar; `test-vidoy-uploader` 88 pass.
+
+## 13. linkAlive: benar-benar cek video, bukan cuma HTTP 200 (26 Sep 2026, 00:56)
+
+### Klarifikasi domain (dari user)
+`vidoy.asia` **hanya** domain API untuk upload — bukan web publik, dan sewaktu-waktu
+bisa ganti. Audit kode: `vidoy.asia` kini muncul **hanya** di
+`VIDOY_BASE = process.env.VIDOY_BASE || 'https://vidoy.asia'` (base URL upload,
+sudah configurable). Tidak ada lagi pembangkitan web publik/caption dari domain itu:
+- `fetchPublicLink()` mengambil link `/e/<id>` dari halaman dashboard
+- `buildFolderUrl()` memakai host folder terpisah
+
+### Temuan
+`linkAlive()` lama hanya `curl -o /dev/null -w %{http_code}`. Padahal domain
+depan (mis. `vski.cc`) hanya menampilkan halaman "Validating browser…" (953 byte)
+yang mengarahkan lewat JS → **selalu HTTP 200**, walaupun file-nya sudah hilang.
+Artinya "Perbarui" tidak pernah bisa menemukan link mati.
+
+### Perbaikan
+- `linkAlive()` → objek `{ alive, reason, finalUrl }`:
+  1. ambil halaman (follow redirect, simpan body)
+  2. deteksi halaman mati (404/not found/deleted/expired/tidak ditemukan)
+  3. jika halaman interstitial, ambil tujuan dari `meta refresh` atau
+     `location.replace(...)` lalu ikut ke sana
+  4. **wajib** halaman tujuan punya player (`.m3u8`/`.mp4`/`<video>`/player+file)
+     → jika tidak, ditandai mati dengan alasannya
+- `refreshVidoyLink()` memakai `check.alive` + menyimpan `reason` & `finalUrl`
+  sehingga panel bisa menampilkan alasan saat link mati.
+
+### Verifikasi (uji nyata)
+| Link | Hasil |
+|---|---|
+| `vski.cc/e/ru9a4av12kd9` | ✅ alive, final `vidmonstr.com/e/ru9a4av12kd9` |
+| `vski.cc/e/vn6z1ypbazhf` | ✅ alive |
+| `vski.cc/e/r5n4whnd8250` | ✅ alive |
+| `vski.cc/e/tidak-ada-id-999` | ❌ mati — "file hilang (404 Page Not Found)" |
+| `vidmonstr.com/e/tidak-ada-id-999` | ❌ mati — redirect ke `/404` |
+
+- `test-vidoy-uploader` 92 pass (+5 tes: linkAlive bukan status-only,
+  pageHasPlayer, interstitialTarget, dan **vidoy.asia hanya boleh sebagai
+  VIDOY_BASE** di seluruh file), `test-btn-style` 10, `test-html-safety` 22,
+  `test-caption-html-escape` 6, `test-libmenu-grid` 14 — 0 fail.
