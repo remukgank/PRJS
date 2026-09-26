@@ -1042,6 +1042,41 @@ function partMismatch(expectedEp, gotPart) {
   if (want > 0 && got > 0 && got !== want) return `file server keliru: Ep ${got} (link Ep ${want})`;
   return null;
 }
+
+async function resolveDirectUrl(url) {
+  if (!url) return null;
+  try {
+    if (isGofileUrl(url)) {
+      if (isGofileDirectUrl(url)) return { url, name: resolveFileName(url) || filenameFromGofileUrl(url) };
+      const file = await resolveGofileFirstFile(url);
+      if (!file?.link) return null;
+      return { url: file.link, name: file.name || filenameFromGofileUrl(file.link) };
+    }
+    if (isPixeldrainUrl(url)) {
+      const info = await getPixeldrainInfo(url);
+      return info?.url ? { url: info.url, name: info.name } : null;
+    }
+    if (isFiledonUrl(url)) {
+      const f = await resolveFiledonFile(url);
+      return f?.url ? { url: f.url, name: f.name } : null;
+    }
+    if (isGdrivePlayerUrl(url)) {
+      const f = await resolveGdrivePlayerFile(url);
+      return f?.url ? { url: f.url, name: f.name } : null;
+    }
+    if (isGdriveUrl(url)) {
+      const f = await resolveGdriveFile(url);
+      return f?.url ? { url: f.url, name: f.name } : null;
+    }
+    if (isMegaUrl(url)) {
+      const f = await resolveMegaFile(url);
+      return f?.url ? { url: f.url, name: f.name } : null;
+    }
+  } catch (err) {
+    logger.warn({ err: err.message, url: String(url).slice(0, 80) }, 'resolveDirectUrl gagal');
+  }
+  return null;
+}
 function epCapLabel(cap, hasTitle, sameInfo, part) {
   if (!hasTitle) return cap;
   if (sameInfo && sameInfo.movie) return `${cap} — Movie`;
@@ -1055,4 +1090,4 @@ function pickBestServer(servers = {}) {
 }
 const SAM_BATCH_PACE_MS = Number(process.env.SAM_BATCH_PACE_MS) || 1000;
 
-module.exports = { initDownload, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };
+module.exports = { initDownload, resolveDirectUrl, epCapLabel, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };

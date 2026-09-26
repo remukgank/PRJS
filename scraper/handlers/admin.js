@@ -3,7 +3,9 @@
 //        getSetting, setSetting, sendInvoiceFn? } — lihat catatan di bawah.
 // Tidak ada require('../bot') — cegah cyclical (pola E4/E5a/E5b).
 const { logger } = require('../logger');
-const { getSetting, setSetting } = require('../db');
+const { getSetting, setSetting, listRecentVidoyUploads, updateVidoyLink } = require('../db');
+const Vidoy = require('../vidoy-uploader');
+const { execFile } = require('child_process');
 const { VIP_PACKAGES, VIP_STAR_PRICES, VIP_PACKAGE_ORDER } = require('../services/vipPackages');
 
 let _ctx = null;
@@ -32,6 +34,7 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
       [{ text: `🔑 AI Key: ${keyEmoji} ${keyLabel}`, callback_data: 'act:ai_key' }],
       [{ text: `🧠 AI Model: ${modelEmoji} ${modelLabel}`, callback_data: 'act:ai_model' }],
       [{ text: '🌐 Domain Vidara', callback_data: 'act:vidara_domain' }],
+      [{ text: '🗂 Vidoy Links', callback_data: 'act:vidoy_links' }],
       [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
       [{ text: '📊 Status Server', callback_data: 'act:status' }],
       [{ text: '⭐ Cek Saldo Stars', callback_data: 'act:balance' }],
@@ -106,6 +109,130 @@ async function sendInvoice(chatId, title, description, payload, price, label = '
 }
 
 // Callback act:admin_panel — render panel (butuh getSetting untuk status)
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function recordToken(row) {
+  const raw = `${row.media_key}|${row.kind}|${row.part}`;
+  return require('crypto').createHash('sha1').update(raw).digest('hex').slice(0, 8);
+}
+
+function findRowByToken(rows, token) {
+  return rows.find((r) => recordToken(r) === token) || null;
+}
+
+function vidoyIdFromLink(link) {
+  const m = String(link || '').match(/\/(?:e|d)\/([A-Za-z0-9_-]+)/);
+  return m ? m[1] : '';
+}
+
+function linkAlive(link) {
+  if (!link) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    execFile('curl', ['-sS', '-o', '/dev/null', '-w', '%{http_code}', '-m', '20', '-A', 'Mozilla/5.0', String(link)],
+      { timeout: 30000 }, (err, stdout) => resolve(!err && /^200/.test(String(stdout || ''))));
+  });
+}
+
+function partEpisodeLabel(part, epStart, epEnd) {
+  const range = epStart === epEnd ? `${epStart}` : `${epStart}\u2013${epEnd}`;
+  const num = Number(part) || 0;
+  if (epStart === epEnd || !num) return `Ep ${range}`;
+  return `${num} (Ep ${range})`;
+}
+
+function buildFallbackCaption(row, link) {
+  const provider = row.provider || (row.media_key && String(row.media_key).includes(':')
+    ? String(row.media_key).split(':')[0]
+    : '\u2014');
+  return [
+    `➧ Judul :- <b>${esc(row.title || row.media_key || '\u2014')}</b>`,
+    `➧ Part/Episode :- ${partEpisodeLabel(row.part, row.ep_start, row.ep_end)}`,
+    `➧ Provider :- ${esc(provider)}`,
+    `➧ Link :- <a href="${esc(link)}">${esc(shortLink(link))}</a>`,
+  ].join('\n');
+}
+
+function replaceLinkLine(caption, link) {
+  const line = `➧ Link :- <a href="${link}">${shortLink(link)}</a>`;
+  const lines = String(caption || '').split('\n');
+  const idx = lines.findIndex((l) => l.startsWith('\u27a7 Link :-'));
+  if (idx >= 0) lines[idx] = line;
+  else lines.push(line);
+  return lines.join('\n');
+}
+
+function shortLink(link) {
+  const m = String(link || '').match(/https?:\/\/[^/]+\/(e|d)\/([A-Za-z0-9_-]+)/);
+  return m ? `vidoy.asia/${m[1]}/${m[2]}` : String(link || '');
+}
+
+async function handleVidoyLinks({ chatId, msgId, query }) {
+  ensureCtx('handleVidoyLinks');
+  if (!(query && _ctx.isAdmin && _ctx.isAdmin(query.from.id))) return null;
+  const rows = await listRecentVidoyUploads(20);
+  if (!rows.length) {
+    return _ctx.bot.sendMessage(chatId, '🗂 <b>Vidoy Links</b>\n\nBelum ada upload Vidoy tercatat.', {
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'act:admin_panel' }]] },
+    });
+  }
+  const lines = rows.map((r, i) => {
+    const alive = r.link_alive === true ? '🟢' : r.link_alive === false ? '🔴' : '⚪';
+    const range = r.ep_start === r.ep_end ? `${r.ep_start}` : `${r.ep_start}\u2013${r.ep_end}`;
+    const cap = r.tg_message_id ? '📌' : '—';
+    return `${i + 1}. ${alive} <b>${esc((r.title || r.media_key).slice(0, 34))}</b> · ${r.kind} Ep ${range}\n    <code>${esc(shortLink(r.link))}</code> · caption:${cap}`;
+  });
+  const keyboard = rows.map((r, i) => [{
+    text: `🔄 Perbarui #${i + 1}`,
+    callback_data: `act:vidoy_link_one:${recordToken(r)}`,
+  }]);
+  keyboard.push([{ text: '🔄 Perbarui Semua', callback_data: 'act:vidoy_link_all' }]);
+  keyboard.push([{ text: '⬅️ Kembali', callback_data: 'act:admin_panel' }]);
+  return (msgId
+    ? _ctx.bot.editMessageText(`🗂 <b>Vidoy Links</b> (terbaru)\n\n${lines.join('\n')}`, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+    })
+    : _ctx.bot.sendMessage(chatId, `🗂 <b>Vidoy Links</b> (terbaru)\n\n${lines.join('\n')}`, {
+      parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+    })).catch(() => {});
+}
+
+async function refreshVidoyLink(row, chatId) {
+  const id = vidoyIdFromLink(row.link);
+  if (!id) return { ok: false, error: 'id video tak terbaca dari link' };
+  const alive = await linkAlive(row.link);
+  let link = row.link;
+  if (!alive) {
+    const fresh = await Vidoy.fetchPublicLink(id);
+    if (fresh && fresh !== row.link) {
+      link = fresh;
+      await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
+    }
+  } else {
+    await updateVidoyLink(row.media_key, row.kind, row.part, link, true);
+  }
+  let captionUpdated = false;
+  if (row.tg_chat_id && row.tg_message_id) {
+    const base = row.caption && String(row.caption).trim()
+      ? String(row.caption)
+      : buildFallbackCaption(row, link);
+    const caption = replaceLinkLine(base, link);
+    // Pesan video harus diedit lewat editMessageCaption; editMessageText akan
+    // gagal dengan "there is no text in the message to edit". Coba caption dulu,
+    // lalu jatuh ke text (mis. bilazeh_bytes media_type-nya berubah).
+    const direct = await _ctx.bot.editMessageCaption(row.tg_chat_id, row.tg_message_id, caption, {
+      parse_mode: 'HTML',
+    }).then(() => true).catch(() => false);
+    captionUpdated = direct || await _ctx.bot.editMessageText(caption, {
+      chat_id: row.tg_chat_id, message_id: row.tg_message_id, parse_mode: 'HTML',
+    }).then(() => true).catch(() => false);
+  }
+  return { ok: true, alive, link, changed: link !== row.link, captionUpdated };
+}
+
 async function handleAdminPanel({ chatId }) {
   ensureCtx('handleAdminPanel');
   const { bot } = _ctx;
@@ -284,6 +411,13 @@ async function handlePreCheckout(query) {
 module.exports = {
   initAdmin,
   adminPanelKeyboard,
+  handleVidoyLinks,
+  refreshVidoyLink,
+  recordToken,
+  findRowByToken,
+  replaceLinkLine,
+  buildFallbackCaption,
+  partEpisodeLabel,
   makePostRequest,
   sendInvoice,
   handleAdminPanel,

@@ -29,7 +29,7 @@ const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -300,7 +300,7 @@ _libraryHandlers.initLibrary({ bot, isAdmin, getPendingDeletes: () => pendingDel
 
 // E5c: wire handlers/admin via ctx injection
 const _adminHandlers = require('./handlers/admin');
-_adminHandlers.initAdmin({ bot, config: { ADMIN_IDS, STAR_PRICE, LOCAL_API_PORT, TOKEN } });
+_adminHandlers.initAdmin({ bot, isAdmin, config: { ADMIN_IDS, STAR_PRICE, LOCAL_API_PORT, TOKEN } });
 
 // Backpressure 2 lapis: notif pause/resume ke admin pertama (DM, bukan grup).
 const backpressure = require('./lib/backpressure');
@@ -424,6 +424,16 @@ _vidaraHandlers.initVidara({
   get downloadAndSend() { return downloadAndSend; }, // function declaration di bawah IIFE — lazy agar tidak TDZ
   isAdmin,
   sendToTopicVideo,
+});
+const _vidoyHandlers = require('./handlers/vidoy');
+_vidoyHandlers.initVidoy({
+  bot,
+  config: { MAX_UPLOAD_MB, PART_SEND_DELAY_MS, RF_GROUP_ID, RF_GROUP_ENABLED },
+  vidaraBusy,
+  get sendVideo() { return sendVideo; },
+  Progress, RichProgress,
+  get sendToTopicVideo() { return sendToTopicVideo; },
+  isAdmin,
 });
 const sessions = new Map();
 const aiChatSessions = new Map();
@@ -1019,6 +1029,7 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
       [{ text: `🔑 AI Key: ${keyEmoji} ${keyLabel}`, callback_data: 'act:ai_key' }],
       [{ text: `🧠 AI Model: ${modelEmoji} ${modelLabel}`, callback_data: 'act:ai_model' }],
       [{ text: '🌐 Domain Vidara', callback_data: 'act:vidara_domain' }],
+      [{ text: '🗂 Vidoy Links', callback_data: 'act:vidoy_links' }],
       [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
       [{ text: '📊 Status Server', callback_data: 'act:status' }],
       [{ text: '⭐ Cek Saldo Stars', callback_data: 'act:balance' }],
@@ -1027,18 +1038,64 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
   };
 }
 
-function mainActionKeyboard() {
+function animeTargetKeyboard(tgData, vtData, vytData, vvData) {
+  const Vidoy = require('./vidoy-uploader');
+  const Vidara = require('./vidara-uploader');
+  const vidoyOk = Vidoy.isConfigured();
+  const vidaraOk = !!Vidara.VIDARA_KEY;
+  const b = (text, data, enabled) => (enabled ? { text, callback_data: data, style: 'primary' } : { text, disabled: {} });
+  return [
+    [b('📥 Telegram', tgData, true), b('📥 Vidara + TG', vtData, vidaraOk)],
+    [b('📥 Vidoy + TG', vytData, vidoyOk), b('📥 Vidara + Vidoy', vvData, vidaraOk && vidoyOk)],
+  ];
+}
+
+function mainActionKeyboard(kind = 'drama') {
+  const Vidoy = require('./vidoy-uploader');
+  const Vidara = require('./vidara-uploader');
+  const vidoyOk = Vidoy.isConfigured();
+  const vidaraOk = !!Vidara.VIDARA_KEY;
+  const target = (text, act, enabled) => (enabled
+    ? { text, callback_data: act, style: 'primary' }
+    : { text, disabled: {} });
+  if (kind === 'anime') {
+    return {
+      inline_keyboard: [
+        [target('📥 Telegram', 'act:a_tg', true)],
+        [target('📥 Vidara + Telegram', 'act:a_vt', vidaraOk)],
+        [target('📥 Vidoy + Telegram', 'act:a_vyt', vidoyOk)],
+        [target('📥 Vidara + Vidoy', 'act:a_vv', vidaraOk && vidoyOk)],
+        [{ text: '🔢 Pilih episode', callback_data: 'act:list' }],
+        [{ text: '💬 Live Chat', callback_data: 'act:ai' }],
+        [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
+      ],
+    };
+  }
   return {
     inline_keyboard: [
-      [{ text: '📥 Telegram — per episode', callback_data: 'act:per_ep' }],
-      [{ text: '🗜 Telegram — gabung 10', callback_data: 'act:merge10' }],
-      [{ text: '📥 Vidara — per episode', callback_data: 'act:v_per_ep' }],
-      [{ text: '🗜 Vidara — gabung 10', callback_data: 'act:v_merge10' }],
-      [{ text: '📥 Vidara+TG — per episode', callback_data: 'act:vt_per_ep' }],
-      [{ text: '🗜 Vidara+TG — gabung 10', callback_data: 'act:vt_merge10' }],
+      [{ text: '🗜 Telegram — gabung 10', callback_data: 'act:merge10', style: 'primary' }],
+      [target('🗜 Vidara — gabung 10', 'act:v_merge10', vidaraOk)],
+      [target('🗜 Vidara+TG — gabung 10', 'act:vt_merge10', vidaraOk)],
+      [target('🗜 Vidoy — gabung 10', 'act:vy_merge10', vidoyOk)],
+      [target('🗜 Vidoy+TG — gabung 10', 'act:vyt_merge10', vidoyOk)],
+      [{ text: '⚙️ Opsi per episode', callback_data: 'act:drama_legacy' }],
       [{ text: '🔢 Pilih episode', callback_data: 'act:list' }],
       [{ text: '💬 Live Chat', callback_data: 'act:ai' }],
       [{ text: '🏠 Menu Utama', callback_data: 'act:main_menu' }],
+    ],
+  };
+}
+
+function dramaLegacyKeyboard() {
+  const Vidara = require('./vidara-uploader');
+  const vidaraOk = !!Vidara.VIDARA_KEY;
+  const target = (text, act, enabled) => (enabled ? { text, callback_data: act } : { text, disabled: {} });
+  return {
+    inline_keyboard: [
+      [{ text: '📥 Telegram — per episode', callback_data: 'act:per_ep', style: 'primary' }],
+      [target('📥 Vidara — per episode', 'act:v_per_ep', vidaraOk)],
+      [target('📥 Vidara+TG — per episode', 'act:vt_per_ep', vidaraOk)],
+      [{ text: '⬅️ Kembali', callback_data: 'act:back_menu' }],
     ],
   };
 }
@@ -3164,19 +3221,40 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Samehadaku batch: "Download Semua" — queue semua episode sekaligus ─────
-  if (data.startsWith('sam_all:')) {
+  if (data.startsWith('sam_all:') || data.startsWith('sam_allgo:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const rawUrl = data.slice(8);
+    const isTargetPick = data.startsWith('sam_allgo:');
+    const rawUrl = isTargetPick ? data.slice(11) : data.slice(8);
+    const batchTarget = isTargetPick ? (data.slice(8, 11).split(':')[0] || '') : '';
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
-    await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
-    let title = 'Samehadaku';
+    let animeTitle = 'Samehadaku';
     try {
       const info = parseSamehadakuAnime(animeUrl);
-      if (info?.title) title = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
+      if (info?.title) animeTitle = `${info.title}${info.season ? ` S${info.season}` : ''}${info.part ? ` P${info.part}` : ''}`;
     } catch {}
+    // Tanpa target → tanyakan target dulu (Telegram / Vidara+TG / Vidoy+TG / Vidara+Vidoy).
+    if (!isTargetPick) {
+      const bid = cacheUrl(animeUrl);
+      return bot.editMessageText(
+        `📦 <b>Download Semua — ${escHtml(animeTitle)}</b>\n\nPilih target upload untuk semua episode:`,
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [
+            animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vt:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
+            [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}` }],
+          ] },
+        },
+      ).catch(() => {});
+    }
+    if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
+    }
+    await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    const title = animeTitle;
+    const target = batchTarget;
     const lockKey = `${chatId}:${title}`;
     if (samAllBusy.has(lockKey)) {
       await bot.editMessageText('⏳ Batch utk anime ini sedang berjalan. Tunggu selesai.', { chat_id: chatId, message_id: msgId }).catch(() => {});
@@ -3223,7 +3301,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         return;
       }
       const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
-      const rp = await new RichProgress(chatId, `📥 Batch ${title}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      const vidoyLinks = [];
+      const rp = await new RichProgress(chatId, `📥 Batch ${title} — ${targetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
       let ok = 0, fail = 0;
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
@@ -3251,14 +3330,35 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           let r = null;
           let lastErr = '';
           for (const server of candidates) {
+            if (target === 'tg') {
+              rp.updateEpisode(key, 'download', `${server} (${quality})`);
+              r = await _downloadHandlers.downloadSamehadakuFile(chatId, e.url, server, servers, sameInfo, { silent: true });
+              if (r?.ok) break;
+              lastErr = r?.error || 'gagal';
+              rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+              continue;
+            }
+            // Target != Telegram: satu jalur untuk semua server — resolve link file
+            // lalu actionAnimeEpisode (upload Vidoy/Vidara + kirim Telegram).
             rp.updateEpisode(key, 'download', `${server} (${quality})`);
-            r = await _downloadHandlers.downloadSamehadakuFile(chatId, e.url, server, servers, sameInfo, { silent: true });
-            if (r?.ok) break;
-            lastErr = r?.error || 'gagal';
-            rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+            try {
+              const direct = await _downloadHandlers.resolveDirectUrl(servers[server]);
+              if (!direct) { lastErr = 'gagal resolve link file'; rp.updateEpisode(key, 'fail', `${server}: ${lastErr}`); continue; }
+              const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+                target, title, ep: e.ep, sameInfo, directUrl: direct.url, episodeUrl: e.url, silent: true,
+              });
+              if (res && res.error) { lastErr = res.error; rp.updateEpisode(key, 'fail', `${server}: ${String(res.error).slice(0, 40)}`); continue; }
+              r = { ok: true, sizeMb: null, link: res && res.vidoy && res.vidoy.link, summary: res && res.summary };
+              break;
+            } catch (err) {
+              lastErr = err.message || 'gagal';
+              rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+            }
           }
           if (r?.ok) {
-            rp.updateEpisode(key, 'done', r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : 'ok');
+            const note = r.link || (r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : (r.summary || 'ok'));
+            if (r.link) vidoyLinks.push(`Ep ${e.ep} → ${r.link}`);
+            rp.updateEpisode(key, 'done', String(note).slice(0, 90));
             ok++;
           } else {
             rp.updateEpisode(key, 'fail', String(lastErr).slice(0, 50));
@@ -3272,7 +3372,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         await sleep(_downloadHandlers.SAM_BATCH_PACE_MS || 1000);
       }
       await rp.done();
-      logger.info({ chatId, title, ok, fail, skip }, 'sam_all batch selesai');
+      const linkBlock = vidoyLinks.length
+        ? `\n\n🔗 <b>Link Vidoy:</b>\n${vidoyLinks.map((l) => escHtml(l)).join('\n')}`
+        : '';
+      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${targetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+        { parse_mode: 'HTML' }).catch(() => {});
+      logger.info({ chatId, title, target, ok, fail, skip }, 'sam_all batch selesai');
     } finally {
       samAllBusy.delete(lockKey);
     }
@@ -3367,12 +3472,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         `➧ Judul :- <b>${titleSafe}</b>\n` +
         `${seasonLine}\n` +
         `➧ Provider :- samehadaku\n` +
-        `➧ Server :- ${server} (${quality})\n\nDownload?`;
+        `➧ Server :- ${server} (${quality})\n\nPilih target:`;
       const urlId2 = cacheUrl(episodeUrl);
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          [{ text: `✅ Ya, Download (${server})`, callback_data: `sam_go:${server}:${urlId2}` }],
+          animeTargetKeyboard(`sam_go:${server}:${urlId2}`, `sam_go:vt:${server}:${urlId2}`, `sam_go:vyt:${server}:${urlId2}`, `sam_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3389,8 +3494,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
     const partsG = data.split(':');
-    const server = partsG[1];
-    const rawUrlG = partsG.slice(2).join(':');
+    const rawTarget = partsG[1];
+    const target = ['tg', 'vt', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
+    const server = target ? partsG[2] : rawTarget;
+    const rawUrlG = partsG.slice(target ? 3 : 2).join(':');
     const episodeUrlG = resolveUrl(rawUrlG) || decodeURIComponent(rawUrlG);
     if (!episodeUrlG) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
@@ -3413,6 +3520,20 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (sameInfoG) samehadakuEpisodeMap.set(fileUrlG, sameInfoG);
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+    if (target && target !== 'tg') {
+      const direct = await _downloadHandlers.resolveDirectUrl(fileUrlG);
+      if (!direct) return bot.editMessageText('⚠️ Gagal resolve link file untuk upload.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      const animeTitle = (sameInfoG && (sameInfoG.title || sameInfoG.slug)) || 'Anime';
+      const animeEp = (sameInfoG && sameInfoG.episode) || 1;
+      const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+        target, title: animeTitle, ep: animeEp, sameInfo: sameInfoG,
+        directUrl: direct.url, episodeUrl: episodeUrlG,
+      });
+      if (res && res.error) {
+        return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});
+      }
+      return;
     }
     await downloadSamehadakuFile(chatId, episodeUrlG, server, serversAll, sameInfoG);
     // Setelah download samehadaku selesai, tampilkan tombol kembali ke list episode (UX)
@@ -3486,7 +3607,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          [{ text: `✅ Ya, Download (${server})`, callback_data: `kur_go:${server}:${urlId2}` }],
+          animeTargetKeyboard(`kur_go:${server}:${urlId2}`, `kur_go:vt:${server}:${urlId2}`, `kur_go:vyt:${server}:${urlId2}`, `kur_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `kur_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3501,8 +3622,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
     const partsG = data.split(':');
-    const server = partsG[1];
-    const rawUrlG = partsG.slice(2).join(':');
+    const rawTarget = partsG[1];
+    const target = ['tg', 'vt', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
+    const server = target ? partsG[2] : rawTarget;
+    const rawUrlG = partsG.slice(target ? 3 : 2).join(':');
     const episodeUrlG = resolveUrl(rawUrlG) || decodeURIComponent(rawUrlG);
     if (!episodeUrlG) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
@@ -3518,6 +3641,20 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     } catch (err) {
       return bot.editMessageText(`⚠️ Gagal ambil link: ${err.message.slice(0, 100)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
     }
+    if (target && target !== 'tg') {
+      const direct = await _downloadHandlers.resolveDirectUrl(serversAll[server]);
+      if (!direct) return bot.editMessageText('⚠️ Gagal resolve link file untuk upload.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      const animeTitle = (kurInfoG && (kurInfoG.title || kurInfoG.slug)) || 'Anime';
+      const animeEp = (kurInfoG && kurInfoG.episode) || 1;
+      const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+        target, title: animeTitle, ep: animeEp, sameInfo: kurInfoG,
+        directUrl: direct.url, episodeUrl: episodeUrlG,
+      });
+      if (res && res.error) {
+        return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});
+      }
+      return;
+    }
     await _downloadHandlers.downloadKuronimeFile(chatId, episodeUrlG, server, serversAll, kurInfoG);
     if (kurInfoG?.slug) {
       const animeUrlBack = `https://kuronime.sbs/anime/${kurInfoG.slug}/`;
@@ -3529,13 +3666,37 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Kuronime batch: "Download Semua" ─────────────────────────────────────
-  if (data.startsWith('kur_all:')) {
+  if (data.startsWith('kur_all:') || data.startsWith('kur_allgo:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const rawUrl = data.slice(8);
+    const isTargetPick = data.startsWith('kur_allgo:');
+    const rawUrl = isTargetPick ? data.slice(11) : data.slice(8);
+    const batchTarget = isTargetPick ? (data.slice(8, 11).split(':')[0] || '') : '';
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    let animeTitle = 'Kuronime';
+    try {
+      const ki = parseKuronimeAnime(animeUrl);
+      if (ki?.title) animeTitle = ki.title;
+    } catch {}
+    if (!isTargetPick) {
+      const bid = cacheUrl(animeUrl);
+      return bot.editMessageText(
+        `📦 <b>Download Semua — ${escHtml(animeTitle)}</b>\n\nPilih target upload untuk semua episode:`,
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [
+            animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vt:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
+            [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}` }],
+          ] },
+        },
+      ).catch(() => {});
+    }
+    if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
+    }
+    const target = batchTarget;
     await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     let title = 'Kuronime';
     try {
@@ -3587,6 +3748,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         return;
       }
       const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
+      const kurLinks = [];
       const rp = await new RichProgress(chatId, `Batch ${title}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
       // Desain konsisten: semua baris langsung bawa detail server (quality) dari
       // hasil prescan, jadi baris antre tampil "⏳ Ep N — server (quality)" sama
@@ -3624,14 +3786,33 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           let r = null;
           let lastErr = '';
           for (const server of candidates) {
+            if (target === 'tg') {
+              rp.updateEpisode(key, 'download', `${server} (${quality})`);
+              r = await _downloadHandlers.downloadKuronimeFile(chatId, e.url, server, servers, kurInfo, { silent: true });
+              if (r?.ok) break;
+              lastErr = r?.error || 'gagal';
+              rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+              continue;
+            }
             rp.updateEpisode(key, 'download', `${server} (${quality})`);
-            r = await _downloadHandlers.downloadKuronimeFile(chatId, e.url, server, servers, kurInfo, { silent: true });
-            if (r?.ok) break;
-            lastErr = r?.error || 'gagal';
-            rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+            try {
+              const direct = await _downloadHandlers.resolveDirectUrl(servers[server]);
+              if (!direct) { lastErr = 'gagal resolve link file'; rp.updateEpisode(key, 'fail', `${server}: ${lastErr}`); continue; }
+              const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+                target, title, ep: e.ep, sameInfo: kurInfo, directUrl: direct.url, episodeUrl: e.url, silent: true,
+              });
+              if (res && res.error) { lastErr = res.error; rp.updateEpisode(key, 'fail', `${server}: ${String(res.error).slice(0, 40)}`); continue; }
+              r = { ok: true, sizeMb: null, link: res && res.vidoy && res.vidoy.link, summary: res && res.summary };
+              break;
+            } catch (err) {
+              lastErr = err.message || 'gagal';
+              rp.updateEpisode(key, 'fail', `${server}: ${String(lastErr).slice(0, 40)}`);
+            }
           }
           if (r?.ok) {
-            rp.updateEpisode(key, 'done', r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : 'ok');
+            const note = r.link || (r.sizeMb ? `${Number(r.sizeMb).toFixed(1)} MB` : (r.summary || 'ok'));
+            if (r.link) kurLinks.push(`Ep ${e.ep} → ${r.link}`);
+            rp.updateEpisode(key, 'done', String(note).slice(0, 90));
             ok++;
           } else {
             rp.updateEpisode(key, 'fail', String(lastErr).slice(0, 50));
@@ -3645,7 +3826,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         await sleep(_downloadHandlers.SAM_BATCH_PACE_MS || 1000);
       }
       await rp.done();
-      logger.info({ chatId, title, ok, fail, skip }, 'kur_all batch selesai');
+      const linkBlock = kurLinks.length
+        ? `\n\n🔗 <b>Link Vidoy:</b>\n${kurLinks.map((l) => escHtml(l)).join('\n')}`
+        : '';
+      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${targetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+        { parse_mode: 'HTML' }).catch(() => {});
+      logger.info({ chatId, title, target, ok, fail, skip }, 'kur_all batch selesai');
     } finally {
       kurAllBusy.delete(lockKey);
     }
@@ -4021,6 +4207,34 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     return _adminHandlers.handleAdminPanel({ chatId });
   }
 
+  if (act === 'vidoy_links') {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+    return _adminHandlers.handleVidoyLinks({ chatId, msgId, query });
+  }
+
+  if (act === 'vidoy_link_all' || act.startsWith('vidoy_link_one:')) {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+    const rows = await listRecentVidoyUploads(20);
+    if (!rows.length) return bot.answerCallbackQuery(query.id, { text: 'Belum ada data' }).catch(() => {});
+    let changed = 0;
+    let alive = 0;
+    if (act === 'vidoy_link_all') {
+      for (const row of rows) {
+        const r = await _adminHandlers.refreshVidoyLink(row, chatId).catch((e) => ({ ok: false, error: e.message }));
+        if (r.ok) { alive++; if (r.changed) changed++; }
+      }
+    } else {
+      const token = act.split(':')[2];
+      const row = _adminHandlers.findRowByToken(rows, token);
+      if (!row) return bot.answerCallbackQuery(query.id, { text: 'Data tak ditemukan (muat ulang panel)' }).catch(() => {});
+      const r = await _adminHandlers.refreshVidoyLink(row, chatId).catch((e) => ({ ok: false, error: e.message }));
+      if (r.ok) { alive++; if (r.changed) changed++; }
+    }
+    const toast = `✅ ${alive}/${rows.length} hidup${changed ? ` · 🔄 ${changed} link berubah` : ''}`;
+    await bot.answerCallbackQuery(query.id, { text: toast }).catch(() => {});
+    return _adminHandlers.handleVidoyLinks({ chatId, msgId, query });
+  }
+
   if (act === 'ai_endpoint') {
     if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
     const curEp = await getSetting('ai_endpoint');
@@ -4328,6 +4542,38 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     await bot.deleteMessage(chatId, msgId).catch(() => {});
     if (act === 'per_ep') return actionPerEpisode(chatId, session);
     return actionMerge10(chatId, session);
+  }
+
+  if (act === 'vy_merge10' || act === 'vyt_merge10') {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    if (!session) return bot.sendMessage(chatId, '⚠️ Session habis. Kirim ulang link.');
+    await bot.deleteMessage(chatId, msgId).catch(() => {});
+    if (act === 'vy_merge10') return _vidoyHandlers.actionVidoyMerge10(chatId, session);
+    return _vidoyHandlers.actionVidoyAndTelegramMerge10(chatId, session);
+  }
+
+  if (act === 'a_tg' || act === 'a_vt' || act === 'a_vyt' || act === 'a_vv') {
+    // Anime memilih target di preview episode (sam_dl); menu ini fallback.
+    return bot.answerCallbackQuery(query.id, {
+      text: 'Pilih episode dulu — target dipilih di preview',
+    }).catch(() => {});
+  }
+
+  if (act === 'drama_legacy') {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+    }
+    return bot.editMessageText('⚙️ <b>Opsi per episode</b>\n\nPilih target upload per episode:', {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: dramaLegacyKeyboard(),
+    }).catch(() => {});
+  }
+
+  if (act === 'back_menu') {
+    return bot.editMessageText('📋 <b>Pilih aksi</b>\n\nPilih target upload:', {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: mainActionKeyboard('drama'),
+    }).catch(() => {});
   }
 
   if (act === 'v_per_ep' || act === 'v_merge10' || act === 'vt_per_ep' || act === 'vt_merge10') {

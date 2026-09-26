@@ -1,0 +1,745 @@
+'use strict';
+
+// Unit test: Vidoy uploader (port teruji live) + menu upload Drama/Anime.
+// Fokus: sanitasi nama folder (rules terverifikasi live), path folder multi-level,
+// util URL galeri, bentuk & validitas 2 menu upload.
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const V = require('../vidoy-uploader');
+
+let passed = 0;
+let failed = 0;
+function t(name, fn) {
+  try { fn(); console.log(`PASS  ${name}`); passed++; }
+  catch (e) { failed++; console.error(`FAIL  ${name}: ${e.message}`); }
+}
+
+// ─── Sanitasi nama folder (rules dari uji live 25 Sep 2026) ────────────────
+// Live: '<','>' GAGAL dibuat (add-folder tetap 303); emoji jadi '???'; ': ? * " | \ & +' aman;
+// panjang 160 aman; CJK aman; spasi di ujung di-trim server.
+t('buang < dan > (gagal create kalau ada — live)', () => {
+  const out = V.sanitizeFolderName('A <b> Judul >');
+  assert.ok(!/[<>]/.test(out), 'harus tanpa < >');
+});
+t('buang emoji (live: tersimpan ????????)', () => {
+  const out = V.sanitizeFolderName('Film Uji \u{1F3AC}\u{1F37F}');
+  assert.ok(!/[\u{1F300}-\u{1FAFF}]/u.test(out), 'harus tanpa emoji');
+  assert.ok(out.includes('Film Uji'));
+});
+t('jaga karakter yang aman (live: : ? * " | \\ & + tersimpan)', () => {
+  const out = V.sanitizeFolderName('A: B? C* D" E| F\\ G& H+');
+  for (const ch of [':', '?', '*', '"', '|', '&', '+']) {
+    assert.ok(out.includes(ch), `harus menjaga "${ch}" → ${out}`);
+  }
+});
+t('slash & backslash jadi tanda hubung (tak boleh jadi path traversal)', () => {
+  const out = V.sanitizeFolderName('A/B\\C');
+  assert.ok(!out.includes('/') && !out.includes('\\'), 'tak boleh ada separator → ' + out);
+});
+t('buang karakter kontrol', () => {
+  assert.ok(!/[\x00-\x1f]/.test(V.sanitizeFolderName('a\u0001b\u0007c')));
+});
+t('trim spasi & titik di ujung', () => {
+  assert.strictEqual(V.sanitizeFolderName('  ...Judul...  '), 'Judul');
+});
+t('cap panjang + suffix hash (anti-tabrakan judul mirip)', () => {
+  const out = V.sanitizeFolderName('x'.repeat(400));
+  assert.ok(out.length <= 120, 'panjang <= 120, dapat ' + out.length);
+  assert.ok(out.includes('~'), 'ada suffix hash');
+  const a = V.sanitizeFolderName('Judul '.repeat(60) + 'A');
+  const b = V.sanitizeFolderName('Judul '.repeat(60) + 'B');
+  assert.notStrictEqual(a, b, 'judul mirip → nama folder berbeda');
+});
+t('nama kosong/pmb → default', () => {
+  assert.strictEqual(V.sanitizeFolderName(''), 'Tanpa Judul');
+  assert.strictEqual(V.sanitizeFolderName('   '), 'Tanpa Judul');
+  assert.strictEqual(V.sanitizeFolderName('...'), 'Tanpa Judul');
+});
+t('CJK tetap utuh (live: aman)', () => {
+  assert.ok(V.sanitizeFolderName('标题 テスト').includes('标题'));
+});
+
+// ─── Path folder (live: 3 level berhasil) ──────────────────────────────────
+t('dramaFolderPath & animeFolderPath: 4 level', () => {
+  assert.deepStrictEqual(V.dramaFolderPath('My Drama'), ['VVIP AKSES', 'DATABASE', 'DRAMA', 'My Drama']);
+  assert.deepStrictEqual(V.animeFolderPath('One Piece'), ['VVIP AKSES', 'DATABASE', 'ANIME', 'One Piece']);
+});
+t('segmentsToPath menyambung & menyanitasi tiap segmen', () => {
+  assert.strictEqual(V.segmentsToPath(['DATABASE', 'A/B', 'C']), 'DATABASE/A-B/C');
+});
+t('path Judul containing < > tetap aman untuk tiap level', () => {
+  const segs = V.dramaFolderPath('Pusaka <Tak> Tertandingi').map((s) => V.sanitizeFolderName(s));
+  for (const s of segs) assert.ok(!/[<>]/.test(s), s);
+});
+
+// ─── Util URL galeri (live) ────────────────────────────────────────────────
+t('buildFolderUrl default host + guard id kosong', () => {
+  assert.strictEqual(V.buildFolderUrl('abc'), 'https://vidkud.com/f/abc');
+  assert.strictEqual(V.buildFolderUrl('abc', 'streamrizz.com'), 'https://streamrizz.com/f/abc');
+  assert.strictEqual(V.buildFolderUrl(''), '');
+  assert.strictEqual(V.buildFolderUrl('0'), '');
+});
+t('extractFolderId', () => {
+  assert.strictEqual(V.extractFolderId('https://vidkud.com/f/abc-123_X'), 'abc-123_X');
+  assert.strictEqual(V.extractFolderId('https://vidkud.com/e/999'), '');
+});
+t('nextFolderHost rotasi + wrap-around', () => {
+  assert.strictEqual(V.nextFolderHost('https://vidkud.com/f/1'), 'https://streamrizz.com/f/1');
+  assert.strictEqual(V.nextFolderHost('https://streamrizz.com/f/1'), 'https://vdko.cc/f/1');
+  assert.strictEqual(V.nextFolderHost('https://vdko.cc/f/1'), 'https://vidkud.com/f/1');
+  assert.strictEqual(V.nextFolderHost('https://vidkud.com/e/1'), '');
+});
+
+// ─── Anti-drift: upload wajib punya verifikasi re-list & tangani 302 ──────
+t('anti-drift: create folder diverifikasi via re-list (add-foder 303 tak trustworthy)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'vidoy-uploader.js'), 'utf8');
+  assert.ok(src.includes('async function createFolderVerified'), 'helper createFolderVerified wajib ada');
+  assert.ok(src.includes('tak muncul di tree'), 'error message verifikasi wajib ada');
+  assert.ok(src.includes('[302, 301, 303, 401, 403]'), 'session handling wajib 302/301/303/401/403');
+  assert.ok(!/const pairs = Object\.keys/.test(src), 'dead code `pairs` tak boleh ada');
+  assert.ok(!/logger\.(info|warn|error)\('\[Vidoy\]/.test(src), 'logger harus gaya pino (obj, msg)');
+});
+
+// ─── Menu upload Drama & Anime ─────────────────────────────────────────────
+function loadMenuFns() {
+  const botSrc = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+  const grab = (name) => {
+    const start = botSrc.indexOf(`function ${name}`);
+    if (start < 0) throw new Error(`fungsi ${name} tak ditemukan di bot.js`);
+    const end = botSrc.indexOf('\n}', start);
+    return botSrc.slice(start, end + 2);
+  };
+  const code = [grab('animeTargetKeyboard'), grab('mainActionKeyboard'), grab('dramaLegacyKeyboard')].join('\n');
+  return new Function('require', `${code}; return { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard };`);
+}
+const makeRequire = (vidoyOk, vidaraOk) => (p) => {
+  if (p.includes('vidoy-uploader')) return { isConfigured: () => vidoyOk };
+  if (p.includes('vidara-uploader')) return { VIDARA_KEY: vidaraOk ? 'key' : '' };
+  return require(p);
+};
+
+t('menu drama: 9 baris, 5 opsi gabung-10 + sub-menu', () => {
+  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const kb = mainActionKeyboard('drama');
+  assert.strictEqual(kb.inline_keyboard.length, 9);
+  const texts = kb.inline_keyboard.flat().map((b) => b.text);
+  for (const must of ['🗜 Telegram — gabung 10', '🗜 Vidara — gabung 10', '🗜 Vidara+TG — gabung 10', '🗜 Vidoy — gabung 10', '🗜 Vidoy+TG — gabung 10', '⚙️ Opsi per episode']) {
+    assert.ok(texts.includes(must), `harus ada: ${must}`);
+  }
+  const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
+  for (const a of ['act:merge10', 'act:v_merge10', 'act:vt_merge10', 'act:vy_merge10', 'act:vyt_merge10', 'act:drama_legacy']) {
+    assert.ok(datas.includes(a), `callback harus ada: ${a}`);
+  }
+});
+t('menu anime: 4 target (Telegram / Vidara+TG / Vidoy+TG / Vidara+Vidoy)', () => {
+  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const kb = mainActionKeyboard('anime');
+  const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
+  for (const a of ['act:a_tg', 'act:a_vt', 'act:a_vyt', 'act:a_vv']) assert.ok(datas.includes(a), a);
+});
+t('sub-menu per-episode drama: 3 opsi + kembali', () => {
+  const { dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const kb = dramaLegacyKeyboard();
+  const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
+  for (const a of ['act:per_ep', 'act:v_per_ep', 'act:vt_per_ep', 'act:back_menu']) assert.ok(datas.includes(a), a);
+});
+t('kredensial kosong → tombol target disabled ({}), bukan hilang', () => {
+  const { animeTargetKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(false, false));
+  const btns = animeTargetKeyboard('a', 'b', 'c', 'd').flat();
+  assert.ok(btns[0].callback_data === 'a', 'Tombol Telegram tetap aktif');
+  for (let i = 1; i < btns.length; i++) {
+    assert.ok(btns[i].disabled && !btns[i].callback_data, `Tombol non-TG ke-${i} harus disabled`);
+  }
+  const legacy = dramaLegacyKeyboard().inline_keyboard.flat();
+  assert.ok(legacy[1].disabled && legacy[2].disabled, 'opsi Vidara mati');
+  assert.ok(legacy[0].callback_data === 'act:per_ep', 'Telegram tetap aktif');
+});
+t('semua callback_data <= 64 byte (dokumen resmi: 1-64 bytes)', () => {
+  const { animeTargetKeyboard, mainActionKeyboard, dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const all = [
+    ...mainActionKeyboard('drama').inline_keyboard.flat(),
+    ...mainActionKeyboard('anime').inline_keyboard.flat(),
+    ...dramaLegacyKeyboard().inline_keyboard.flat(),
+    ...animeTargetKeyboard('sam_go:gofile:abc123', 'sam_go:vt:gofile:abc123', 'sam_go:vyt:gofile:abc123', 'sam_go:vv:gofile:abc123').flat(),
+  ];
+  for (const b of all) {
+    if (!b.callback_data) continue;
+    assert.ok(Buffer.byteLength(b.callback_data, 'utf8') <= 64, `terlalu panjang: ${b.callback_data}`);
+  }
+});
+t('tombol aktif pakai style (Bot API 10.3) & nilai valid', () => {
+  const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true));
+  const btn = mainActionKeyboard('drama').inline_keyboard[0][0];
+  assert.strictEqual(btn.style, 'primary');
+  const styles = ['danger', 'success', 'primary'];
+  for (const b of mainActionKeyboard('drama').inline_keyboard.flat()) {
+    if (b.style) assert.ok(styles.includes(b.style), 'style tak valid: ' + b.style);
+  }
+});
+
+t('normalizeSegments: menerima ARRAY & string (regresi String().map — bug live)', () => {
+  assert.deepStrictEqual(
+    V.normalizeSegments(V.dramaFolderPath('Terobsesi Padanya Siang dan Malam')),
+    ['VVIP AKSES', 'DATABASE', 'DRAMA', 'Terobsesi Padanya Siang dan Malam']
+  );
+  assert.deepStrictEqual(
+    V.normalizeSegments('VVIP AKSES/DATABASE/ANIME/One Piece'),
+    ['VVIP AKSES', 'DATABASE', 'ANIME', 'One Piece']
+  );
+  assert.deepStrictEqual(V.normalizeSegments(['A/B <C> 🎬']), ['A-B C'], 'per segmen disanitasi');
+  assert.deepStrictEqual(V.normalizeSegments(null), []);
+  assert.deepStrictEqual(V.normalizeSegments(''), []);
+});
+
+t('anti-drift: getOrCreateFolderPath WAJIB pakai normalizeSegments (bukan String().map)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'vidoy-uploader.js'), 'utf8');
+  const body = src.slice(src.indexOf('async function getOrCreateFolderPath'), src.indexOf('async function upload'));
+  assert.ok(body.includes('normalizeSegments(segments)'), 'getOrCreateFolderPath harus pakai normalizeSegments');
+  assert.ok(!/String\(segments/.test(body), 'dilarang String(segments).map di body itu');
+});
+
+t('deleteItem: guard id kosong & jenis tak dikenal', () => {
+  return Promise.all([
+    V.deleteItem('folder', '').then((r) => assert.strictEqual(r.ok, false)),
+    V.deleteItem('bogus', 'x').then((r) => assert.strictEqual(r.ok, false)),
+  ]);
+});
+t('anti-drift: deleteItem pakai type+files (diform terverifikasi di /videos)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'vidoy-uploader.js'), 'utf8');
+  assert.ok(src.includes('type=${kind}'), 'wajib kirim field type');
+  assert.ok(src.includes('files=${id}'), 'wajib kirim field files');
+  assert.ok(src.includes('`${VIDOY_BASE}/delete`'), 'endpoint /delete');
+});
+
+// ─── Skip/resume ( Vidoy: batch yang sudah ter-upload tak diulang ) ────────
+const vidoyService = require('../services/vidoyService');
+const vidoyU = require('../vidoy-uploader');
+
+t('planBatchWork: batch yang punya record DB → skip', () => {
+  const chunks = vidoyService.chunkEpisodes(Array.from({ length: 25 }, (_, i) => ({ ep: i + 1 })), 10);
+  const plan = vidoyService.planBatchWork(chunks, [{ part: 1, link: 'https://vski.cc/e/aaa' }], {}, 10);
+  assert.strictEqual(plan.length, 3);
+  assert.strictEqual(plan[0].skip, true, 'part 1 harus skip');
+  assert.strictEqual(plan[0].known.link, 'https://vski.cc/e/aaa');
+  assert.strictEqual(plan[1].skip, false, 'part 2 baru');
+  assert.strictEqual(plan[1].label, '11-20');
+  assert.strictEqual(plan[2].label, '21-25');
+});
+t('planBatchWork: record tanpa link TIDAK di-skip (aman)', () => {
+  const chunks = vidoyService.chunkEpisodes(Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 })), 10);
+  const plan = vidoyService.planBatchWork(chunks, [{ part: 1, link: null }], {}, 10);
+  assert.strictEqual(plan[0].skip, false);
+});
+t('planBatchWork: fallback track.json (lolos dari DB kosong)', () => {
+  const chunks = vidoyService.chunkEpisodes(Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 })), 10);
+  const plan = vidoyService.planBatchWork(chunks, [], { vidoyBatches: { '01-10': 'https://vski.cc/e/ttt' } }, 10);
+  assert.strictEqual(plan[0].skip, true, 'harus skip dari track');
+  assert.strictEqual(plan[0].known.link, 'https://vski.cc/e/ttt');
+});
+t('track file: tulis & baca ulang konsisten', () => {
+  const f = path.join(require('os').tmpdir(), `vidoy-track-test-${Date.now()}.json`);
+  vidoyService.saveTrack(f, { vidoyBatches: { '01-10': 'https://vski.cc/e/x' } });
+  const back = vidoyService.loadTrack(f);
+  assert.strictEqual(back.vidoyBatches['01-10'], 'https://vski.cc/e/x');
+  assert.strictEqual(vidoyService.trackFileFor('/tmp/drama/work'), '/tmp/drama/track.json');
+  fs.unlinkSync(f);
+});
+
+// ─── Urutan operasi Vidoy+TG (pola Vidara: per batch, hapus setelah terkirim) ──
+t('uploadBatches: urutan download→concat→upload→afterUpload→hapus file merge', async () => {
+  const fsx = require('fs');
+  const osx = require('os');
+  const pathx = require('path');
+  const workDir = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-order-'));
+  const order = [];
+  const eps = Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }));
+  const res = await vidoyService.uploadBatches({
+    kind: 'drama', mediaKey: 'unit-test', title: 'Unit Drama', episodes: eps,
+    resolveVideoUrl: async () => 'https://x/v.mp4',
+    batchSize: 10, workers: 1, workDir,
+    deps: {
+      downloadChunk: async (chunk) => { order.push('download'); return chunk.map(() => '/tmp/fake.mp4'); },
+      ffmpegConcat: async (inp, out) => { order.push('concat'); fsx.writeFileSync(out, 'x'); },
+    },
+    afterUpload: async () => { order.push('telegram'); },
+  });
+  const merged = pathx.join(workDir, `${vidoyU.sanitizeFolderName('Unit Drama')} — Ep 01-10.mp4`);
+  assert.strictEqual(res.done, 1, 'satu batch sukses');
+  assert.ok(order.indexOf('download') < order.indexOf('concat'), 'download sebelum concat');
+  assert.ok(order.indexOf('concat') < order.indexOf('telegram'), 'concat sebelum telegram');
+  assert.ok(!fsx.existsSync(merged), 'file merge harus dihapus setelah terkirim (hemat disk)');
+  fsx.rmSync(workDir, { recursive: true, force: true });
+});
+
+// ─── File ditahan sampai VIDOY + TELEGRAM sama-sama sukses ────────────────
+function fakeDeps(order) {
+  const fsx = require('fs');
+  return {
+    downloadChunk: async (chunk) => { order.push('download'); return chunk.map(() => '/tmp/fake.mp4'); },
+    ffmpegConcat: async (inp, out) => { order.push('concat'); fsx.writeFileSync(out, 'x'); },
+  };
+}
+function runBatches(workDir, extra) {
+  return vidoyService.uploadBatches(Object.assign({
+    kind: 'drama', mediaKey: 'unit-tg', title: 'Unit TG', episodes: Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 })),
+    resolveVideoUrl: async () => 'https://x/v.mp4', batchSize: 10, workers: 1, workDir,
+  }, extra));
+}
+
+t('TG sukses → file merge DIHAPUS', async () => {
+  const fsx = require('fs'); const osx = require('os'); const pathx = require('path');
+  const wd = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-tg-ok-'));
+  const order = [];
+  const res = await runBatches(wd, { deps: fakeDeps(order), afterUpload: async () => { order.push('tg'); return true; } });
+  const merged = pathx.join(wd, `${vidoyU.sanitizeFolderName('Unit TG')} — Ep 01-10.mp4`);
+  assert.strictEqual(res.done, 1);
+  assert.ok(!fsx.existsSync(merged), 'file harus terhapus setelah dua-duanya sukses');
+  assert.deepStrictEqual(order, ['download', 'concat', 'tg']);
+  fsx.rmSync(wd, { recursive: true, force: true });
+});
+
+t('TG GAGAL → file merge DITAHAN & ditandai telegramPending', async () => {
+  const fsx = require('fs'); const osx = require('os'); const pathx = require('path');
+  const wd = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-tg-fail-'));
+  const res = await runBatches(wd, { deps: fakeDeps([]), afterUpload: async () => false });
+  const merged = pathx.join(wd, `${vidoyU.sanitizeFolderName('Unit TG')} — Ep 01-10.mp4`);
+  assert.strictEqual(res.done, 1, 'Vidoy tetap sukses');
+  assert.ok(fsx.existsSync(merged), 'file harus DITAHAN saat TG gagal');
+  assert.ok(res.items[0].telegramPending, 'item ditandai telegramPending');
+  fsx.rmSync(wd, { recursive: true, force: true });
+});
+
+t('retry: batch tersimpan + file ada → kirim TG tanpa unduh, lalu hapus', async () => {
+  const fsx = require('fs'); const osx = require('os'); const pathx = require('path');
+  const wd = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-tg-retry-'));
+  const merged = pathx.join(wd, `${vidoyU.sanitizeFolderName('Unit TG')} — Ep 01-10.mp4`);
+  fsx.writeFileSync(merged, 'x');
+  // bypass Vidoy: seed track + DB lookup via track (mediaKey tak ada di DB)
+  fsx.writeFileSync(pathx.join(wd, '..', 'track.json'), JSON.stringify({
+    vidoyBatches: { '01-10': { link: 'https://vski.cc/e/pre', mergedPath: merged, tgSent: false } },
+  }));
+  const order = [];
+  const res = await runBatches(wd, { deps: fakeDeps(order), afterUpload: async () => { order.push('tg'); return true; } });
+  assert.ok(!order.includes('download'), 'TIDAK boleh unduh ulang');
+  assert.ok(order.includes('tg'), 'harus kirim ke channel');
+  assert.ok(!fsx.existsSync(merged), 'file dihapus setelah terkirim');
+  assert.ok(res.items[0].tgResent, 'item ditandai tgResent');
+  assert.strictEqual(res.skipped, 1, 'tetap dihitung skip (tak ada upload ulang)');
+  fsx.rmSync(wd, { recursive: true, force: true });
+  try { fs.unlinkSync(pathx.join(osx.tmpdir(), pathx.basename(pathx.dirname(wd)), 'track.json')); } catch {}
+});
+
+t('track entry string lama tetap kompatibel (backward-compatible)', () => {
+  const n = vidoyService.normalizeTrackEntry('https://vski.cc/e/legacy');
+  assert.strictEqual(n.link, 'https://vski.cc/e/legacy');
+  assert.strictEqual(n.tgSent, null, 'tgSent tak diketahui untuk entri lama');
+});
+
+// ─── Caption ber-link + panel refresh link ──────────────────────────────────
+const vidoyHandlers = require('../handlers/vidoy');
+
+t('caption drama: format "1 (Ep 1–10)" + Judul/Provider/Link (anchor)', () => {
+  const cap = vidoyHandlers.buildCaption({ title: 'Terobsesi Padanya Siang dan Malam', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/ru9a4av12kd9' });
+  assert.ok(cap.includes('➧ Judul :- <b>Terobsesi Padanya Siang dan Malam</b>'), cap);
+  assert.ok(cap.includes('➧ Part/Episode :- 1 (Ep 1–10)'), cap);
+  assert.ok(cap.includes('➧ Provider :- dramawave'), cap);
+  assert.ok(!cap.includes('Server :-'), 'baris Server dihapus sesuai spek: ' + cap);
+  assert.ok(!cap.includes('Tipe :-'), 'baris Tipe dihapus sesuai spek: ' + cap);
+  assert.ok(cap.includes('<a href="https://vski.cc/e/ru9a4av12kd9">vski.cc/e/ru9a4av12kd9</a>'), 'link jadi anchor ringkas: ' + cap);
+  assert.ok(!cap.includes('/f/'), 'folder tak ikut di caption (permintaan: link saja)');
+});
+t('caption anime: episode tunggal → "Episode :- 8" (format spek user)', () => {
+  const cap = vidoyHandlers.buildCaption({ title: 'One Piece', provider: 'samehadaku', part: 8, epStart: 8, epEnd: 8, link: 'https://vski.cc/e/abc' });
+  assert.ok(cap.includes('\u27a7 Episode :- 8'), 'label episode tunggal salah: ' + cap);
+  assert.ok(!cap.includes('Part/Episode'), 'episode tunggal tidak pakai label Part/Episode: ' + cap);
+  assert.ok(!cap.includes('undefined'), cap);
+});
+
+t('caption drama: rentang tetap "Part/Episode :- 1 (Ep 1–10)"', () => {
+  const cap = vidoyHandlers.buildCaption({ title: 'X', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/abc' });
+  assert.ok(cap.includes('\u27a7 Part/Episode :- 1 (Ep 1\u201310)'), 'label drama salah: ' + cap);
+  const cap2 = vidoyHandlers.buildCaption({ title: 'X', provider: 'dramawave', part: 7, epStart: 61, epEnd: 68, link: 'https://vski.cc/e/abc' });
+  assert.ok(cap2.includes('\u27a7 Part/Episode :- 7 (Ep 61\u201368)'), 'label part 7 salah: ' + cap2);
+});
+t('caption: karakter HTML berbahaya di-neutralkan (anti 400 / anti injeksi)', () => {
+  const cap = vidoyHandlers.buildCaption({ title: 'Tom & Jerry <script>alert(1)</script>', provider: 'x&y', part: 1, epStart: 1, epEnd: 1, link: 'https://vski.cc/e/a?x=1&y=2' });
+  assert.ok(!/Tom & Jerry/.test(cap), 'ampersand harus ter-escape: ' + cap);
+  assert.ok(!cap.includes('<script>'), 'tag berbahaya tidak boleh lolos: ' + cap);
+  assert.ok(cap.includes('&lt;script&gt;'), 'tag berbahaya jadi teks: ' + cap);
+  assert.ok(cap.includes('&amp;y='), 'query link ter-escape: ' + cap);
+});
+t('caption: tanpa link tetap valid (tak ada baris Link)', () => {
+  const cap = vidoyHandlers.buildCaption({ title: 'X', provider: 'p', epStart: 1, epEnd: 2 });
+  assert.ok(!cap.includes('➧ Link'), 'tak ada baris Link saat link kosong');
+});
+t('shortLinkLabel: label WAJIB sama dengan domain URL (tidak boleh domain hardcode)', () => {
+  for (const url of ['https://vski.cc/e/abc', 'https://vidkud.com/e/abc', 'https://abc.tv/d/xyz', 'https://foo.net/e/z1-2_3']) {
+    const label = vidoyHandlers.shortLinkLabel(url);
+    if (label.includes('vidoy.asia')) throw new Error('masih pakai domain hardcode: ' + url + ' → ' + label);
+    const host = new URL(url).host;
+    if (!label.startsWith(host + '/')) throw new Error('label tidak ikut domain asli: ' + url + ' → ' + label);
+  }
+  const cap = vidoyHandlers.buildCaption({ title: 'X', provider: 'p', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/abc' });
+  if (!cap.includes('>vski.cc/e/abc</a>')) throw new Error('label caption tidak ikut domain: ' + cap);
+});
+
+t('shortLinkLabel: ringkas tapi tetap klik-buka penuh', () => {
+  assert.strictEqual(vidoyHandlers.shortLinkLabel('https://vski.cc/e/ru9a4av12kd9'), 'vski.cc/e/ru9a4av12kd9');
+  assert.strictEqual(vidoyHandlers.shortLinkLabel('https://abc.tv/d/xyz'), 'abc.tv/d/xyz');
+  assert.strictEqual(vidoyHandlers.shortLinkLabel('bukan-url'), 'bukan-url');
+});
+
+t('anti-drift: admin panel punya tombol Vidoy Links & refreshVidoyLink ada', () => {
+  const fsx = require('fs');
+  const botSrc = fsx.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+  const adminSrc = fsx.readFileSync(path.join(__dirname, '..', 'handlers', 'admin.js'), 'utf8');
+  assert.ok(botSrc.includes("act:vidoy_links'"), 'tombol panel harus ada');
+  assert.ok(botSrc.includes("act === 'vidoy_link_all'"), 'routing refresh semua');
+  assert.ok(botSrc.includes("act.startsWith('vidoy_link_one:')"), 'routing refresh satu');
+  assert.ok(adminSrc.includes('async function handleVidoyLinks'), 'handler panel');
+  assert.ok(adminSrc.includes('async function refreshVidoyLink'), 'handler refresh link');
+  assert.ok(adminSrc.includes('editMessageText'), 'refresh harus edit caption pesan lama');
+  assert.ok(adminSrc.includes('Vidoy.fetchPublicLink'), 'ambil link terbaru dari dashboard');
+});
+t('anti-drift: db punya kolom pointer pesan & update link', () => {
+  const dbSrc = require('fs').readFileSync(path.join(__dirname, '..', 'db.js'), 'utf8');
+  for (const col of ['tg_chat_id', 'tg_message_id', 'link_checked_at', 'link_alive']) {
+    assert.ok(dbSrc.includes(`ADD COLUMN IF NOT EXISTS ${col}`), 'kolom ' + col + ' wajib dimigrasikan');
+  }
+  assert.ok(dbSrc.includes('async function updateVidoyLink'), 'updateVidoyLink');
+  assert.ok(dbSrc.includes('async function setVidoyTelegramPointer'), 'setVidoyTelegramPointer');
+});
+
+t('batch ter-skip tanpa file lokal → unduh ulang HANYA untuk Telegram (tak upload ulang ke host)', async () => {
+  const fsx = require('fs'); const osx = require('os'); const pathx = require('path');
+  const wd = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-skip-redl-'));
+  const order = [];
+  let uploads = 0;
+  // seed: Vidoy sudah punya batch ini (DB kosong, tapi track string lama = entri legacy)
+  fsx.writeFileSync(pathx.join(wd, '..', 'track.json'), JSON.stringify({ vidoyBatches: { '01-10': 'https://vski.cc/e/legacy' } }));
+  const res = await runBatches(wd, {
+    deps: fakeDeps(order),
+    afterUpload: async () => { order.push('tg'); return true; },
+  });
+  assert.strictEqual(res.skipped, 1, 'tak ada upload baru');
+  assert.ok(order.includes('download'), 'harus unduh ulang untuk kirim Telegram');
+  assert.ok(order.includes('tg'), 'harus kirim ke Telegram');
+  assert.ok(!order.includes('upload'), 'TIDAK boleh upload ulang ke host');
+  assert.ok(res.items[0].tgResent, 'ditandai tgResent');
+  assert.ok(res.items[0].redownloaded, 'ditandai redownloaded');
+  const track = JSON.parse(fsx.readFileSync(pathx.join(wd, '..', 'track.json'), 'utf8'));
+  assert.strictEqual(track.vidoyBatches['01-10'].tgSent, true, 'tgSent=true → run berikutnyatak unduh lagi');
+  assert.strictEqual(track.vidoyBatches['01-10'].mergedPath, null, 'path dibersihkan');
+  fsx.rmSync(wd, { recursive: true, force: true });
+  try { fs.unlinkSync(pathx.join(osx.tmpdir(), pathx.basename(pathx.dirname(wd)), 'track.json')); } catch {}
+});
+
+t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
+  const fsx = require('fs'); const osx = require('os'); const pathx = require('path');
+  const wd = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'vidoy-skip-only-'));
+  const order = [];
+  fsx.writeFileSync(pathx.join(wd, '..', 'track.json'), JSON.stringify({ vidoyBatches: { '01-10': { link: 'https://vski.cc/e/only', tgSent: false } } }));
+  const res = await runBatches(wd, { deps: fakeDeps(order) });
+  assert.strictEqual(res.skipped, 1);
+  assert.ok(!order.includes('download'), 'tanpa afterUpload → tak ada unduhan sama sekali');
+  fsx.rmSync(wd, { recursive: true, force: true });
+  try { fs.unlinkSync(pathx.join(osx.tmpdir(), pathx.basename(pathx.dirname(wd)), 'track.json')); } catch {}
+});
+
+console.log(`RESULT: ${passed} pass, ${failed} fail`);
+
+// ── REGRESSION: season anime tidak boleh hilang dari judul ──
+const SA = require('../providers/samehadaku');
+
+t('anime season: kedua gaya slug → judul SINGKAT & BERBEDA (S3 vs S4)', () => {
+  const u = (slug) => 'https://v2.samehadaku.how/anime/' + slug + '-episode-1/';
+  const s3 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-s3'));
+  const s4 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-s4'));
+  if (s3.title !== 'Tensei Shitara Slime Datta Ken S3') throw new Error('gaya -s3 salah: ' + s3.title);
+  if (s4.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('gaya -s4 salah: ' + s4.title);
+  if (s3.title === s4.title) throw new Error('S3 & S4 judul sama → akan menimpa file');
+  // gaya -season-N harus jadi SINGKAT juga, bukan "Season 4"
+  const l4 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-season-4'));
+  const l3 = SA.parseSamehadakuEpisode(u('tensei-shitara-slime-datta-ken-season-3'));
+  if (l4.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('gaya -season-4 harus jadi "S4": ' + l4.title);
+  if (l3.title === l4.title) throw new Error('season-3 & season-4 judul sama');
+  if (/Season\s/i.test(l4.title)) throw new Error('label panjang "Season" tidak boleh: ' + l4.title);
+});
+
+t('anime season+part: "S2 P2" singkat, kedua gaya sama', () => {
+  const u = (slug) => 'https://v2.samehadaku.how/anime/' + slug + '-episode-2/';
+  const a = SA.parseSamehadakuEpisode(u('naruto-kecil-s2-p2'));
+  const b = SA.parseSamehadakuEpisode(u('naruto-kecil-season-2-part-2'));
+  if (a.title !== 'Naruto Kecil S2 P2') throw new Error('gaya -s2-p2 salah: ' + a.title);
+  if (b.title !== a.title) throw new Error('dua gaya beda: "' + a.title + '" vs "' + b.title + '"');
+});
+
+t('anime tanpa season/part: judul polos, season tetap null', () => {
+  const r = SA.parseSamehadakuEpisode('https://v2.samehadaku.how/anime/naruto-kecil-episode-5/');
+  if (r.title !== 'Naruto Kecil') throw new Error('judul polos berubah: ' + r.title);
+  if (r.season !== null) throw new Error('season harus null');
+  const m = SA.parseSamehadakuAnime('https://v2.samehadaku.how/anime/tensei-shitara-slime-datta-ken-season-4/');
+  if (m.title !== 'Tensei Shitara Slime Datta Ken S4') throw new Error('parseSamehadakuAnime: ' + m.title);
+});
+
+t('anime judul: tidak ada spasi ganda / huruf kecil pada sufiks season', () => {
+  for (const slug of ['x-season-4', 'x-s3', 'x-season-3-part-2', 'x-part-2', 'naruto-kecil']) {
+    const t2 = SA.parseSamehadakuEpisode('https://v2.samehadaku.how/anime/' + slug + '-episode-1/').title;
+    if (/\s{2,}/.test(t2)) throw new Error('spasi ganda: ' + JSON.stringify(t2));
+    if (/ s\d/.test(t2)) throw new Error('sufiks season huruf kecil: ' + JSON.stringify(t2));
+    if (/\bseason\b/i.test(t2)) throw new Error('kata "season" panjang: ' + JSON.stringify(t2));
+  }
+});
+
+
+// ── REGRESSION: target di tombol "Download Semua" (batch anime) ──
+const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+
+t('KRITIS: "Download Semua" WAJIB menanyakan target dulu (tidak langsung ke Telegram)', () => {
+  for (const [prefix, pick] of [['sam', 'sam_allgo'], ['kur', 'kur_allgo']]) {
+    if (!BOT.includes(`data.startsWith('${prefix}_all:') || data.startsWith('${pick}:')`)) {
+      throw new Error(`${prefix}_all tidak punya langkah pilih target`);
+    }
+    for (const t of ['tg', 'vt', 'vyt', 'vv']) {
+      if (!BOT.includes(`${pick}:${t}:\${bid}`)) throw new Error(`${prefix}: target ${t} tidak bisa dipilih`);
+    }
+    if (!BOT.includes(`if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget))`)) {
+      throw new Error(`${prefix}: target tidak divalidasi`);
+    }
+  }
+});
+
+t('KRITIS: loop batch memakai target — non-TG lewat actionAnimeEpisode (semua server)', () => {
+  // 둘 다: Telegram tetap pakai downloader lama, target lain via actionAnimeEpisode
+  const tgBranch = (BOT.match(/if \(target === 'tg'\) \{/g) || []).length;
+  if (tgBranch < 2) throw new Error('cabang target==="tg" kurang dari 2 (sam & kur): ' + tgBranch);
+  const calls = (BOT.match(/actionAnimeEpisode\(chatId, \{/g) || []).length;
+  if (calls < 2) throw new Error('batch tidak memanggil actionAnimeEpisode: ' + calls);
+  for (const dl of ['downloadSamehadakuFile(chatId, e.url, server, servers, sameInfo, { silent: true })',
+                    'downloadKuronimeFile(chatId, e.url, server, servers, kurInfo, { silent: true })']) {
+    if (!BOT.includes(dl)) throw new Error('jalur Telegram-only berubah: ' + dl.slice(0, 40));
+  }
+  // resolveDirectUrl dipakai agar semua server (gofile/filedon/kraken/pixeldrain) bisa
+  if ((BOT.match(/resolveDirectUrl\(servers\[server\]\)/g) || []).length < 2) {
+    throw new Error('batch tidak resolve link file per server');
+  }
+});
+
+t('KRITIS: mode silent tidak spam pesan per-episode & tidak ambil lock', () => {
+  const VSRC2 = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  if (!/if \(!silent\) await p\.done/.test(VSRC2)) throw new Error('p.done masih jalan di mode silent');
+  if (!/if \(!silent\) await p\.fail/.test(VSRC2)) throw new Error('p.fail masih jalan di mode silent');
+  if (!/if \(!silent\) \{[\s\S]{0,200}vidaraBusy\.has/.test(VSRC2)) throw new Error('lock tetap diambil saat silent');
+  if (!/silent\s*\? \{ update\(\) \{\}, done: async/.test(VSRC2)) throw new Error('progress senyap belum ada');
+});
+
+t('KRITIS: link Vidoy per-episode dilaporkan di batch (bukan tenggelam di progress)', () => {
+  if (!BOT.includes('🔗 <b>Link Vidoy:</b>')) throw new Error('tidak ada laporan link Vidoy di batch');
+  if ((BOT.match(/r\.link\) (vidoyLinks|kurLinks)\.push/g) || []).length < 2) {
+    throw new Error('link tidak dikumpulkan untuk kedua runner');
+  }
+});
+
+t('menu: tombol 🗂 Vidoy Links ada di keyboard Admin Panel yang DIPAKAI', () => {
+  const A = fs.readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  const fn = A.slice(A.indexOf('function adminPanelKeyboard'), A.indexOf('function', A.indexOf('function adminPanelKeyboard') + 10));
+  if (!fn.includes('act:vidoy_links')) throw new Error('handleAdminPanel tidak punya tombol Vidoy Links');
+  if (!fn.includes('act:vidara_domain')) throw new Error('tombol Domain Vidara hilang');
+});
+
+
+// ── REGRESSION KRITIS: jangan kirim ulang yang sudah terkirim ──
+const VS = require('../services/vidoyService');
+
+t('KRITIS: record DB dengan pointer Telegram dianggap SUDAH terkirim (tidak kirim ulang)', () => {
+  const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 })), Array.from({ length: 10 }, (_, i) => ({ ep: i + 11 }))];
+  const dbRows = [
+    { part: 1, link: 'https://vski.cc/e/aaa', tg_chat_id: -100123, tg_message_id: 5601 },
+    { part: 2, link: 'https://vski.cc/e/bbb', tg_chat_id: -100123, tg_message_id: 5602 },
+  ];
+  const plan = VS.planBatchWork(chunks, dbRows, {}, 10);
+  if (!plan.every((p) => p.skip)) throw new Error('part tak ter-skip: ' + JSON.stringify(plan.map((p) => p.skip)));
+  for (const p of plan) {
+    if (p.known.tgSent !== true) throw new Error('part ' + p.part + 'tgSent bukan true → akan kirim ulang');
+  }
+});
+
+t('KRITIS: track.jsonTgSent=true tanpa pointer → tetap dianggap terkirim', () => {
+  const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }))];
+  const plan = VS.planBatchWork(chunks, [], { vidoyBatches: { '01-10': { link: 'https://vski.cc/e/aaa', tgSent: true } } }, 10);
+  if (!plan[0].skip) throw new Error('harus skip');
+  if (plan[0].known.tgSent !== true) throw new Error('tgSent track tidak dihormati');
+});
+
+t('KRITIS: record DB tanpa pointer → boleh dikirim (mis.僅 Vidoy-only sebelumnya)', () => {
+  const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }))];
+  const plan = VS.planBatchWork(chunks, [{ part: 1, link: 'https://vski.cc/e/aaa', tg_chat_id: null, tg_message_id: null }], {}, 10);
+  if (!plan[0].skip) throw new Error('vidoy tetap skip');
+  if (plan[0].known.tgSent === true) throw new Error('tidak ada pointer → tgSent harus false agar dikirim');
+});
+
+t('KRITIS: pointer hanya satu kolom tidak dianggap terkirim', () => {
+  const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }))];
+  const plan = VS.planBatchWork(chunks, [{ part: 1, link: 'https://vski.cc/e/aaa', tg_chat_id: -100123, tg_message_id: null }], {}, 10);
+  if (plan[0].known.tgSent === true) throw new Error('pointer separuh tidak boleh dihitung terkirim');
+});
+
+t('KRITIS: string track lama (link saja) tetap kompatibel', () => {
+  const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }))];
+  const plan = VS.planBatchWork(chunks, [], { vidoyBatches: { '01-10': 'https://vski.cc/e/aaa' } }, 10);
+  if (!plan[0].skip) throw new Error('harus skip dari string');
+  if (plan[0].known.tgSent !== null) throw new Error('tgSent harus null (tidak diketahui)');
+});
+
+
+// ── REGRESSION: caption & refresh link (bug Provider undefined + link tertukar) ──
+const VH = require('../handlers/vidoy');
+const AH = require('../handlers/admin');
+const SRC = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+
+t('caption drama: format "1 (Ep 1–10)" + provider benar (bukan undefined)', () => {
+  const c = VH.buildCaption({ title: 'Terobsesi Padanya Siang dan Malam', provider: 'dramawave',
+    part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/ru9a4av12kd9' });
+  if (!c.includes('1 (Ep 1–10)')) throw new Error('format part salah: ' + c);
+  if (!c.includes('Provider :- dramawave')) throw new Error('provider salah: ' + c);
+  if (c.includes('undefined')) throw new Error('ada "undefined" di caption');
+  if (c.includes('Server :-')) throw new Error('baris Server tidak boleh ada');
+});
+
+t('caption anime: episode tunggal', () => {
+  const c = VH.buildCaption({ title: 'A', provider: 'samehadaku', part: 8, epStart: 8, epEnd: 8, link: 'https://vski.cc/e/aa' });
+  if (!c.includes('Episode :- 8')) throw new Error('format anime salah: ' + c);
+  if (c.includes('Part/Episode')) throw new Error('episode tunggal tidak boleh pakai Part/Episode: ' + c);
+});
+
+t('caption: judul & provider berbahaya dinetralkan (kontrak sanitizer)', () => {
+  const c = VH.buildCaption({ title: '<script>x</script>', provider: 'a&b<c>', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/aa' });
+  if (c.includes('<script>')) throw new Error('tag berbahaya lolos: ' + c);
+  if (c.includes('a&b')) throw new Error('ampersand tidak ter-escape: ' + c);
+  if (c.includes('<c>')) throw new Error('tag asing lolos: ' + c);
+});
+
+t('provider kosong → "—" bukan "undefined"', () => {
+  const c = VH.buildCaption({ title: 'X', provider: undefined, part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/aa' });
+  if (c.includes('undefined')) throw new Error('undefined masih muncul: ' + c);
+});
+
+t('replaceLinkLine: MENGGANTI baris link, tidak menambah duplikat', () => {
+  const c = VH.buildCaption({ title: 'X', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/ru9a4av12kd9' });
+  const out = AH.replaceLinkLine(c, 'https://vski.cc/e/NEWLINK999');
+  const linkLines = out.split('\n').filter((l) => l.includes('Link :-'));
+  if (linkLines.length !== 1) throw new Error('baris link duplikat: ' + linkLines.length);
+  if (!out.includes('NEWLINK999')) throw new Error('link baru tidak ada');
+  if (out.includes('ru9a4av12kd9')) throw new Error('link lama masih ada');
+  if (!out.includes('Provider :- dramawave')) throw new Error('baris lain berubah');
+});
+
+t('replaceLinkLine: caption tanpa baris link → ditambahkan di akhir', () => {
+  const out = AH.replaceLinkLine('➧ Judul :- <b>X</b>', 'https://vski.cc/e/zzz');
+  if (!out.includes('Link :-')) throw new Error('link tidak ditambahkan');
+  if (out.split('\n').length !== 2) throw new Error('baris tidak sesuai');
+});
+
+t('fallback caption record lama: provider dari media_key, tanpa undefined', () => {
+  const c = AH.buildFallbackCaption({ media_key: 'dramawave:8YRT', title: 'X', part: 3, ep_start: 21, ep_end: 30, provider: null },
+    'https://vski.cc/e/zzz');
+  if (!c.includes('3 (Ep 21–30)')) throw new Error('format part salah: ' + c);
+  if (c.includes('undefined')) throw new Error('undefined di fallback');
+});
+
+t('fallback caption: media_key null → tetap aman', () => {
+  const c = AH.buildFallbackCaption({ media_key: null, title: null, part: 1, ep_start: 1, ep_end: 10, provider: null }, 'https://vski.cc/e/x');
+  if (c.includes('undefined')) throw new Error('undefined di fallback: ' + c);
+});
+
+t('recordToken: stabil & mengidentifikasi record yang benar', () => {
+  const r = { media_key: 'dramawave:8YRT', kind: 'drama', part: 1 };
+  const t1 = AH.recordToken(r);
+  if (t1 !== AH.recordToken({ ...r })) throw new Error('token tidak deterministik');
+  if (AH.recordToken({ ...r, part: 2 }) === t1) throw new Error('part berbeda collided');
+  if (AH.recordToken({ ...r, kind: 'anime' }) === t1) throw new Error('kind berbeda collided');
+  const found = AH.findRowByToken([{ media_key: 'x', kind: 'anime', part: 8 }, r], t1);
+  if (!found || found.media_key !== 'dramawave:8YRT') throw new Error('record tidak ditemukan');
+});
+
+t('callback_data token muat di 64 byte', () => {
+  const cb = 'act:vidoy_link_one:' + AH.recordToken({ media_key: 'x'.repeat(200), kind: 'drama', part: 12 });
+  if (Buffer.byteLength(cb) > 64) throw new Error('callback_data terlalu panjang: ' + Buffer.byteLength(cb));
+});
+
+t('kode: drama & anime WAJIB supports_streaming (video tidak stream = bug)', () => {
+  // jalur drama: kirim lewat mediaOpts (harus ada supports_streaming di deklarasinya)
+  if (!/const mediaOpts = \{[\s\S]{0,200}supports_streaming: true/.test(SRC)) {
+    throw new Error('mediaOpts drama tidak punya supports_streaming');
+  }
+  // jalur anime: opsi inline
+  if (!/sendVideo\(chatId, destPath, \{[\s\S]{0,200}supports_streaming: true/.test(SRC)) {
+    throw new Error('kirim anime tidak punya supports_streaming');
+  }
+  // tidak boleh ada call site yang mengirim hanya caption+parse_mode
+  if (/sendVideo\([^)]*\{ caption, parse_mode: 'HTML' \}\)/.test(SRC)) {
+    throw new Error('ada call site video tanpa supports_streaming');
+  }
+});
+
+t('kode: TIDAK ada shorthand providerLabel tanpa label (bug "Provider :- undefined")', () => {
+  // hanya call site (definisi fungsi diabaikan)
+  const all = SRC.match(/buildCaption\(\{[^}]*\}/g) || [];
+  const calls = all.filter((c) => SRC.slice(Math.max(0, SRC.indexOf(c) - 9), SRC.indexOf(c)) !== 'function ');
+  if (calls.length < 2) throw new Error('tidak menemukan call site buildCaption: ' + all.length + ' total, definisi=' + (all.length - calls.length));
+  for (const call of calls) {
+    if (!/provider:/.test(call)) throw new Error('buildCaption tanpa key provider: → undefined. ' + call);
+    if (!/part:/.test(call) && !/epStart:/.test(call)) throw new Error('call site tanpa ep info: ' + call);
+  }
+});
+
+t('kode: vinfo didefinisikan sebelum dipakai (bug ReferenceError)', () => {
+  if (!/const vinfo = await getVideoInfo\(item\.filePath\)/.test(SRC)) throw new Error('vinfo drama tidak ada');
+  if (!/const vinfo = await getVideoInfo\(destPath\)/.test(SRC)) throw new Error('vinfo anime tidak ada');
+});
+
+t('kode: caption & provider disimpan ke DB (bukan dirakit ulang saat refresh)', () => {
+  if ((SRC.match(/provider: providerLabel,\s*caption/g) || []).length < 1) throw new Error('drama tidak menyimpan provider+caption');
+  if ((SRC.match(/provider: animeProvider, caption/g) || []).length < 1) throw new Error('anime tidak menyimpan provider+caption');
+});
+
+t('kode: caption yang tersimpan dipakai saat refresh (bukan dirakit ulang)', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  if (!/row\.caption && String\(row\.caption\)\.trim\(\)/.test(admin)) throw new Error('refresh tidak memprioritaskan caption tersimpan');
+});
+
+t('kode: tabel vidoy_uploads punya kolom provider & caption', () => {
+  const dbSrc = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  for (const col of ['provider      TEXT', 'caption       TEXT']) {
+    if (!dbSrc.includes(col)) throw new Error('kolom hilang: ' + col);
+  }
+  if (!dbSrc.includes('ADD COLUMN IF NOT EXISTS provider')) throw new Error('migrasi provider hilang');
+  if (!dbSrc.includes('ADD COLUMN IF NOT EXISTS caption')) throw new Error('migrasi caption hilang');
+});
+
+t('kode: updateVidoyLink tidak RETURNING kolom id yang tidak ada', () => {
+  const dbSrc = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  const m = dbSrc.match(/UPDATE vidoy_uploads[\s\S]{0,300}?RETURNING ([^`]*)/);
+  if (!m) throw new Error('tidak menemukan UPDATE vidoy_uploads');
+  if (/\bid\b/.test(m[1])) throw new Error('RETURNING id — kolom id tidak ada di tabel: ' + m[1].trim());
+});
+
+t('kode: refresh caption video WAJIB editMessageCaption (editMessageText gagal)', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  const fn = admin.slice(admin.indexOf('async function refreshVidoyLink'));
+  const body = fn.slice(0, fn.indexOf('return { ok: true'));
+  if (!/editMessageCaption/.test(body)) throw new Error('tidak pakai editMessageCaption → "there is no text in the message to edit"');
+  if (!/editMessageText/.test(body)) throw new Error('tidak ada fallback editMessageText');
+  if (/editMessageText[\s\S]{0,120}captionUpdated = await/.test(body)) {
+    throw new Error('editMessageText jadi jalur utama');
+  }
+});
+
+t('kode: initAdmin menerima isAdmin (guard panel tidak boleh blank)', () => {
+  const bot = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/initAdmin\(\{[^}]*isAdmin/.test(bot)) throw new Error('initAdmin tidak menerima isAdmin');
+});
+
+process.exit(failed ? 1 : 0);

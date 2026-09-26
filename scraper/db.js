@@ -82,6 +82,35 @@ async function initDatabase() {
       );
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS vidoy_uploads (
+        media_key   TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'drama',
+        part        INTEGER NOT NULL DEFAULT 0,
+        ep_start    INTEGER,
+        ep_end      INTEGER,
+        title       TEXT,
+        folder_id   TEXT,
+        folder_url  TEXT,
+        link        TEXT,
+        dashboard   TEXT,
+        tg_chat_id    BIGINT,
+        tg_message_id BIGINT,
+        provider      TEXT,
+        caption       TEXT,
+        link_checked_at TIMESTAMPTZ,
+        link_alive     BOOLEAN,
+        uploaded_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (media_key, kind, part)
+      );
+    `);
+    // Migrasi ringan untuk tabel yang sudah ada sebelum kolom pointer pesan ditambahkan
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS tg_chat_id BIGINT');
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS tg_message_id BIGINT');
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS link_checked_at TIMESTAMPTZ');
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS link_alive BOOLEAN');
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS provider TEXT');
+    await pool.query('ALTER TABLE vidoy_uploads ADD COLUMN IF NOT EXISTS caption TEXT');
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS livechat_route (
         admin_msg_id BIGINT PRIMARY KEY,
         user_chat_id BIGINT NOT NULL,
@@ -243,6 +272,84 @@ async function listVidaraUploads(dramaKey) {
     return r.rows;
   } catch (err) {
     logger.error({ err: err.message, dramaKey }, 'Failed to list vidara uploads');
+    return [];
+  }
+}
+
+// ─── Vidoy uploads (link per batch / per episode) ───────────────────────────
+
+async function saveVidoyUpload(rec) {
+  const {
+    mediaKey, kind = 'drama', part = 0, epStart = null, epEnd = null,
+    title = null, folderId = null, folderUrl = null, link = null, dashboard = null,
+    tgChatId = null, tgMessageId = null, provider = null, caption = null,
+  } = rec || {};
+  if (!mediaKey || !link) return;
+  try {
+    await pool.query(
+      `INSERT INTO vidoy_uploads (media_key, kind, part, ep_start, ep_end, title, folder_id, folder_url, link, dashboard, tg_chat_id, tg_message_id, provider, caption)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (media_key, kind, part) DO UPDATE SET
+         ep_start = $4, ep_end = $5, title = $6, folder_id = $7, folder_url = $8,
+         link = $9, dashboard = $10, uploaded_at = NOW(),
+         tg_chat_id = COALESCE($11, vidoy_uploads.tg_chat_id),
+         tg_message_id = COALESCE($12, vidoy_uploads.tg_message_id),
+         provider = COALESCE($13, vidoy_uploads.provider),
+         caption = COALESCE($14, vidoy_uploads.caption)`,
+      [mediaKey, kind, Number(part) || 0, epStart, epEnd, title, folderId, folderUrl, link, dashboard, tgChatId, tgMessageId, provider, caption]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind, part }, 'Failed to save vidoy upload');
+  }
+}
+
+async function setVidoyTelegramPointer(mediaKey, kind, part, chatId, messageId) {
+  try {
+    await pool.query(
+      `UPDATE vidoy_uploads SET tg_chat_id = $4, tg_message_id = $5
+        WHERE media_key = $1 AND kind = $2 AND part = $3`,
+      [mediaKey, kind, Number(part) || 0, chatId, messageId]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind, part }, 'Failed to set vidoy telegram pointer');
+  }
+}
+
+async function updateVidoyLink(mediaKey, kind, part, link, alive) {
+  const r = await pool.query(
+    `UPDATE vidoy_uploads SET link = $4, link_alive = $5, link_checked_at = NOW()
+      WHERE media_key = $1 AND kind = $2 AND part = $3
+      RETURNING media_key, kind, part, link, title, ep_start, ep_end, provider, caption, tg_chat_id, tg_message_id`,
+    [mediaKey, kind, Number(part) || 0, link, alive === null || alive === undefined ? null : !!alive]
+  );
+  return r.rows[0] || null;
+}
+
+async function listRecentVidoyUploads(limit = 20) {
+  try {
+    const r = await pool.query(
+      `SELECT media_key, kind, part, ep_start, ep_end, title, link, dashboard,
+              link_alive, link_checked_at, tg_chat_id, tg_message_id, provider, caption, uploaded_at
+         FROM vidoy_uploads ORDER BY uploaded_at DESC LIMIT $1`,
+      [Number(limit) || 20]
+    );
+    return r.rows;
+  } catch (err) {
+    logger.error({ err: err.message }, 'Failed to list recent vidoy uploads');
+    return [];
+  }
+}
+
+async function listVidoyUploads(mediaKey, kind = 'drama') {
+  try {
+    const r = await pool.query(
+      `SELECT kind, part, ep_start, ep_end, title, folder_url, link, dashboard, provider, caption, uploaded_at
+         FROM vidoy_uploads WHERE media_key = $1 AND kind = $2 ORDER BY part`,
+      [mediaKey, kind]
+    );
+    return r.rows;
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind }, 'Failed to list vidoy uploads');
     return [];
   }
 }
@@ -437,6 +544,11 @@ module.exports = {
   saveLiveChatRoute,
   getLiveChatRoute,
   saveVidaraUpload,
+  saveVidoyUpload,
+  listVidoyUploads,
+  setVidoyTelegramPointer,
+  updateVidoyLink,
+  listRecentVidoyUploads,
   getVidaraUpload,
   listVidaraUploads,
   getVidaraDomains,

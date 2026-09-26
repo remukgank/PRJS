@@ -50,9 +50,17 @@ function parseSamehadakuEpisode(url) {
     const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
     const partMatch = fullSlug.match(/-part-(\d+)$/i);
     const part = partMatch ? parseInt(partMatch[1], 10) : null;
-    let titleSlug = fullSlug;
-    if (partMatch) titleSlug = titleSlug.replace(/-part-\d+$/i, '');
-    if (seasonMatch) titleSlug = titleSlug.replace(/-season-\d+$/i, '');
+    // Season/part TIDAK dibuang dari judul, ditulis bentuk pendek (S4 / P2) —
+    // sama persis dengan gaya slug situs "-s3"/"-p2". Dipakai untuk membedakan
+    // judul (folder Vidoy, nama file, mediaKey) agar Season 3 dan Season 4 tidak
+    // menimpa file Ep 01 yang sama.
+    let titleSlug = fullSlug
+      .replace(/-season-\d+(?:-part-\d+)?$/i, '')
+      .replace(/-part-\d+$/i, '');
+    const suffix = [];
+    if (seasonMatch) suffix.push(`s${season}`);
+    if (partMatch) suffix.push(`p${part}`);
+    if (suffix.length) titleSlug += `-${suffix.join('-')}`;
     const title = titleSlug.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     return { title, season, part, episode: ep, provider: 'samehadaku', slug: fullSlug };
   } catch { return null; }
@@ -69,9 +77,17 @@ function parseSamehadakuAnime(url) {
     const season = seasonMatch ? parseInt(seasonMatch[1], 10) : null;
     const partMatch = fullSlug.match(/-part-(\d+)$/i);
     const part = partMatch ? parseInt(partMatch[1], 10) : null;
-    let titleSlug = fullSlug;
-    if (partMatch) titleSlug = titleSlug.replace(/-part-\d+$/i, '');
-    if (seasonMatch) titleSlug = titleSlug.replace(/-season-\d+$/i, '');
+    // Season/part TIDAK dibuang dari judul, ditulis bentuk pendek (S4 / P2) —
+    // sama persis dengan gaya slug situs "-s3"/"-p2". Dipakai untuk membedakan
+    // judul (folder Vidoy, nama file, mediaKey) agar Season 3 dan Season 4 tidak
+    // menimpa file Ep 01 yang sama.
+    let titleSlug = fullSlug
+      .replace(/-season-\d+(?:-part-\d+)?$/i, '')
+      .replace(/-part-\d+$/i, '');
+    const suffix = [];
+    if (seasonMatch) suffix.push(`s${season}`);
+    if (partMatch) suffix.push(`p${part}`);
+    if (suffix.length) titleSlug += `-${suffix.join('-')}`;
     const title = titleSlug.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     return { title, season, part, provider: 'samehadaku', slug: fullSlug };
   } catch { return null; }
