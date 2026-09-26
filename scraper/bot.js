@@ -1030,7 +1030,7 @@ function targetBtn(text, data, enabled, style = 'success') {
 //  batch runner berada di sini — sebelumnya hanya salah memanggil fungsi yang
 //  tidak ter-import → ReferenceError: targetLabel is not defined.)
 function batchTargetLabel(target) {
-  const map = { tg: 'Telegram', vt: 'Vidara + Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidara + Vidoy' };
+  const map = { tg: 'Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidoy' };
   return map[target] || String(target || 'Telegram');
 }
 
@@ -1153,14 +1153,12 @@ function parseBatchPick(data, prefix) {
   return { target: '', urlId: String(data).startsWith(base) ? String(data).slice(base.length) : '' };
 }
 
-function animeTargetKeyboard(tgData, vtData, vytData, vvData) {
+function animeTargetKeyboard(tgData, vytData, vvData) {
   const Vidoy = require('./vidoy-uploader');
-  const Vidara = require('./vidara-uploader');
   const vidoyOk = Vidoy.isConfigured();
-  const vidaraOk = !!Vidara.VIDARA_KEY;
   return BTN.grid([
-    [targetBtn('📥 Telegram', tgData, true), targetBtn('📥 Vidara + TG', vtData, vidaraOk)],
-    [targetBtn('📥 Vidoy + TG', vytData, vidoyOk, 'primary'), targetBtn('📥 Vidara + Vidoy', vvData, vidaraOk && vidoyOk)],
+    [targetBtn('📥 Telegram', tgData, true)],
+    [targetBtn('📥 Vidoy + TG', vytData, vidoyOk, 'primary'), targetBtn('📥 Vidoy', vvData, vidoyOk)],
   ]);
 }
 
@@ -1172,9 +1170,8 @@ function mainActionKeyboard(kind = 'drama') {
   if (kind === 'anime') {
     return BTN.kb([
       [targetBtn('📥 Telegram', 'act:a_tg', true)],
-      [targetBtn('📥 Vidara + Telegram', 'act:a_vt', vidaraOk)],
       [targetBtn('📥 Vidoy + Telegram', 'act:a_vyt', vidoyOk, 'primary')],
-      [targetBtn('📥 Vidara + Vidoy', 'act:a_vv', vidaraOk && vidoyOk)],
+      [targetBtn('📥 Vidoy', 'act:a_vv', vidoyOk)],
       [BTN.nav('🔢 Pilih episode', 'act:list')],
       [BTN.nav('💬 Live Chat', 'act:ai')],
       [BTN.nav('🏠 Menu Utama', 'act:main_menu')],
@@ -1235,6 +1232,38 @@ function titlePromptKeyboard(fileName, url, detectedTitle = null) {
     [BTN.btn(`📥 Download: ${label}`, `dl_title_use:${urlId}`, 'primary')],
     [BTN.nav('✏️ Ganti Judul', `dl_title_custom:${urlId}`)],
   ]);
+}
+
+// Resolve judul + nama file dari URL provider langsung (gofile/pixeldrain/dll).
+// Dipakai di alur provider langsung supaya judul konsisten dengan alur Samehadaku.
+async function resolveProviderTitle(url) {
+  let detectedTitle = null;
+  let fileName = null;
+  try {
+    if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
+    if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
+    else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
+    else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
+    else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
+    else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
+    if (fileName) {
+      const pat = extractSourcePattern(fileName);
+      if (pat) {
+        const m = await findMediaByPattern(pat);
+        if (m) detectedTitle = m.nama;
+      }
+      if (!detectedTitle) {
+        const gds = parseSamehadakuFilename(fileName);
+        if (gds?.short) {
+          for (const prov of ['kuronime', 'samehadaku']) {
+            const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
+            if (m) { detectedTitle = m.nama; break; }
+          }
+        }
+      }
+    }
+  } catch {}
+  return { detectedTitle, fileName };
 }
 
 function aiKeyboard() {
@@ -3364,7 +3393,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
-            ...animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vt:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
+            ...animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
             [BTN.btn('⟳ Lengkapi yang hilang', `sam_fix:${bid}`, 'success')],
             [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}` }],
           ] },
@@ -3375,7 +3404,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           .catch(() => {});
       });
     }
-    if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
+    if (!['tg', 'vyt', 'vv'].includes(batchTarget)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
     }
     await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
@@ -3640,7 +3669,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          ...animeTargetKeyboard(`sam_go:${server}:${urlId2}`, `sam_go:vt:${server}:${urlId2}`, `sam_go:vyt:${server}:${urlId2}`, `sam_go:vv:${server}:${urlId2}`),
+          ...animeTargetKeyboard(`sam_go:${server}:${urlId2}`, `sam_go:vyt:${server}:${urlId2}`, `sam_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3658,7 +3687,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     }
     const partsG = data.split(':');
     const rawTarget = partsG[1];
-    const target = ['tg', 'vt', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
+    const target = ['tg', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
     const server = target ? partsG[2] : rawTarget;
     const rawUrlG = partsG.slice(target ? 3 : 2).join(':');
     const episodeUrlG = resolveUrl(rawUrlG) || decodeURIComponent(rawUrlG);
@@ -3774,7 +3803,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          ...animeTargetKeyboard(`kur_go:${server}:${urlId2}`, `kur_go:vt:${server}:${urlId2}`, `kur_go:vyt:${server}:${urlId2}`, `kur_go:vv:${server}:${urlId2}`),
+          ...animeTargetKeyboard(`kur_go:${server}:${urlId2}`, `kur_go:vyt:${server}:${urlId2}`, `kur_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `kur_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3790,7 +3819,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     }
     const partsG = data.split(':');
     const rawTarget = partsG[1];
-    const target = ['tg', 'vt', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
+    const target = ['tg', 'vyt', 'vv'].includes(rawTarget) ? rawTarget : null;
     const server = target ? partsG[2] : rawTarget;
     const rawUrlG = partsG.slice(target ? 3 : 2).join(':');
     const episodeUrlG = resolveUrl(rawUrlG) || decodeURIComponent(rawUrlG);
@@ -3858,7 +3887,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
-            ...animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vt:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
+            ...animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
             [BTN.btn('⟳ Lengkapi yang hilang', `kur_fix:${bid}`, 'success')],
             [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}` }],
           ] },
@@ -3869,7 +3898,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           .catch(() => {});
       });
     }
-    if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
+    if (!['tg', 'vyt', 'vv'].includes(batchTarget)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
     }
     const target = batchTarget;
@@ -4119,53 +4148,71 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     }
 
     // Teruskan judul terdeteksi dari prompt agar tidak hilang
-    let detectedTitle = null;
-    try {
-      let fileName = null;
-      if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
-      if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
-      else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
-      else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
-      else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
-      else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
-      if (fileName) {
-        const pat = extractSourcePattern(fileName);
-        if (pat) {
-          const m = await findMediaByPattern(pat);
-          if (m) detectedTitle = m.nama;
-        }
-        if (!detectedTitle) {
-          const gds = parseSamehadakuFilename(fileName);
-          if (gds?.short) {
-            for (const prov of ['kuronime', 'samehadaku']) {
-              const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
-              if (m) { detectedTitle = m.nama; break; }
-            }
-          }
-        }
-      }
-    } catch {}
-    await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
-    if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
-    if (isGdriveUrl(url)) {
-      // Title + suffix season/part: "Tensei ... S2 P2" biar media fomo tidak bentrok (anti-dobel)
-      let gdTitle = detectedTitle;
-      if (gdTitle) {
-        try {
-          const gdsCb = parseSamehadakuFilename((await resolveGdriveFile(url).catch(() => null))?.name || '');
-          if (gdsCb?.season) {
-            const hasS = new RegExp(`\\bS${gdsCb.season}\\b`).test(gdTitle);
-            const hasP = gdsCb.part ? new RegExp(`\\bP${gdsCb.part}\\b`).test(gdTitle) : true;
-            if (!hasS && !hasP) gdTitle = `${gdTitle} S${gdsCb.season}${gdsCb.part ? ` P${gdsCb.part}` : ''}`;
-            else if (hasS && !hasP) gdTitle = `${gdTitle} P${gdsCb.part}`;
-          }
-        } catch {}
-      }
-      return handleGdriveUrl(chatId, url, gdTitle || undefined);
+    const { detectedTitle, fileName } = await resolveProviderTitle(url);
+
+    // Tampilkan pilihan target — konsisten dengan alur Samehadaku
+    const urlId = cacheUrl(url);
+    const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
+    const titleShown = detectedTitle || fileName || 'file';
+    const preview = `📥 <b>Download</b>\n\n` +
+      `➧ Judul :- <b>${escHtml(titleShown)}</b>\n` +
+      `➧ Provider :- ${provider}\n\nPilih target:`;
+    await bot.editMessageText(preview, {
+      chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: animeTargetKeyboard(`dl_go:tg:${urlId}`, `dl_go:vyt:${urlId}`, `dl_go:vv:${urlId}`) },
+    }).catch(() => {});
+    return;
+  }
+
+  // ─── Direct provider: pilih target setelah judul ────────────────────────────
+  if (data.startsWith('dl_go:')) {
+    if (!isAdmin(query.from.id)) {
+      return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
-    if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
-    if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
+    const parts = data.split(':');
+    const target = parts[1];
+    const urlId = parts.slice(2).join(':');
+    const url = resolveUrl(urlId) || decodeURIComponent(urlId);
+    if (!url) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+
+    const { detectedTitle, fileName } = await resolveProviderTitle(url);
+    await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+
+    if (target === 'tg') {
+      if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
+      if (isGdriveUrl(url)) {
+        let gdTitle = detectedTitle;
+        if (gdTitle) {
+          try {
+            const gdsCb = parseSamehadakuFilename((await resolveGdriveFile(url).catch(() => null))?.name || '');
+            if (gdsCb?.season) {
+              const hasS = new RegExp(`\\bS${gdsCb.season}\\b`).test(gdTitle);
+              const hasP = gdsCb.part ? new RegExp(`\\bP${gdsCb.part}\\b`).test(gdTitle) : true;
+              if (!hasS && !hasP) gdTitle = `${gdTitle} S${gdsCb.season}${gdsCb.part ? ` P${gdsCb.part}` : ''}`;
+              else if (hasS && !hasP) gdTitle = `${gdTitle} P${gdsCb.part}`;
+            }
+          } catch {}
+        }
+        return handleGdriveUrl(chatId, url, gdTitle || undefined);
+      }
+      if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
+      if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
+      if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
+    }
+
+    // target = vyt atau vv → Vidoy
+    const direct = await _downloadHandlers.resolveDirectUrl(url);
+    if (!direct) return bot.editMessageText('⚠️ Gagal resolve link file untuk upload.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+    const animeTitle = detectedTitle || fileName || 'Anime';
+    const animeEp = extractPartFromFilename(fileName || '') || 1;
+    const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+      target, title: animeTitle, ep: animeEp, sameInfo: null,
+      directUrl: direct.url, episodeUrl: url,
+    });
+    if (res && res.error) {
+      return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});
+    }
+    return;
   }
 
   // ─── Delete confirmation callbacks ───────────────────────────────────────────

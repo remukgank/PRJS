@@ -200,9 +200,11 @@ async function uploadToVidaraFolder(destPath, title) {
 async function actionAnimeEpisode(chatId, opts) {
   ensureCtx('actionAnimeEpisode');
   const { target, title, ep, sameInfo, directUrl, episodeUrl, silent } = opts || {};
+  // Target: tg=Telegram, vyt=Vidoy+Telegram, vv=Vidoy saja. Vidara tidak
+  // ditawarkan sebagai target (kecuali jalur Vidara terpisah).
   const needVidoy = target === 'vyt' || target === 'vv';
-  const needVidara = target === 'vt' || target === 'vv';
-  const needTg = target === 'tg' || target === 'vt' || target === 'vyt';
+  const needVidara = false;
+  const needTg = target === 'tg' || target === 'vyt';
   // Judul Vidoy (folder + nama file + mediaKey) memakai suffix season/part.
   const vidoyTitle = withSeasonSuffix(title, sameInfo && sameInfo.season, sameInfo && sameInfo.part);
   if (needVidoy && !V.isConfigured()) {
@@ -336,7 +338,7 @@ function replaceLinkLine(caption, link) {
 }
 
 function targetLabel(target) {
-  const map = { tg: 'Telegram', vt: 'Vidara + Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidara + Vidoy' };
+  const map = { tg: 'Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidoy' };
   return map[target] || String(target || '');
 }
 

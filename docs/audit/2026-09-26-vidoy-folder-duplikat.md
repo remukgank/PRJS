@@ -393,3 +393,29 @@ Helper baru `showEpisodePickerAfterDownload(chatId, msgId, animeUrl)` di `bot.js
   `sam_go`)
 - suite lain 0 fail (test-sam-picker-pagination 7, test-media-contract 10,
   test-btn-style 10, test-caption-html-escape 6)
+
+## L. OPSI TARGET UNTUK PROVIDER LANGSUNG + HAPUS VIDARA (26 Sep 2026)
+
+### Permintaan user
+Link provider langsung (gofile/pixeldrain/filedon/mega/gdrive) harus punya opsi
+target seperti alur Samehadaku. Vidara tidak perlu — cukup Vidoy.
+
+### Kondisi sebelumnya
+Provider langsung: kirim link → prompt judul → **langsung ke Telegram** (tanpa
+pilihan target). Opsi target (tg/vt/vyt/vv) cuma ada di alur Samehadaku.
+
+### Perubahan
+1. `animeTargetKeyboard` & `mainActionKeyboard`: 3 target — Telegram,
+   Vidoy+Telegram, Vidoy. Vidara dihapus dari opsi.
+2. `vv` diubah artinya: dari "Vidara+Vidoy" → **Vidoy saja**.
+   `vt` (Vidara+Telegram) dihapus dari semua validasi & keyboard.
+3. `handlers/vidoy.js`: `needVidara = false`, `needTg = tg || vyt`.
+4. Alur provider langsung: helper `resolveProviderTitle()` + preview dengan
+   `animeTargetKeyboard` setelah judul dipilih, lalu handler `dl_go:<target>`
+   menangani tg (provider handler langsung) dan vyt/vv (actionAnimeEpisode).
+5. `batchTargetLabel` & `targetLabel`: map 3 target.
+
+### Verifikasi
+- `node --check` CLEAN (bot.js, vidoy.js)
+- `test-vidoy-uploader` **142 pass** (+3), suite lain 0 fail
+- semua pemanggil `animeTargetKeyboard` 3 argumen, tidak ada sisa `vt`

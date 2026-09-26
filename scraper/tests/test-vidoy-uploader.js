@@ -139,11 +139,12 @@ t('menu drama: 9 baris, 5 opsi gabung-10 + sub-menu', () => {
     assert.ok(datas.includes(a), `callback harus ada: ${a}`);
   }
 });
-t('menu anime: 4 target (Telegram / Vidara+TG / Vidoy+TG / Vidara+Vidoy)', () => {
+t('menu anime: 3 target (Telegram / Vidoy+TG / Vidoy) — tanpa Vidara', () => {
   const { mainActionKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
   const kb = mainActionKeyboard('anime');
   const datas = kb.inline_keyboard.flat().map((b) => b.callback_data).filter(Boolean);
-  for (const a of ['act:a_tg', 'act:a_vt', 'act:a_vyt', 'act:a_vv']) assert.ok(datas.includes(a), a);
+  for (const a of ['act:a_tg', 'act:a_vyt', 'act:a_vv']) assert.ok(datas.includes(a), a);
+  assert.ok(!datas.includes('act:a_vt'), 'Vidara tidak ditawarkan lagi');
 });
 t('sub-menu per-episode drama: 3 opsi + kembali', () => {
   const { dramaLegacyKeyboard } = loadMenuFns()(makeRequire(true, true), require(path.join(__dirname, '..', 'lib', 'btn.js')));
@@ -476,6 +477,41 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 });
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
+
+// ── REGRESSION: alur provider langsung punya pilihan target (konsisten) ──────
+t('provider langsung: setelah judul, tampilkan pilihan target (bukan langsung TG)', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/async function resolveProviderTitle/.test(B)) throw new Error('resolveProviderTitle tidak ada');
+  const i = B.indexOf("if (data.startsWith('dl_title_use:')");
+  const body = B.slice(i, B.indexOf("if (data.startsWith('dl_go:')", i));
+  if (!/animeTargetKeyboard\(`dl_go:tg:\$\{urlId\}`, `dl_go:vyt:\$\{urlId\}`, `dl_go:vv:\$\{urlId\}`\)/.test(body)) {
+    throw new Error('provider langsung tidak menampilkan pilihan target');
+  }
+  if (/handleGofileUrl\(chatId, url, detectedTitle/.test(body)) {
+    throw new Error('provider langsung masih langsung ke Telegram tanpa tanya target');
+  }
+});
+
+t('provider langsung: handler dl_go menangani tg & Vidoy', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = B.indexOf("if (data.startsWith('dl_go:'))");
+  if (i < 0) throw new Error('handler dl_go tidak ada');
+  const body = B.slice(i, B.indexOf('\n  }\n', i));
+  if (!/target === 'tg'/.test(body)) throw new Error('tidak ada cabang target tg');
+  if (!/actionAnimeEpisode/.test(body)) throw new Error('tidak ada cabang Vidoy');
+  if (!/resolveDirectUrl/.test(body)) throw new Error('cabang Vidoy tidak resolve direct URL');
+  if (/vt/.test(body)) throw new Error('target vt (Vidara) tidak boleh ada');
+});
+
+t('target vv = Vidoy saja (bukan Vidara+Vidoy)', () => {
+  const V = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  const i = V.indexOf('const needVidoy');
+  const body = V.slice(i, V.indexOf('\n', i + 200));
+  if (!/needVidoy = target === 'vyt' \|\| target === 'vv'/.test(body)) throw new Error('vv harus tetap butuh Vidoy');
+  if (!/needVidara = false/.test(body)) throw new Error('Vidara tidak boleh dipakai lagi');
+  if (!/needTg = target === 'tg' \|\| target === 'vyt'/.test(body)) throw new Error('vv tidak butuh Telegram');
+});
+
 
 // ── REGRESSION: tampilan setelah single-episode konsisten di semua target ────
 t('setelah download single-episode, semua target tampilkan episode picker', () => {
@@ -1185,14 +1221,13 @@ t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () 
   if (/(^|[^.\w])targetLabel\(/.test(BOT)) throw new Error('masih memanggil targetLabel yang tidak di-import');
 });
 
-t('KRITIS: batchTargetLabel memetakan 4 target dengan benar', () => {
+t('KRITIS: batchTargetLabel memetakan 3 target dengan benar (tanpa Vidara)', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   const i = BOT.indexOf('function batchTargetLabel');
   const f = new Function(BOT.slice(i, BOT.indexOf('\n}', i) + 2) + '\nreturn batchTargetLabel;')();
   assert.strictEqual(f('tg'), 'Telegram');
-  assert.strictEqual(f('vt'), 'Vidara + Telegram');
   assert.strictEqual(f('vyt'), 'Vidoy + Telegram');
-  assert.strictEqual(f('vv'), 'Vidara + Vidoy');
+  assert.strictEqual(f('vv'), 'Vidoy');
   assert.ok(f(''), 'target kosong tidak boleh crash');
 });
 
@@ -1463,10 +1498,11 @@ t('KRITIS: "Download Semua" WAJIB menanyakan target dulu (tidak langsung ke Tele
     if (!BOT.includes(`data.startsWith('${prefix}_all:') || data.startsWith('${pick}:')`)) {
       throw new Error(`${prefix}_all tidak punya langkah pilih target`);
     }
-    for (const t of ['tg', 'vt', 'vyt', 'vv']) {
+    for (const t of ['tg', 'vyt', 'vv']) {
       if (!BOT.includes(`${pick}:${t}:\${bid}`)) throw new Error(`${prefix}: target ${t} tidak bisa dipilih`);
     }
-    if (!BOT.includes(`if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget))`)) {
+    if (BOT.includes(`${pick}:vt:`)) throw new Error(`${prefix}: target vt (Vidara) tidak boleh ditawarkan`);
+    if (!BOT.includes(`if (!['tg', 'vyt', 'vv'].includes(batchTarget))`)) {
       throw new Error(`${prefix}: target tidak divalidasi`);
     }
   }
