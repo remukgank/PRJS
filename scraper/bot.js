@@ -1032,6 +1032,23 @@ function batchTargetLabel(target) {
   return map[target] || String(target || 'Telegram');
 }
 
+// Peta status per episode dari vidoy_uploads: episode yang punya link Vidoy tapi
+// pointer Telegram-nya kosong = video-nya hilang di Telegram (user menghapusnya)
+// → hanya itu yang perlu dikirim ulang. Yang link + pointer-nya lengkap dilewati
+// total (tidak diunduh, tidak dikirim) supaya tidak sia-sia.
+async function animeDoneMap(mediaKey) {
+  const map = new Map();
+  const rows = await db.listVidoyUploads(String(mediaKey), 'anime').catch(() => []);
+  for (const r of rows || []) {
+    if (!r || r.part === null || r.part === undefined) continue;
+    map.set(Number(r.part), {
+      link: r.link || null,
+      hasTg: !!(r.tg_chat_id && r.tg_message_id),
+    });
+  }
+  return map;
+}
+
 // Parse callback tombol "Download Semua".
 //   "sam_all:2"        → { target: '',   urlId: '2' }  (langkah pilih target)
 //   "sam_allgo:vyt:2"  → { target: 'vyt', urlId: '2' }
@@ -3217,12 +3234,18 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Samehadaku batch: "Download Semua" — queue semua episode sekaligus ─────
-  if (data.startsWith('sam_all:') || data.startsWith('sam_allgo:')) {
+  if (data.startsWith('sam_all:') || data.startsWith('sam_allgo:') || data.startsWith('sam_fix:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const pickParsed = parseBatchPick(data, 'sam');
-    const isTargetPick = !!pickParsed.target;
+    // sam_fix → mode "lengkapi yang hilang": hanya episode yang sudah ada di
+    // Vidoy tapi pesan Telegram-nya hilang. Target dikunci 'tg' → tidak ada
+    // upload baru ke Vidoy (aturan: duplikat Vidoy dilarang keras).
+    const isFix = data.startsWith('sam_fix:');
+    const pickParsed = isFix
+      ? { target: 'tg', urlId: data.slice('sam_fix:'.length) }
+      : parseBatchPick(data, 'sam');
+    const isTargetPick = isFix || !!pickParsed.target;
     const rawUrl = pickParsed.urlId;
     const batchTarget = pickParsed.target;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
@@ -3241,6 +3264,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
             ...animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vt:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
+            [BTN.btn('⟳ Lengkapi yang hilang', `sam_fix:${bid}`, 'success')],
             [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}` }],
           ] },
         },
@@ -3301,12 +3325,31 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         await bot.editMessageText('⚠️ Tidak ada episode dengan server didukung (gofile/pixeldrain/filedon/gdriveplayer).', { chat_id: chatId, message_id: msgId }).catch(() => {});
         return;
       }
+      // Status per episode (Vidoy + Telegram) → default: yang sudah lengkap DILEWATI.
+      const doneMap = await animeDoneMap(title);
+      if (isFix) {
+        viable = viable.filter((e) => {
+          const st = doneMap.get(Number(e.ep));
+          return !!(st && st.link && !st.hasTg);
+        });
+        if (!viable.length) {
+          await bot.editMessageText('✅ Tidak ada episode yang perlu dilengkapi — semua pesan Telegram masih ada.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          return;
+        }
+        logger.info({ chatId, title, perlu: viable.length }, 'batch mode lengkapi');
+      }
       const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
       const vidoyLinks = [];
-      const rp = await new RichProgress(chatId, `📥 Batch ${title} — ${batchTargetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
-      let ok = 0, fail = 0;
+      const rp = await new RichProgress(chatId, `${isFix ? '⟳ Lengkapi' : '📥 Batch'} ${title} — ${batchTargetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      let ok = 0, fail = 0, skippedDone = 0;
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
+        const st = doneMap.get(Number(e.ep));
+        if (st && st.link && st.hasTg) {
+          rp.updateEpisode(key, 'skip', '⏭️ sudah lengkap');
+          skippedDone++;
+          continue;
+        }
         try {
           let servers, quality;
           if (scanned) {
@@ -3376,7 +3419,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const linkBlock = vidoyLinks.length
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${vidoyLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
-      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+      await bot.sendMessage(chatId, `✅ ${isFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${skippedDone ? ` · sudah lengkap ${skippedDone}` : ''}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
       logger.info({ chatId, title, target, ok, fail, skip }, 'sam_all batch selesai');
     } finally {
@@ -3667,12 +3710,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Kuronime batch: "Download Semua" ─────────────────────────────────────
-  if (data.startsWith('kur_all:') || data.startsWith('kur_allgo:')) {
+  if (data.startsWith('kur_all:') || data.startsWith('kur_allgo:') || data.startsWith('kur_fix:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const pickParsed = parseBatchPick(data, 'kur');
-    const isTargetPick = !!pickParsed.target;
+    const isFix = data.startsWith('kur_fix:');
+    const pickParsed = isFix
+      ? { target: 'tg', urlId: data.slice('kur_fix:'.length) }
+      : parseBatchPick(data, 'kur');
+    const isTargetPick = isFix || !!pickParsed.target;
     const rawUrl = pickParsed.urlId;
     const batchTarget = pickParsed.target;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
@@ -3690,6 +3736,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
             ...animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vt:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
+            [BTN.btn('⟳ Lengkapi yang hilang', `kur_fix:${bid}`, 'success')],
             [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}` }],
           ] },
         },
@@ -3753,9 +3800,22 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         await bot.editMessageText('⚠️ Tidak ada episode dengan server didukung (gofile/pixeldrain).', { chat_id: chatId, message_id: msgId }).catch(() => {});
         return;
       }
+      const doneMap = await animeDoneMap(title);
+      if (isFix) {
+        viable = viable.filter((e) => {
+          const st = doneMap.get(Number(e.ep));
+          return !!(st && st.link && !st.hasTg);
+        });
+        if (!viable.length) {
+          await bot.editMessageText('✅ Tidak ada episode yang perlu dilengkapi — semua pesan Telegram masih ada.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          return;
+        }
+        logger.info({ chatId, title, perlu: viable.length }, 'kur batch mode lengkapi');
+      }
       const rows2 = viable.map((e) => ({ ep: `Ep ${e.ep}` }));
       const kurLinks = [];
-      const rp = await new RichProgress(chatId, `Batch ${title}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      const rp = await new RichProgress(chatId, `${isFix ? '⟳ Lengkapi' : '📥 Batch'} ${title} — ${batchTargetLabel(target)}${skip ? ` (skip ${skip})` : ''}`, rows2, { window: SAM_BATCH_WINDOW }).start();
+      let skippedDone = 0;
       // Desain konsisten: semua baris langsung bawa detail server (quality) dari
       // hasil prescan, jadi baris antre tampil "⏳ Ep N — server (quality)" sama
       // seperti baris aktif (renderer hanya ganti icon).
@@ -3769,6 +3829,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       let ok = 0, fail = 0;
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
+        const st = doneMap.get(Number(e.ep));
+        if (st && st.link && st.hasTg) {
+          rp.updateEpisode(key, 'skip', '⏭️ sudah lengkap');
+          skippedDone++;
+          continue;
+        }
         try {
           let servers, quality;
           if (scanned) {
@@ -3835,9 +3901,9 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const linkBlock = kurLinks.length
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${kurLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
-      await bot.sendMessage(chatId, `✅ Batch <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${linkBlock}`,
+      await bot.sendMessage(chatId, `✅ ${isFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${skippedDone ? ` · sudah lengkap ${skippedDone}` : ''}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
-      logger.info({ chatId, title, target, ok, fail, skip }, 'kur_all batch selesai');
+      logger.info({ chatId, title, target, ok, fail, skip, skippedDone }, 'kur_all batch selesai');
     } finally {
       kurAllBusy.delete(lockKey);
     }

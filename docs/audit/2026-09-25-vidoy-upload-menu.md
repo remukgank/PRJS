@@ -435,3 +435,38 @@ lalu memastikan **tidak ada bare call fungsi yang tak terdefinisi** di sana
 - `test-vidoy-uploader` 96 pass, `test-btn-style` 10, `test-anime-topic-router` 18,
   `test-sam-picker-pagination` exit 0 — 0 fail.
 - PM2 restart (01:04:29), `Bot running`.
+
+## 16. Batch anime: lewati yang sudah lengkap + mode "Lengkapi yang hilang" (26 Sep 2026)
+
+### Keputusan user
+- **Vidoy: duplikat dilarang keras.** (Ternyata sudah dijamin `uploadSingle()` yang
+  mengecek `vidoy_uploads` sebelum upload → `skipped: true`.)
+- **Telegram: tidak masalah** kalau dikirim ulang — tapi diverifikasi bahwa
+  Telegram **tidak menimpa**, setiap `sendVideo` membuat pesan baru. Jadi
+  "kirim ulang semua" hanya buang-buangan bandwidth (219 episode diunduh ulang).
+
+### Perubahan
+1. **Default: episode yang sudah lengkap DILEWATI.**
+   `animeDoneMap(title)` membaca `vidoy_uploads` sekali, lalu di dalam loop:
+   `link && hasTg` → `⏭️ sudah lengkap` (tidak diunduh, tidak dikirim).
+   Angka `skippedDone` dilaporkan di pesan akhir.
+2. **Tombol baru `⟳ Lengkapi yang hilang`** (hijau) di menu target, untuk
+   samehadaku & kuronime.
+   - Hanya menyaring episode `link && !hasTg` → yang pesan Telegram-nya hilang
+     (pointer sudah dibersihkan otomatis saat pesan dihapus user).
+   - Target dikunci `tg` → **tidak ada upload baru ke Vidoy** (aturan duplikat).
+   - Kalau tidak ada yang perlu dilengkapi → pesan
+     "✅ Tidak ada episode yang perlu dilengkapi — semua pesan Telegram masih ada."
+
+### Verifikasi
+- Smoke test logika dengan DB mock (Ep 1 lengkap, Ep 2–3 link tanpa pointer,
+  Ep 4–5 baru): `dilewati [1]`, `lengkapi [2,3]`, `normal [5]` ✓
+- `test-vidoy-uploader` 100 pass (+4 tes: skip default, animeDoneMap,
+  mode lengkapi, dan **uploadSingle tetap mencegah duplikat Vidoy**),
+  `test-btn-style` 10, `test-anime-topic-router` 18, `test-sam-picker-pagination`
+  exit 0 — 0 fail.
+
+### Catatan
+Job 220 episode Naruto masih berjalan saat perubahan ini dibuat; perubahan baru
+aktif setelah restart. Tidak di-restart agar job tidak terputus — restart
+dilakukan setelah job selesai.

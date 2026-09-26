@@ -477,6 +477,76 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: batch anime skip episode yang sudah lengkap + mode lengkapi ──
+t('KRITIS: episode sudah lengkap (Vidoy + Telegram) DILEWATI, tidak diunduh ulang', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  // harus ada pemanggilan animeDoneMap di kedua runner
+  const calls = (BOT.match(/await animeDoneMap\(/g) || []).length;
+  if (calls < 2) throw new Error('animeDoneMap harus dipakai di 2 runner, ditemukan: ' + calls);
+  if (!/function animeDoneMap/.test(BOT)) throw new Error('animeDoneMap tidak ada');
+  // kondisi skip: link + hasTg
+  const cond = (BOT.match(/if \(st && st\.link && st\.hasTg\)/g) || []).length;
+  if (cond < 2) throw new Error('kondisi skip "sudah lengkap" harus di 2 runner: ' + cond);
+  if (!/⏭️ sudah lengkap/.test(BOT)) throw new Error('tanda status "sudah lengkap" tidak ada');
+  if (!/let ok = 0, fail = 0, skippedDone = 0;/.test(BOT)) throw new Error('skippedDone tidak dihitung');
+});
+
+t('KRITIS: animeDoneMap menandai link+pointer sebagai "sudah ada"', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('async function animeDoneMap');
+  const code = BOT.slice(i, BOT.indexOf('\n}', i) + 2);
+  const f = new Function('db', code + '\nreturn animeDoneMap;')({
+    listVidoyUploads: async () => ([
+      { part: 1, link: 'https://x/e/a', tg_chat_id: -100, tg_message_id: 5 },
+      { part: 2, link: 'https://x/e/b', tg_chat_id: null, tg_message_id: null },
+      { part: 3, link: null, tg_chat_id: -100, tg_message_id: 7 },
+      { part: 4, link: 'https://x/e/d', tg_chat_id: -100, tg_message_id: null },
+    ]),
+  });
+  return f('Naruto Kecil').then((map) => {
+    assert.strictEqual(map.get(1).link, 'https://x/e/a');
+    assert.strictEqual(map.get(1).hasTg, true, 'Ep 1 link+pointer → sudah lengkap');
+    assert.strictEqual(map.get(2).hasTg, false, 'Ep 2 link tanpa pointer → perlu dikirim');
+    assert.strictEqual(map.get(3).hasTg, true);
+    assert.strictEqual(map.get(3).link, null, 'Ep 3 tanpa link → bukan duplikat');
+    assert.strictEqual(map.get(4).hasTg, false, 'pointer separuh (chat ada, msg null) → belum lengkap');
+    assert.strictEqual(map.size, 4);
+  });
+});
+
+t('KRITIS: mode "Lengkapi yang hilang" hanya menyaring episode tanpa pesan Telegram', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  for (const pref of ['sam', 'kur']) {
+    if (!BOT.includes(`${pref}_fix:`)) throw new Error(`${pref}_fix tidak ada`);
+    if (!BOT.includes(`BTN.btn('⟳ Lengkapi yang hilang', \`${pref}_fix:\${bid}\``)) {
+      throw new Error(`tombol "Lengkapi yang hilang" untuk ${pref} tidak ada`);
+    }
+    // target dikunci ke Telegram supaya tidak ada upload baru ke Vidoy
+    const def = BOT.indexOf(`const isFix = data.startsWith('${pref}_fix:');`);
+    if (def < 0) throw new Error(`isFix untuk ${pref}_fix tidak ada`);
+    const seg = BOT.slice(def, def + 260);
+    if (!/target: 'tg'/.test(seg)) throw new Error(`${pref}_fix harus memakai target 'tg' (tanpa upload Vidoy baru)`);
+    if (!seg.includes("data.slice('" + pref + "_fix:'.length)")) {
+      throw new Error(`${pref}_fix tidak memotong urlId dengan benar`);
+    }
+  }
+  // saringan mode lengkapi
+  if ((BOT.match(/st && st\.link && !st\.hasTg/g) || []).length < 2) {
+    throw new Error('penyaringan mode lengkapi harus ada di 2 runner');
+  }
+  if (!/Tidak ada episode yang perlu dilengkapi/.test(BOT)) throw new Error('pesan "tidak ada yang perlu dilengkapi" tidak ada');
+});
+
+t('KRITIS: uploadSingle tetap mencegah duplikat Vidoy (aturan: dilarang keras)', () => {
+  const src = require('fs').readFileSync(require.resolve('../services/vidoyService'), 'utf8');
+  const i = src.indexOf('async function uploadSingle');
+  const body = src.slice(i, i + 900);
+  if (!/listVidoyUploads/.test(body)) throw new Error('uploadSingle tidak lagi mengecek record yang ada');
+  if (!/skipped: true/.test(body)) throw new Error('uploadSingle tidak lagi menandai skipped');
+  if (!/const existing = \(await db\.listVidoyUploads/.test(body)) throw new Error('pengecekan existing hilang');
+});
+
+
 // ── REGRESSION: fungsi yang dipanggil harus terdefinisi (bug ReferenceError) ──
 t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
