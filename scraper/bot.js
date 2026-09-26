@@ -432,6 +432,8 @@ _vidoyHandlers.initVidoy({
   config: { MAX_UPLOAD_MB, PART_SEND_DELAY_MS, RF_GROUP_ID, RF_GROUP_ENABLED },
   vidaraBusy,
   get sendVideo() { return sendVideo; },
+  // Kirim anime ke topic Anime (bukan General) + paksa supports_streaming.
+  get sendAnimeMedia() { return sendAnimeMedia; },
   Progress, RichProgress,
   get sendToTopicVideo() { return sendToTopicVideo; },
   isAdmin,

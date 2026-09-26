@@ -477,6 +477,37 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: anime harus masuk topic Anime, bukan General ──
+t('KRITIS: kirim anime lewat sendAnimeMedia (topic Anime, bukan General)', () => {
+  const src = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  const i = src.indexOf('async function actionAnimeEpisode');
+  const body = src.slice(i, src.indexOf('\n}\n', i));
+  if (!/sendAnimeMedia/.test(body)) throw new Error('tidak memakai sendAnimeMedia → video masuk General');
+  if (!/typeof _ctx\.sendAnimeMedia === 'function'\s*\?/.test(body)) throw new Error('tidak ada fallback ke sendVideo');
+  // fallback tetap harus mengaktifkan streaming
+  const fb = body.slice(body.indexOf(': await _ctx.sendVideo'));
+  if (!/supports_streaming: true/.test(body)) throw new Error('supports_streaming hilang');
+});
+
+t('KRITIS: initVidoy menyuntikkan sendAnimeMedia', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/get sendAnimeMedia\(\) \{ return sendAnimeMedia; \}/.test(BOT)) {
+    throw new Error('sendAnimeMedia tidak di-inject ke initVidoy');
+  }
+  // harusharus menuju:  sender yang memakai resolveAnimeThread (topic anime)
+  if (!/buildAnimeSender\(\{ sendVideo, sendAudio, sendDocument \}, resolveAnimeThread\)/.test(BOT)) {
+    throw new Error('buildAnimeSender tidak memakai resolveAnimeThread');
+  }
+});
+
+t('animeTopic: sender memaksa supports_streaming & menambah message_thread_id', () => {
+  const src = require('fs').readFileSync(require.resolve('../lib/animeTopic'), 'utf8');
+  if (!/message_thread_id: threadId/.test(src)) throw new Error('tidak ada message_thread_id');
+  if (!/supports_streaming: true/.test(src)) throw new Error('tidak memaksa supports_streaming');
+  if (!/File anime terkirim ke topic grup/.test(src)) throw new Error('log topic hilang');
+});
+
+
 // ── REGRESSION: batch anime skip episode yang sudah lengkap + mode lengkapi ──
 t('KRITIS: episode sudah lengkap (Vidoy + Telegram) DILEWATI, tidak diunduh ulang', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
@@ -1017,9 +1048,13 @@ t('kode: drama & anime WAJIB supports_streaming (video tidak stream = bug)', () 
   if (!/const mediaOpts = \{[\s\S]{0,200}supports_streaming: true/.test(SRC)) {
     throw new Error('mediaOpts drama tidak punya supports_streaming');
   }
-  // jalur anime: opsi inline
-  if (!/sendVideo\(chatId, destPath, \{[\s\S]{0,200}supports_streaming: true/.test(SRC)) {
-    throw new Error('kirim anime tidak punya supports_streaming');
+  // jalur anime: sekarang lewat sendAnimeMedia dengan mediaOpts yang berisi
+  // supports_streaming (sender juga memaksa flagnya)
+  if (!/const mediaOpts = \{[\s\S]{0,200}supports_streaming: true/.test(SRC)) {
+    throw new Error('mediaOpts anime tidak punya supports_streaming');
+  }
+  if (!/sendAnimeMedia\(chatId, destPath, mediaOpts\)/.test(SRC)) {
+    throw new Error('kirim anime tidak lewat sendAnimeMedia (topic Anime)');
   }
   // tidak boleh ada call site yang mengirim hanya caption+parse_mode
   if (/sendVideo\([^)]*\{ caption, parse_mode: 'HTML' \}\)/.test(SRC)) {

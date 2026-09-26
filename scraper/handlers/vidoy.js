@@ -261,12 +261,18 @@ async function actionAnimeEpisode(chatId, opts) {
         link: out.vidoy && out.vidoy.link,
       });
       const vinfo = await getVideoInfo(destPath).catch(() => ({}));
-      const sent = await _ctx.sendVideo(chatId, destPath, {
+      const mediaOpts = {
         caption, parse_mode: 'HTML', supports_streaming: true,
         ...(vinfo.duration && { duration: vinfo.duration }),
         ...(vinfo.width && { width: vinfo.width }),
         ...(vinfo.height && { height: vinfo.height }),
-      });
+      };
+      // WAJIB lewat sendAnimeMedia: ia mengarahkan ke topic Anime (bukan General)
+      // sekaligus memaksa supports_streaming. Tanpa ini, video anime masuk topic
+      // General karena sendVideo polos tidak membawa message_thread_id.
+      const sent = typeof _ctx.sendAnimeMedia === 'function'
+        ? await _ctx.sendAnimeMedia(chatId, destPath, mediaOpts)
+        : await _ctx.sendVideo(chatId, destPath, mediaOpts);
       out.tg = true;
       const msgId = sent && (sent.message_id || (sent.result && sent.result.message_id));
       if (msgId && out.vidoy) {

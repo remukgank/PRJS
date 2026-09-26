@@ -470,3 +470,34 @@ lalu memastikan **tidak ada bare call fungsi yang tak terdefinisi** di sana
 Job 220 episode Naruto masih berjalan saat perubahan ini dibuat; perubahan baru
 aktif setelah restart. Tidak di-restart agar job tidak terputus — restart
 dilakukan setelah job selesai.
+
+## 17. Video anime masuk topic General, bukan topic Anime (26 Sep 2026)
+
+### Gejala
+User: "kok masuk ke topic 1 (general) kok bukan topic anime kenapa?" — semua
+episode Naruto dari batch `Vidoy + TG` muncul di topic **General**.
+
+### Akar masalah
+Jalur anime yang lama memakai `buildAnimeSender()`
+(`lib/animeTopic.js`) yang:
+1. me-resolve thread topic anime lewat `resolveAnimeThread()` →
+   `getOrCreateTopic('anime')` (otomatis buat/pakai ulang, tanpa hardcode ID), lalu
+2. menambah `message_thread_id` ke opsi kirim, dan
+3. memaksa `supports_streaming: true`.
+
+`actionAnimeEpisode` (jalur upload Vidoy anime) memanggil `_ctx.sendVideo` polos
+→ **tanpa `message_thread_id`** → Telegram menaruhnya di topic General.OOK juga
+tidak memakai sender anime sama sekali.
+
+### Perbaikan
+- `initVidoy` kini menyuntikkan `sendAnimeMedia` (getter, mengikuti pola
+  `sendVideo`/`sendToTopicVideo` yang sudah ada).
+- `actionAnimeEpisode` mengirim lewat `sendAnimeMedia(chatId, destPath, mediaOpts)`
+  dengan fallback ke `sendVideo` bila sender tidak tersedia. `mediaOpts` tetap
+  membawa `supports_streaming` + durasi/dimensi; sender juga memaksa flag tersebut.
+
+### Verifikasi
+- `test-vidoy-uploader` 103 pass (+3 tes: anime wajib lewat sendAnimeMedia,
+  initVidoy menyuntikkannya, dan kontrak `lib/animeTopic`),
+  `test-anime-topic-router` 18, `test-btn-style` 10 — 0 fail.
+- Restart dilakukan setelah job batch selesai agar tidak terputus.
