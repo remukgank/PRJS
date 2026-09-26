@@ -477,3 +477,64 @@ memutar .ts inline → layar putih.
 Circular dependency `downloader ↔ vidaraService` diputus dengan lazy require.
 
 `test-vidoy-uploader` **147 pass** (+3), suite lain 0 fail.
+
+## O. AUDIT MENDALAM SEMUA PROVIDER (27 Sep 2026) — jalur yang "dulu work"
+
+Permintaan user: trace semua jalur yang bekerja sebelum penambahan Vidoy, apakah
+masih jalan. Metode: **resolve → download → validasi** dengan URL NYATA dari
+samehadaku, bukan asumsi.
+
+### Baseline
+`git diff 7242a89..HEAD` → file provider (gofile/pixeldrain/filedon/gdrive/
+gdriveplayer/mega/ucdrive) **TIDAK BERUBAH**. Yang berubah: handlers/download.js,
+services/vidaraService.js, downloader.js, providers/samehadaku.js, bot.js.
+
+### Hasil uji end-to-end per provider
+| Provider | resolveDirectUrl | Hasil download | Vonis |
+|---|---|---|---|
+| gofile | OK | 65536 B, `ftypisom` → MP4 valid | ✅ JALAN |
+| filedon | OK | 65536 B, `ftypiso2` → MP4 valid | ✅ JALAN |
+| pixeldrain | OK | 172 B JSON `unavailable_for_legal_reasons` | ⚠️ FILE DI-TAKEDOWN (bukan bug) |
+| gdriveplayer | OK | 63 MB @ 886 KB/s, `.ts` | ✅ JALAN (lambat, inherent) |
+| reupload | — | — | ❌ TIDAK DIDUKUNG |
+| krakenfiles | — | — | ❌ TIDAK DIDUKUNG (Cloudflare Turnstile) |
+| mediafire | — | — | ❌ TIDAK DIDUKUNG |
+
+**Tidak ada jalur lama yang rusak.** Semua provider yang didukung masih resolve +
+download dengan benar.
+
+### Temuan penting (3)
+
+**1. Kecepatan itu batas SERVER, bukan kode.**
+Dugaan awal saya: jalur Vidoy lebih lambat karena `downloadTo` cuma 1 koneksi
+vs aria2c 4 koneksi. **TERBUKTI SALAH** setelah diukur:
+| Cara | Kecepatan |
+|---|---|
+| `downloadTo` 1 koneksi (jalur Vidoy) | **886 KB/s** |
+| aria2c `-x4` (jalur Telegram) | 441 KB/s |
+Jadi jalur Vidoy justru lebih cepat. 3 menit untuk file 63 MB = download ~70 dtk +
+remux .ts→.mp4 + re-encode bila H.265. **Bukan bug.**
+
+**2. Risiko laten: `resolveDirectUrl` membuang header dari provider.**
+`resolveGdrivePlayerFile()` sengaja menangkap cookie ("diperlukan untuk authorize
+download") dan jalur Telegram mengirimkannya. Tapi `resolveDirectUrl` hanya
+mengembalikan `{ url, name }` — cookie/header **dibuang**. Saat ini cookie
+bernilai kosong sehingga tidak terpengaruh, tapi kalau gdriveplayer mengaktifkan
+cookie lagi, jalur Vidoy akan gagal diam-diam.
+
+**3. 3 provider tidak didukung sama sekali.**
+`SERVER_PRIORITY = ['gofile','filedon','pixeldrain','gdriveplayer']`.
+Episode yang HANYA punya reupload/krakenfiles/mediafire akan gagal total.
+Episode Naruto Shippuden Ep 1 hanya punya `reupload` + `gdriveplayer` — jadi
+hampir gagal, hanya tertolong gdriveplayer.
+
+### Perubahan `parseSamehadakuAnime/Episode` — diverifikasi AMAN
+Dulu `title` sudah berisi suffix season (`"Tensei ... Ken S4 P2"`); sekarang
+season dikembalikan terpisah dan **pemanggil wajib menambahkannya**. Dicek
+perilaku nyata:
+| | SEBELUM | SEKARANG |
+|---|---|---|
+| `parseSamehadakuAnime` | `title="...Ken S4 P2"` | `title="...Ken"`, season=4, part=2 |
+Keempat pemanggil (`samehadakuAnimeSlug:1936`, `buildSamehadakuEpisodePicker:1947`,
+`sam_all:3386`, `sam_go:3655`) **semuanya sudah menambahkan season** → hasil
+slug identik. Tidak ada regresi.
