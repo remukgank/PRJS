@@ -477,6 +477,24 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+t('KRITIS: label link di panel & caption pakai domain ASLI (bukan "vidoy.asia" hardcode)', () => {
+  const admin = require('fs').readFileSync(require.resolve('../handlers/admin'), 'utf8');
+  if (/vidoy\.asia\/\$\{/.test(admin)) throw new Error('admin.js masih mempatok domain vidoy.asia');
+  const f = new Function(admin.match(/function shortLink[\s\S]*?\n}/)[0] + '; return shortLink;')();
+  for (const [url, expect] of [
+    ['https://vski.cc/e/abc', 'vski.cc/e/abc'],
+    ['https://vidkud.com/d/xyz', 'vidkud.com/d/xyz'],
+    ['https://vidmonstr.com/e/q1', 'vidmonstr.com/e/q1'],
+  ]) {
+    if (f(url) !== expect) throw new Error('label salah untuk ' + url + ': ' + f(url) + ' (harus ' + expect + ')');
+  }
+  if (f('https://vski.cc/e/abc').includes('vidoy.asia')) throw new Error('masih vidoy.asia');
+  // caption harus konsisten dengan panel
+  const cap = vidoyHandlers.buildCaption({ title: 'X', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/abc' });
+  if (!cap.includes('>vski.cc/e/abc</a>')) throw new Error('caption tidak konsisten dengan panel: ' + cap);
+});
+
+
 // ── REGRESSION: interpretasi hasil edit caption ──
 t('KRITIS: "message is not modified" dianggap SUKSES (bukan gagal)', () => {
   assert.strictEqual(require('../handlers/admin').isNotModified('ETELEGRAM: 400 Bad Request: message is not modified: specified new message content and reply markup are exactly the same'), true);

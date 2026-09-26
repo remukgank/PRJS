@@ -174,9 +174,16 @@ function replaceLinkLine(caption, link) {
   return lines.join('\n');
 }
 
+// Label memakai domain ASLI link (bukan domain hardcode) supaya yang tampil di
+// panel sama persis dengan URL tujuan dan otomatis ikut saat domain Vidoy
+// berubah. dulu dipatok "vidoy.asia" padahal host aslinya vski.cc.
 function shortLink(link) {
-  const m = String(link || '').match(/https?:\/\/[^/]+\/(e|d)\/([A-Za-z0-9_-]+)/);
-  return m ? `vidoy.asia/${m[1]}/${m[2]}` : String(link || '');
+  const raw = String(link || '').trim();
+  if (!raw) return raw;
+  const m = raw.match(/^https?:\/\/([^/\s]+)(\/(?:e|d)\/[A-Za-z0-9_-]+)/);
+  if (m) return `${m[1]}${m[2]}`;
+  const loose = raw.match(/([^/\s]+\.(?:cc|com|tv|asia|net|org|co|xyz|top|site|vip|link|me|io|app|dev|cloud|online|live|world|pro|fun|shop))\/(e|d)\/([A-Za-z0-9_-]+)/i);
+  return loose ? `${loose[1]}/${loose[2]}/${loose[3]}` : raw;
 }
 
 async function handleVidoyLinks({ chatId, msgId, query }) {

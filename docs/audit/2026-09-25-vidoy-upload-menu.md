@@ -292,3 +292,31 @@ Total 58 warning, padahal caption sudah benar semua.
 - `test-vidoy-uploader` 87 pass, `test-btn-style` 10, `test-html-safety` 22,
   `test-caption-html-escape` 6, `test-libmenu-grid` 14,
   `test-telegram-callback-retry` / `transient-retry` (9/9) / `apiPost` (4/4) — 0 fail.
+
+## 12. Panel Vidoy Links masih pakai domain hardcode (26 Sep 2026, 00:52)
+
+### Gejala
+Isi `🗂 Vidoy Links` menampilkan `vidoy.asia/e/…` padahal URL sebenarnya
+`https://vski.cc/e/…`. User: "kok nggak berubah cok link e".
+
+### Akar masalah
+`shortLink()` di `handlers/admin.js` (fungsi terpisah dari `shortLinkLabel` di
+`handlers/vidoy.js`) masih mempatok domain `vidoy.asia`. Waktu caption diperbaiki
+.awal, hanya fungsi di `handlers/vidoy.js` yang diubah — bagian panel terlewat.
+
+### Perbaikan
+`shortLink()` di `handlers/admin.js` sekarang memakai domain asli dari URL, sama
+seperti `shortLinkLabel()`. Konsisten antara panel dan caption.
+
+### Catatan: kenapa link tidak berubah saat "Perbarui Semua"
+Semua 7 record `link_alive = true` (🟢) dan link yang dikembalikan dashboard
+**identik** dengan yang tersimpan, jadi memang tidak ada yang perlu diupdate —
+itu perilaku yang benar. Namun `linkAlive()` hanya mengecek status HTTP, dan
+`vski.cc/e/<id>` ternyata hanya halaman "Validating browser…" yang
+mengarahkan lewat JS ke `vidmonstr.com/e/<id>`. Artinya pengecekan hidup saat
+ini **terlalu longgar**: halaman validasi selalu 200 walaupun file-nya sudah
+hilang. perbaikan lanjutan (belum dikerjakan): follow redirect + cek apakah
+halaman tujuan benar-benar memuat player.
+
+### Verifikasi
+- 4 varian link → label domain benar; `test-vidoy-uploader` 88 pass.
