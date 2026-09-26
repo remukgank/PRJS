@@ -1044,6 +1044,38 @@ function batchTargetLabel(target) {
 // tapi dikirim lewat jalur Vidoy tetap terlihat "belum ada" di menu.
 //   lib = ada di library · tg = ada di Telegram (pointer pesan tersimpan)
 // vidoyTitle = kunci vidoy_uploads (judul), slug = kunci library (media_parts).
+// Label + warna tombol episode dari status. Satu warna per tombol
+// (maks 1 primary per keyboard; di sini dipakai success/primary/danger).
+// Prioritas: library (hijau) > Telegram (biru) > Vidoy saja (merah).
+// Ringkasan status untuk caption picker:
+//   📨 sudah terkirim (punya pesan Telegram) → dihitung selesai
+//   🗄 sudah ada di Vidoy / library tapi BELUM dikirim → masih perlu dikirim
+//   ⬜ belum ada di mana pun
+function statusBreakdown(statusMap, total) {
+  let tg = 0, perluKirim = 0, belum = 0;
+  const seen = new Set();
+  for (const [ep, st] of statusMap) {
+    seen.add(ep);
+    if (st.tg) { tg++; continue; }
+    if (st.link || st.lib) { perluKirim++; continue; }
+  }
+  belum = Math.max(0, total - seen.size);
+  const parts = [];
+  if (tg) parts.push(`\ud83d\udce8 ${tg} di Telegram`);
+  if (perluKirim) parts.push(`\ud83d\uddc4 ${perluKirim} perlu dikirim`);
+  parts.push(`⬜ ${belum} belum ada`);
+  return parts.join(' · ');
+}
+
+function episodeButton(st, ep, fallbackDone) {
+  // "SUDAH ADA" = punya PESAN di Telegram. Library atau ada di Vidoy saja
+  // belum cukup — videonya belum ada di topic, jadi masih perlu dikirim (merah).
+  if (st && st.tg) return { text: `\ud83d\udce8 ${ep}`, style: 'primary' };
+  if (st && (st.link || st.lib)) return { text: `\ud83d\uddc4 ${ep}`, style: 'danger' };
+  if (fallbackDone) return { text: `\u2705 ${ep}`, style: 'success' };
+  return { text: `Ep ${ep}`, style: null };
+}
+
 async function episodeStatusMap(slug, vidoyTitle) {
   const map = new Map();
   const set = (part, patch) => {
@@ -1872,7 +1904,9 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     const slug = samehadakuAnimeSlug(animeUrl);
     if (slug) {
       statusMap = await episodeStatusMap(slug, title);
-      for (const [ep, st] of statusMap) if (st.lib || st.tg) done.add(ep);
+      // "sudah ada" = punya pesan Telegram. Episode yang hanya ada di Vidoy atau
+      // library TIDAK dihitung selesai (videonya belum ada di topic).
+      for (const [ep, st] of statusMap) if (st.tg) done.add(ep);
     }
   } catch (err) {
     logger.warn({ err: err.message }, 'episode picker done-state gagal, tampil tanpa centang');
@@ -1886,11 +1920,8 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-      const st = statusMap.get(Number(e.ep));
-      const label = st
-        ? (st.lib ? `✅ ${e.ep}` : (st.tg ? `📨 ${e.ep}` : `Ep ${e.ep}`))
-        : (done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`);
-      return { text: label, callback_data: `sam_ep:${epId}` };
+      const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
+      return { text: b.text, callback_data: `sam_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
     },
   });
   const { first, last, doneCount } = meta;
@@ -1899,10 +1930,7 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     const filled = Math.round((doneCount / total) * 10);
     const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
     const pct = Math.round((doneCount / total) * 100);
-    let tgOnly = 0;
-    for (const [, st] of statusMap) if (st.tg && !st.lib) tgOnly++;
-    const tgNote = tgOnly > 0 ? ` · 📨 ${tgOnly} di Telegram` : '';
-    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah ada${tgNote}\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ${statusBreakdown(statusMap, total)}\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   } else {
     caption = `📺 <b>${title}</b>\n🎞 ${total} episode — episode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   }
@@ -1936,7 +1964,7 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     const slug = kuronimeAnimeSlug(animeUrl);
     if (slug) {
       statusMap = await episodeStatusMap(slug, title);
-      for (const [ep, st] of statusMap) if (st.lib || st.tg) done.add(ep);
+      for (const [ep, st] of statusMap) if (st.tg) done.add(ep);
     }
   } catch (err) {
     logger.warn({ err: err.message }, 'kuronime picker done-state gagal, tampil tanpa centang');
@@ -1951,11 +1979,8 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       kuronimeEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
-      const st = statusMap.get(Number(e.ep));
-      const label = st
-        ? (st.lib ? `✅ ${e.ep}` : (st.tg ? `📨 ${e.ep}` : `Ep ${e.ep}`))
-        : (done.has(Number(e.ep)) ? `✅ ${e.ep}` : `Ep ${e.ep}`);
-      return { text: label, callback_data: `kur_ep:${epId}` };
+      const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
+      return { text: b.text, callback_data: `kur_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
     },
   });
   const { first, last, doneCount } = meta;
@@ -1964,7 +1989,7 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     const filled = Math.round((doneCount / total) * 10);
     const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
     const pct = Math.round((doneCount / total) * 100);
-    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ✅ ${doneCount} sudah di library\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ${statusBreakdown(statusMap, total)}\n${bar} ${pct}%\nEpisode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   } else {
     caption = `📺 <b>${title}</b>\n🎞 ${total} episode — episode ${first}–${last}${meta.totalPages > 1 ? ` (hal. ${meta.page + 1}/${meta.totalPages})` : ''}`;
   }

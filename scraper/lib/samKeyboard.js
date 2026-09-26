@@ -26,7 +26,7 @@ function buildPicker(eps, { urlId, page = 0, pageSize = 20, done = new Set(), mk
   // mati (disabled) — bukan disembunyikan, supaya user paham statusnya.
   const allDone = missing <= 0;
   keyboard.push([allDone
-    ? BTN.btnOff(`✅ Semua episode sudah di library`)
+    ? BTN.btnOff(`✅ Semua episode sudah ada`)   // bukan "di library": done = library ∪ Telegram
     : BTN.btn(`⬇️ Download Semua (${missing})`, `${prefix}_all:${urlId}`, 'primary')]);
   for (let i = 0; i < slice.length; i += 5) {
     keyboard.push(slice.slice(i, i + 5).map((e) => mkEp(e)));

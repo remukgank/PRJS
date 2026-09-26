@@ -477,6 +477,71 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: warna tombol episode = status (bukan 2 simbol) ─────────────
+t('episodeButton: warna sesuai status, hanya satu per tombol', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const grab = (name) => { const i = BOT.indexOf('function ' + name); let d = 0, j = BOT.indexOf('{', i);
+    for (let k = j; k < BOT.length; k++) { if (BOT[k] === '{') d++; else if (BOT[k] === '}') { d--; if (!d) return BOT.slice(i, k + 1); } } };
+  const f = new Function(grab('episodeButton') + '\nreturn episodeButton;')();
+  // library + Telegram → biru (sudah terkirim), bukan hijau
+  const lib = f({ lib: true, tg: true, link: 'l' }, 5, false);
+  assert.strictEqual(lib.style, 'primary', 'sudah terkirim harus biru');
+
+  // library SAJA → merah (perlu kirim), tidak hijau
+  const libOnly = f({ lib: true, tg: false, link: null }, 15, false);
+  assert.strictEqual(libOnly.style, 'danger', 'hanya library harus merah (belum ada pesannya)');
+  const tg = f({ lib: false, tg: true, link: 'l' }, 6, false);
+  assert.strictEqual(tg.style, 'primary', 'Telegram harus biru');
+  const vo = f({ lib: false, tg: false, link: 'l' }, 7, false);
+  assert.strictEqual(vo.style, 'danger', 'Vidoy saja harus merah');
+  const none = f(null, 8, false);
+  assert.strictEqual(none.style, null, 'belum ada tanpa warna');
+  assert.ok(none.text.startsWith('Ep '), 'label polos: ' + none.text);
+  const fb = f(null, 9, true);
+  assert.strictEqual(fb.style, 'success', 'fallback done harus hijau');
+  for (const o of [lib, tg, vo, none, fb]) {
+    assert.ok(['primary', 'success', 'danger', null].includes(o.style), 'style tak valid: ' + o.style);
+  }
+  // satu simbol saja per tombol: tidak boleh ada dua emoji sekaligus
+  const emojiCount = (t) => (t.match(/[\u2705\u{1F4E8}\u{1F5C4}]/gu) || []).length;
+  for (const o of [lib, tg, vo, none, fb]) {
+    if (emojiCount(o.text) > 1) throw new Error('lebih dari satu simbol: ' + o.text);
+  }
+});
+
+t('statusBreakdown: menghitung library / Telegram / Vidoy / belum', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('function statusBreakdown');
+  let d = 0, j = BOT.indexOf('{', i);
+  for (let k = j; k < BOT.length; k++) { if (BOT[k] === '{') d++; else if (BOT[k] === '}') { d--; if (!d) { j = k; break; } } }
+  const f = new Function(BOT.slice(i, j + 1) + '\nreturn statusBreakdown;')();
+  const m = new Map([
+    [1, { lib: true, tg: true, link: 'l' }],
+    [2, { lib: false, tg: true, link: 'l' }],
+    [3, { lib: false, tg: false, link: 'l' }],
+    [4, { lib: true, tg: false, link: null }],
+  ]);
+  const out = f(m, 10);
+  if (!/📨 2 di Telegram/.test(out)) throw new Error('telegram: ' + out);
+  if (!/🗄 2 perlu dikirim/.test(out)) throw new Error('perlu dikirim: ' + out);
+  if (!/⬜ 6 belum ada/.test(out)) throw new Error('belum ada: ' + out);
+  if (/di Vidoy|di library/.test(out)) throw new Error('kategori lama tidak boleh muncul: ' + out);
+});
+
+t('kedua picker memakai episodeButton + style, dan label "sudah ada"', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const n = (BOT.match(/episodeButton\(statusMap\.get\(/g) || []).length;
+  if (n < 2) throw new Error('kedua picker harus memakai episodeButton: ' + n);
+  if ((BOT.match(/statusBreakdown\(statusMap, total\)/g) || []).length < 2) {
+    throw new Error('kedua caption picker harus memakai statusBreakdown');
+  }
+  if (!/b\.style \? \{ style: b\.style \} : \{\}/.test(BOT)) throw new Error('style tidak dipasang ke tombol');
+  const SK = require('fs').readFileSync(require.resolve('../lib/samKeyboard'), 'utf8');
+  if (SK.includes('Semua episode sudah di library')) throw new Error('label misleading: done = library ∪ Telegram');
+  if (!SK.includes('Semua episode sudah ada')) throw new Error('label harus "sudah ada"');
+});
+
+
 // ── REGRESSION: deteksi "sudah ada" di picker = library ∪ Telegram ─────────
 t('KRITIS: episodeStatusMap menggabungkan library + Telegram', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
@@ -510,8 +575,12 @@ t('KRITIS: picker memakai status gabungan (bukan hanya library)', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   const calls = (BOT.match(/await episodeStatusMap\(/g) || []).length;
   if (calls < 2) throw new Error('kedua picker (samehadaku & kuronime) harus memakai episodeStatusMap: ' + calls);
-  if (!/if \(st\.lib \|\| st\.tg\) done\.add\(ep\)/.test(BOT)) throw new Error('done harus union lib ∪ tg');
-  if ((BOT.match(/📨 \$\{e\.ep\}/g) || []).length < 2) throw new Error('label 📨 (Telegram) di kedua picker');
+  const doneRule = (BOT.match(/if \(st\.tg\) done\.add\(ep\)/g) || []).length;
+  if (doneRule < 2) throw new Error('kedua picker: done hanya dari pointer Telegram: ' + doneRule);
+  if (/if \(st\.lib \|\| st\.tg\) done\.add\(ep\)/.test(BOT)) throw new Error('masih ada aturan done = lib ∪ tg');
+  // label 📨 kini dibuat di dalam episodeButton (dipakai kedua picker)
+  if (!/\\ud83d\\udce8 \$\{ep\}/.test(BOT)) throw new Error('label Telegram harus dibuat di episodeButton');
+  if ((BOT.match(/episodeButton\(/g) || []).length < 3) throw new Error('episodeButton dipakai di kedua picker + definisi');
   // picker lama (hanya listPartsWithFile) tidak boleh lagi jadi sumber tunggal
   const oldStyle = (BOT.match(/const rows = await listPartsWithFile\(slug\);\s*\n\s*for \(const r of rows \|\| \[\]\) done\.add/g) || []).length;
   if (oldStyle > 0) throw new Error('masih ada picker yang hanya membaca library');

@@ -728,3 +728,48 @@ contoh Ep 18     : { lib: false, tg: false, link: 'https://vski.cc/e/8hn3e2ok9ul
 `test-vidoy-uploader` 112 pass (+2 tes), `test-media-contract` 10,
 `test-btn-style` 10, `test-anime-topic-router` 18, `test-sam-*` exit 0,
 `test-libmenu-grid` 14 — 0 fail.
+
+## 24. "Sudah ada" hanya yang punya pesan Telegram + warna tombol per status (26 Sep 2026)
+
+### Gejala
+Picker menampilkan `✅ 113 sudah ada · 📨 69 di Telegram` (Naruto Kecil).
+Data nyata: hanya **69** episode yang punya pesan Telegram; **44** dihitung
+"sudah ada" padahal baru ada di Vidoy (video-nya belum ada di topic Anime).
+
+### Akar masalah
+Aturan "sudah ada" = `media_parts` (library) ∪ Telegram. Library hanya berarti
+**file tersimpan untuk unduh ulang**, bukan berarti videonya sudah ada di topic.
+Akibatnya episode yang belum pernah dikirim ikut terlewati.
+
+### Trace yang dilakukan
+- `bot.js:1836` sumber centang picker = `listPartsWithFile()` (library)
+- `handlers/vidoy.js` / `services/vidoyService.js` → 0 kemunculan `media_parts`
+  (jalur Vidoy memang tidak menulis library)
+- `animeDoneMap` (batch) memakai `vidoy_uploads`
+- **Caption kuronime** masih pola lama (tidak ikut saat samehadaku diperbarui) —
+  baru ketahuan saat trace kedua picker
+- Label `✅ Semua episode sudah di library` di `buildPicker` menyesatkan karena
+  `done` = library ∪ Telegram
+
+### Perubahan
+1. **Aturan "sudah ada" = punya pointer Telegram saja.** Episode yang hanya ada
+   di Vidoy atau library dihitung **belum** → tombol `🗄` merah.
+2. Warna tombol episode (satu warna, satu simbol):
+   | Status | Tombol | `style` |
+   |---|---|---|
+   | Punya pesan Telegram | `📨 N` | `primary` (biru) |
+   | Ada di Vidoy / library, belum dikirim | `🗄 N` | `danger` (merah) |
+   | Belum ada | `Ep N` | — |
+3. Caption picker memakai `statusBreakdown()` di **kedua** picker:
+   `📨 N di Telegram · 🗄 N perlu dikirim · ⬜ N belum ada`
+4. Label buildPicker: `✅ Semua episode sudah ada` (bukan "di library").
+
+### Verifikasi (DB nyata, Naruto Kecil)
+```
+caption : 🎞 220 episode · 📨 69 di Telegram · 🗄 44 perlu dikirim · ⬜ 107 belum ada
+Ep 1   → 📨 1   primary   Ep 18  → 🗄 18  danger
+Ep 70  → 📨 70  primary   Ep 150 → Ep 150 (tanpa warna)
+```
+`test-vidoy-uploader` 115 pass (3 tes warna/breakdown/done + 2 tes lama
+dikoreksi), `test-media-contract` 10, `test-btn-style` 10,
+`test-anime-topic-router` 18 — 0 fail. `node --check` CLEAN.
