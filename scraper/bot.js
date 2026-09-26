@@ -3584,6 +3584,24 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     }
   }
 
+  // Setelah download single-episode selesai, tampilkan daftar episode (bisa pilih
+  // episode lain) — konsisten untuk semua target (tg / vt / vyt / vv).
+  async function showEpisodePickerAfterDownload(chatId, msgId, animeUrl) {
+    try {
+      const res = await resolveSamehadakuFullhd(animeUrl);
+      if (res.type !== 'anime' || !res.episodes?.length) {
+        return bot.editMessageText('⚠️ Gagal load daftar episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      }
+      const { keyboard, caption } = await buildSamehadakuEpisodePicker(res.episodes, animeUrl);
+      return bot.editMessageText(caption, {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: keyboard },
+      }).catch(() => {});
+    } catch (err) {
+      return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 80)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+    }
+  }
+
   if (data.startsWith('sam_dl:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
@@ -3678,15 +3696,19 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (res && res.error) {
         return bot.sendMessage(chatId, `⚠️ Upload gagal: ${escHtml(String(res.error).slice(0, 150))}`, { parse_mode: 'HTML' }).catch(() => {});
       }
+      // Setelah upload selesai, tampilkan daftar episode — konsisten dengan jalur tg
+      if (sameInfoG?.slug) {
+        const animeUrlBack = `https://v2.samehadaku.how/anime/${sameInfoG.slug}/`;
+        await showEpisodePickerAfterDownload(chatId, msgId, animeUrlBack);
+      }
       return;
     }
     await downloadSamehadakuFile(chatId, episodeUrlG, server, serversAll, sameInfoG);
-    // Setelah download samehadaku selesai, tampilkan tombol kembali ke list episode (UX)
+    // Setelah download selesai, tampilkan daftar episode — bisa langsung pilih
+    // episode lain. Konsisten untuk semua target, bukan cuma pesan polos.
     if (sameInfoG?.slug) {
       const animeUrlBack = `https://v2.samehadaku.how/anime/${sameInfoG.slug}/`;
-      await bot.sendMessage(chatId, `⬅️ Kembali ke list episode?`, {
-        reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(animeUrlBack)}` }]] },
-      }).catch(() => {});
+      await showEpisodePickerAfterDownload(chatId, msgId, animeUrlBack);
     }
     return;
   }

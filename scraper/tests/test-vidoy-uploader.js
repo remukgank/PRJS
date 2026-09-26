@@ -477,6 +477,37 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: tampilan setelah single-episode konsisten di semua target ────
+t('setelah download single-episode, semua target tampilkan episode picker', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/async function showEpisodePickerAfterDownload/.test(B)) {
+    throw new Error('helper showEpisodePickerAfterDownload tidak ada');
+  }
+  const calls = (B.match(/await showEpisodePickerAfterDownload\(/g) || []).length;
+  if (calls !== 2) {
+    throw new Error('harus dipanggil di 2 jalur (tg & vidoy), ditemukan: ' + calls);
+  }
+  // helper wajib memakai picker yang sama dengan sam_back
+  const i = B.indexOf('async function showEpisodePickerAfterDownload');
+  const body = B.slice(i, B.indexOf('\n  }', i));
+  if (!/buildSamehadakuEpisodePicker\(res\.episodes, animeUrl\)/.test(body)) {
+    throw new Error('harus memakai buildSamehadakuEpisodePicker yang sama dengan sam_back');
+  }
+  if (!/editMessageText\(caption/.test(body)) {
+    throw new Error('harus edit pesan yang sama, bukan kirim pesan baru');
+  }
+  // di dalam handler sam_go TIDAK BOLEH ada pesan polos sebagai satu-satunya tampilan
+  const sg = B.indexOf("if (data.startsWith('sam_go:'))");
+  const sgBody = B.slice(sg, B.indexOf("\n  // ─── Kuronime", sg));
+  if (/sendMessage\(chatId, `⬅️ Kembali ke list episode\?`/.test(sgBody)) {
+    throw new Error('jalur Samehadaku masih memakai pesan polos, harusnya episode picker');
+  }
+  if (!/await showEpisodePickerAfterDownload\(chatId, msgId, animeUrlBack\)/.test(sgBody)) {
+    throw new Error('jalur Samehadaku tidak menampilkan episode picker');
+  }
+});
+
+
 // ── REGRESSION: validasi unduhan berlaku di SEMUA jalur, termasuk Telegram ────
 t('validasi juga aktif di downloadWithAria2c (jalur Telegram)', () => {
   const D = require('fs').readFileSync(require.resolve('../downloader'), 'utf8');

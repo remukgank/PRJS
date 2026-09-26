@@ -363,3 +363,33 @@ lokal yang membalas HTTP 200 (MP4 asli vs HTML error).
 
 `test-vidoy-uploader` **138 pass** (+2), suite lain 0 fail.
 Aturan baru di AGENTS.md: satu sumber validasi untuk semua jalur.
+
+## K. TAMPILAN SETELAH SINGLE-EPISODE DISESUAIKAN (26 Sep 2026)
+
+### Masalah
+User melaporkan: di single-episode Telegram, setelah episode selesai tampilannya
+"standar banget" dan tidak konsisten.
+
+### Ketidaksesuaian yang ditemukan
+| Jalur | Tampilan setelah selesai |
+|---|---|
+| Telegram (`target=tg`) | pesan terpisah polos `⬅️ Kembali ke list episode?` + 1 tombol |
+| Vidoy (`target!=tg`) | **tidak ada sama sekali** (langsung `return`) |
+
+Padahal `buildSamehadakuEpisodePicker()` sudah ada dan dipakai `sam_back` —
+tampilan kaya: daftar episode, status 📨/🗄/Ep, progress bar, paginasi, dan tombol
+untuk langsung pilih episode lain.
+
+### Perbaikan
+Helper baru `showEpisodePickerAfterDownload(chatId, msgId, animeUrl)` di `bot.js`:
+- memanggil `resolveSamehadakuFullhd` + `buildSamehadakuEpisodePicker`
+- hasilnya di-`editMessageText` ke pesan yang sama (bukan pesan baru)
+- dipanggil di **kedua** jalur (tg dan vidoy) sehingga konsisten
+
+### Verifikasi
+- `node --check` CLEAN
+- `test-vidoy-uploader` **139 pass** (+1 tes yang mengunci: kedua jalur wajib
+  memanggil helper yang sama, dan pesan polos tidak boleh tersisa di handler
+  `sam_go`)
+- suite lain 0 fail (test-sam-picker-pagination 7, test-media-contract 10,
+  test-btn-style 10, test-caption-html-escape 6)
