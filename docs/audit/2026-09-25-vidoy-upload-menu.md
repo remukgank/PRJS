@@ -773,3 +773,45 @@ Ep 70  → 📨 70  primary   Ep 150 → Ep 150 (tanpa warna)
 `test-vidoy-uploader` 115 pass (3 tes warna/breakdown/done + 2 tes lama
 dikoreksi), `test-media-contract` 10, `test-btn-style` 10,
 `test-anime-topic-router` 18 — 0 fail. `node --check` CLEAN.
+
+## 25. Flow Telegram-only tidak membawa link Vidoy (26 Sep 2026)
+
+### Gejala
+User: "`⟳ Lengkapi yang hilang` tidak sertakan link padahal link ada". Pesan
+episode 18–60 di topic **tidak** punya baris `➧ Link :-`, padahal
+`vidoy_uploads` menyimpan linknya.
+
+### Trace (bukan asumsi)
+| Pemeriksaan | Hasil |
+|---|---|
+| Kemunculan `batch mode lengkapi` di log | **1×** — `⟳ Lengkapi` baru jalan sekali lalu terputus (instance restart) |
+| `vidoy_uploads.tg_message_id` untuk part 18–60 | **NULL** → pesan-pesan itu memang bukan dari flow Vidoy |
+| `media_parts.file_name` | `Naruto-18-720p-SAMEHADAKU.CARE.mp4` → format **flow LAMA** (`downloadSamehadakuFile`), bukan `Naruto Kecil — Ep 18.mp4` (format flow Vidoy) |
+| Caption di `vidoy_uploads` | **sudah benar** (`➧ Link :- vski.cc/e/8hn3e2ok9ulw`) |
+
+Jadi pesan yang dilihat user dikirim flow **Telegram-saja** (`handlers/download.js`)
+yang **tidak tahu-menahu soal Vidoy** — caption-nya tidak pernah mengambil link.
+
+### Perubahan
+1. `scraper/lib/caption.js` (baru) — sumber tunggal untuk:
+   - `shortLinkLabel()` (label ikut domain asli)
+   - `vidoyLinkLine()` (baris `➧ Link :- <a …>`)
+   - `withSeasonSuffix()` (dipindah dari `handlers/vidoy.js`, prevents duplikasi)
+2. `db.getVidoyLink(mediaKey, kind, part)` — baca link dari `vidoy_uploads`
+   (**read-only, tanpa upload**).
+3. `handlers/download.js` — `withVidoyLink(caption, title, part, season)`
+   dipasang di **2 titik kirim** (per-episode & batch): caption otomatis dapat
+   baris Link kalau episode sudah ada di Vidoy, dan tidak pernah dobel.
+4. `handlers/vidoy.js` memakai helper bersama (definisi lokal dihapus).
+
+### Catatan
+- Tidak ada upload baru di jalur ini — hanya pembacaan DB.
+- Two flow (Telegram-saja & Vidoy) sekarang menghasilkan caption yang sama.
+- Episod yangcaption-nya sudah terlanjur terkirim tanpa link dapat diperbaiki lewat
+  panel `🔄 Perbarui` (pointer Telegram tersimpan) atau dengandelete + kirim ulang.
+
+### Verifikasi
+`test-vidoy-uploader` **118 pass** (+3 tes: konsistensi flow, `getVidoyLink`,
+sumber tunggal `lib/caption`), `test-media-contract` 10, `test-btn-style` 10,
+`test-caption-html-escape` 6, `test-anime-topic-router` 18 — 0 fail,
+`node --check` CLEAN.

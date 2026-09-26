@@ -477,6 +477,47 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: flow Telegram-only ikut membawa link Vidoy ─────────────────
+t('KONSISTENSI: flow Telegram (download.js) menambah baris Link dari Vidoy', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  if (!/async function withVidoyLink/.test(D)) throw new Error('withVidoyLink tidak ada');
+  if (!/getVidoyLink\(key, 'anime'/.test(D)) throw new Error('harus membaca link dari vidoy_uploads');
+  // TIDAK boleh memanggil upload (tidak boleh ada uploadSingle di jalur ini)
+  const fn = D.slice(D.indexOf('async function withVidoyLink'), D.indexOf('\n}', D.indexOf('async function withVidoyLink')));
+  if (/uploadSingle|uploadFile|upload\(/.test(fn)) throw new Error('withVidoyLink tidak boleh upload');
+  // dipasang di kedua titik kirim (per-episode & batch)
+  const uses = (D.match(/withVidoyLink\(finalCap/g) || []).length;
+  if (uses < 2) throw new Error('harus dipasang di 2 titik kirim, ditemukan: ' + uses);
+  if (!/\u{1F4A7} Link :-/.test(D) && !/includes\('\\u2797 Link :-'\)/.test(D)) {
+    throw new Error('harus mencegah baris Link dobel');
+  }
+});
+
+t('db: getVidoyLink mengembalikan link episode yang ada', () => {
+  const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  if (!/async function getVidoyLink/.test(src)) throw new Error('getVidoyLink tidak ada di db');
+  if (!/link IS NOT NULL/.test(src)) throw new Error('getVidoyLink harus memfilter link IS NOT NULL');
+  if (!/kind = \$2 AND part = \$3/.test(src)) throw new Error('filter harus ikut kind + part');
+  const exp = require('../db');
+  if (typeof exp.getVidoyLink !== 'function') throw new Error('tidak diekspor');
+});
+
+t('lib/caption: satu sumber label link & suffix season untuk kedua flow', () => {
+  const C = require('../lib/caption');
+  if (C.shortLinkLabel('https://vski.cc/e/abc') !== 'vski.cc/e/abc') throw new Error('label salah');
+  if (/vidoy\.asia/.test(C.vidoyLinkLine('https://vski.cc/e/abc'))) throw new Error('domain hardcode');
+  if (C.vidoyLinkLine('') !== '') throw new Error('link kosong harus kosong');
+  if (!/^➧ Link :- /.test(C.vidoyLinkLine('https://x.cc/e/a'))) throw new Error('baris Link salah');
+  if (C.withSeasonSuffix('X', 2, 2) !== C.withSeasonSuffix(C.withSeasonSuffix('X', 2, 2), 2, 2)) {
+    throw new Error('withSeasonSuffix tidak idempoten');
+  }
+  // handlers/vidoy.js tidak lagi punya definisi sendiri (hindari duplikasi)
+  const V = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
+  if (/function shortLinkLabel\(/.test(V)) throw new Error('shortLinkLabel duplikat di vidoy.js');
+  if (/function withSeasonSuffix\(/.test(V)) throw new Error('withSeasonSuffix duplikat di vidoy.js');
+});
+
+
 // ── REGRESSION: warna tombol episode = status (bukan 2 simbol) ─────────────
 t('episodeButton: warna sesuai status, hanya satu per tombol', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');

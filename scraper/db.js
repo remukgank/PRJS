@@ -316,6 +316,20 @@ async function clearVidoyTelegramPointer(mediaKey, kind, part) {
   }
 }
 
+// Link publik episode yang sudah ada di Vidoy (null bila belum).
+async function getVidoyLink(mediaKey, kind = 'anime', part) {
+  try {
+    const r = await pool.query(
+      'SELECT link FROM vidoy_uploads WHERE media_key = $1 AND kind = $2 AND part = $3 AND link IS NOT NULL',
+      [String(mediaKey), kind, Number(part) || 0]
+    );
+    return r.rows[0] ? r.rows[0].link : null;
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind, part }, 'Failed to get vidoy link');
+    return null;
+  }
+}
+
 async function setVidoyTelegramPointer(mediaKey, kind, part, chatId, messageId) {
   try {
     await pool.query(
@@ -565,6 +579,7 @@ module.exports = {
   listVidoyUploads,
   setVidoyTelegramPointer,
   clearVidoyTelegramPointer,
+  getVidoyLink,
   updateVidoyLink,
   listRecentVidoyUploads,
   getVidaraUpload,

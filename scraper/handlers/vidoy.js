@@ -10,6 +10,7 @@ const { ensureMp4 } = require('../services/vidaraService');
 const vidoyService = require('../services/vidoyService');
 const { TMP_DIR, getVideoInfo } = require('../downloader');
 const { safeHtml } = require('../lib/html');
+const { shortLinkLabel, withSeasonSuffix } = require('../lib/caption');
 const V = require('../vidoy-uploader');
 const Vdara = require('../vidara-uploader');
 
@@ -307,20 +308,6 @@ async function actionAnimeEpisode(chatId, opts) {
   return out;
 }
 
-// Judul untuk folder/nama file/mediaKey Vidoy: judul + suffix season/part
-// bentuk pendek (S4 / P2) supaya Season 3 & Season 4 tidak saling menimpa.
-// IDEMPOTEN: kalau pemanggil sudah menyertakan suffix-nya, tidak ditambahkan
-// lagi (mencegah "… S4 S4"). Parser samehadaku sengaja TIDAK menaruh season
-// di judul karena itu akan merusak slug library.
-function withSeasonSuffix(title, season, part) {
-  let out = String(title || '').trim();
-  const s = Number(season) || 0;
-  const p = Number(part) || 0;
-  if (s && !new RegExp(`\\sS${s}(?:$|\\s)`).test(out)) out += ` S${s}`;
-  if (p && !new RegExp(`\\sP${p}(?:$|\\s)`).test(out)) out += ` P${p}`;
-  return out;
-}
-
 function partEpisodeLabel(part, epStart, epEnd) {
   // Episode tunggal (anime) → "Episode :- N"; batch drama → "Part/Episode :- 1 (Ep 1–10)".
   if (epStart === epEnd) return `Episode :- ${epStart}`;
@@ -346,17 +333,6 @@ function replaceLinkLine(caption, link) {
   if (idx >= 0) lines[idx] = line;
   else lines.push(line);
   return lines.join('\n');
-}
-
-function shortLinkLabel(link) {
-  const raw = String(link || '').trim();
-  if (!raw) return raw;
-  const m = raw.match(/^https?:\/\/([^/\s]+)(\/(?:e|d)\/[A-Za-z0-9_-]+)/);
-  // Label memakai domain ASLI link, bukan domain hardcode — supaya teks yang
-  // tampil sama persis dengan URL tujuan dan ikut berubah saat domain diganti.
-  if (m) return `${m[1]}${m[2]}`;
-  const loose = raw.match(/([^/\s]+\.(?:cc|com|tv|asia|net|org|co|xyz|top|site|vip|link|me|io|app|dev|cloud|online|live|world|pro|fun|shop|app))\/(e|d)\/([A-Za-z0-9_-]+)/i);
-  return loose ? `${loose[1]}/${loose[2]}/${loose[3]}` : raw;
 }
 
 function targetLabel(target) {

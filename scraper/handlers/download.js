@@ -13,10 +13,11 @@ const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive'
 const axios = require('axios');
 const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4 } = require('../downloader');
 const { cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename } = require('../lib/parser');
+const { vidoyLinkLine, withSeasonSuffix } = require('../lib/caption');
 const { detectTitleFromFilename } = require('../lib/titleDetect');
 
 // sendVideo/sendAudio/sendDocument injected via ctx (masih di bot.js, belum E3)
-const { getPartFileId, savePartFileId, upsertMedia, getSetting, findMediaByPattern } = require('../db');
+const { getPartFileId, savePartFileId, upsertMedia, getSetting, findMediaByPattern, getVidoyLink } = require('../db');
 
 function hashUrl(url) {
   return require('crypto').createHash('md5').update(url).digest('hex');
@@ -151,7 +152,11 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
         }
       }
 
-      sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
+      // link Vidoy ikut kalau ep ini sudah ada di Vidoy (read-only, tanpa upload)
+      finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, goPart, sami && sami.season);
+      // link Vidoy ikut kalau ep ini sudah ada di Vidoy (read-only, tanpa upload)
+    finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, batchPart, sami && sami.season);
+    sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap,
         supports_streaming: true,
         ...(info.duration && { duration: info.duration }),
@@ -890,6 +895,20 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
   } finally {
     cleanupFiles(outPath);
   }
+}
+
+
+// Kalau episode ini sudah punya file di Vidoy, caption dikirim ke Telegram
+// tetap menyertakan link-nya (baris `➧ Link :-`), supaya_flow Telegram-only
+// dan flow Vidoy menghasilkan caption yang sama. Tidak ada upload baru:
+// hanya membaca vidoy_uploads.
+async function withVidoyLink(caption, title, part, season) {
+  if (!title || !part) return caption;
+  const key = withSeasonSuffix(title, season, null);
+  const link = await getVidoyLink(key, 'anime', Number(part) || 0);
+  if (!link) return caption;
+  if (String(caption || '').includes('\u2797 Link :-')) return caption;
+  return `${caption}\n${vidoyLinkLine(link)}`;
 }
 
 async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameInfo, opts = {}) {
