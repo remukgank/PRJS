@@ -3243,11 +3243,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
-            animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vt:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
+            ...animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vt:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
             [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}` }],
           ] },
         },
-      ).catch(() => {});
+      ).catch(async (err) => {
+        logger.error({ chatId, err: err.message }, 'sam_all: gagal tampilkan pilihan target');
+        await bot.sendMessage(chatId, `⚠️ Gagal menampilkan pilihan target: ${escHtml(String(err.message).slice(0, 120))}\nCoba kirim ulang link anime.`)
+          .catch(() => {});
+      });
     }
     if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
@@ -3477,7 +3481,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          animeTargetKeyboard(`sam_go:${server}:${urlId2}`, `sam_go:vt:${server}:${urlId2}`, `sam_go:vyt:${server}:${urlId2}`, `sam_go:vv:${server}:${urlId2}`),
+          ...animeTargetKeyboard(`sam_go:${server}:${urlId2}`, `sam_go:vt:${server}:${urlId2}`, `sam_go:vyt:${server}:${urlId2}`, `sam_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `sam_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3607,7 +3611,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       return bot.editMessageText(preview, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [
-          animeTargetKeyboard(`kur_go:${server}:${urlId2}`, `kur_go:vt:${server}:${urlId2}`, `kur_go:vyt:${server}:${urlId2}`, `kur_go:vv:${server}:${urlId2}`),
+          ...animeTargetKeyboard(`kur_go:${server}:${urlId2}`, `kur_go:vt:${server}:${urlId2}`, `kur_go:vyt:${server}:${urlId2}`, `kur_go:vv:${server}:${urlId2}`),
           [{ text: '⬅️ Ganti server', callback_data: `kur_ep:${cacheUrl(episodeUrl)}` }],
         ] },
       }).catch(() => {});
@@ -3687,11 +3691,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: { inline_keyboard: [
-            animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vt:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
+            ...animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vt:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
             [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}` }],
           ] },
         },
-      ).catch(() => {});
+      ).catch(async (err) => {
+        logger.error({ chatId, err: err.message }, 'kur_all: gagal tampilkan pilihan target');
+        await bot.sendMessage(chatId, `⚠️ Gagal menampilkan pilihan target: ${escHtml(String(err.message).slice(0, 120))}\nCoba kirim ulang link anime.`)
+          .catch(() => {});
+      });
     }
     if (!['tg', 'vt', 'vyt', 'vv'].includes(batchTarget)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});

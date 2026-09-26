@@ -450,6 +450,52 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+t('KRITIS: pilihan target batch tidak boleh ditelan diam-diam (.catch(() => {}))', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  for (const tag of ['sam_all', 'kur_all']) {
+    if (!BOT.includes(`${tag}: gagal tampilkan pilihan target`)) {
+      throw new Error(`${tag}: kegagalan tampil menu tidak di-log`);
+    }
+  }
+  if (!BOT.includes('Gagal menampilkan pilihan target')) throw new Error('tidak ada pesan error ke user');
+});
+
+
+// ── REGRESSION KRITIS: struktur inline_keyboard (row = array of Object) ──
+t('KRITIS: animeTargetKeyboard WAJIB di-spread (bukan dibungkus array)', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const n = (BOT.match(/\.\.\.animeTargetKeyboard\(/g) || []).length;
+  if (n < 4) throw new Error('animeTargetKeyboard harus di-spread di 4 tempat, ditemukan: ' + n);
+  if (/inline_keyboard: \[\s*\n\s*animeTargetKeyboard\(/.test(BOT)) {
+    throw new Error(' masih ada animeTargetKeyboard tanpa spread → "InlineKeyboardButton must be an Object"');
+  }
+});
+
+t('KRITIS: keyboard yang dibangun valid secara struktur (row berisi objek)', () => {
+  const V2 = require('../vidoy-uploader');
+  const Vd2 = require('../vidara-uploader');
+  const mk = (text, data, on) => (on ? { text, callback_data: data, style: 'primary' } : { text, disabled: {} });
+  const rows = [
+    [mk('T', 'a:1', true), mk('V', 'b:1', !!Vd2.VIDARA_KEY)],
+    [mk('VT', 'c:1', V2.isConfigured()), mk('VV', 'd:1', !!Vd2.VIDARA_KEY && V2.isConfigured())],
+  ];
+  // rekonstruksi pemakaian yang salah (tanpa spread) dan yang benar (dengan spread)
+  const wrong = [rows, [{ text: 'kembali', callback_data: 'k:1' }]];
+  const right = [...rows, [{ text: 'kembali', callback_data: 'k:1' }]];
+  const isValid = (kb) => kb.every((row) => Array.isArray(row) && row.every((x) => x && typeof x === 'object' && !Array.isArray(x)));
+  if (isValid(wrong)) throw new Error('varian salah ikut valid — tes tidak berguna');
+  if (!isValid(right)) throw new Error('spread menghasilkan keyboard invalid: ' + JSON.stringify(right));
+  for (const row of right) {
+    for (const btn of row) {
+      if (btn.callback_data !== undefined && (typeof btn.callback_data !== 'string' || !btn.callback_data.length || Buffer.byteLength(btn.callback_data) > 64)) {
+        throw new Error('callback_data tidak valid: ' + JSON.stringify(btn.callback_data));
+      }
+      if (typeof btn.text !== 'string' || !btn.text.length) throw new Error('text tombol kosong');
+    }
+  }
+});
+
+
 // ── REGRESSION: season anime tidak boleh hilang dari judul ──
 const SA = require('../providers/samehadaku');
 

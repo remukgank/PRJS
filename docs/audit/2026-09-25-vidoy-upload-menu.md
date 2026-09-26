@@ -212,3 +212,49 @@ helper. Tidak ada perubahan pada `lib/html.js`.
   `test-sam-prescan` & `test-sam-picker-pagination` exit 0 — 0 fail.
 - PM2 `prjs-bot` online (pid 24358), 0 error sejak restart.
 - Belum ada tes live untuk target Vidoy di batch anime (menunggu user).
+
+## 10. Fix keyboard target anime (26 Sep 2026, 00:03)
+
+### Gejala
+User menekan `⬇️ Download Semua` → tidak ada tombol muncul, tanpa pesan apa pun.
+Log: `ETELEGRAM: 400 Bad Request: can't parse InlineKeyboardButton: InlineKeyboardButton
+must be an Object` (method `editMessageText`).
+
+### Akar masalah
+`animeTargetKeyboard()` **sudah mengembalikan array of rows**, tapi pemanggil
+membungkusnya sekali lagi dengan `[...]`:
+
+```js
+inline_keyboard: [
+  animeTargetKeyboard(...),   // ❌ → [[ [btn,btn], [btn,bn] ], …]  (row berisi array)
+  [{ text: '⬅️ Kembali', … }],
+]
+```
+
+Akibatnya `inline_keyboard` berisi array di dalam row, bukan objek tombol →
+ditolak Telegram. Perbaikan: spread (`...animeTargetKeyboard(...)`).
+
+**Tiga pemanggil lama ikut salah** (bukan hanya kode baru): preview per-episode
+samehadaku (`sam_go`), kuronime (`kur_go`), dan dua menu target batch. Inilah
+sebabnya jalur Vidoy anime per-episode tidak pernah bisa dipakai sejak awal —
+baru ketahuan karena user memakai `Download Semua`.
+
+### Ditambahkan
+- Kegagalan menampilkan menu target tidak lagi ditelan `.catch(() => {})`:
+  di-log (`sam_all`/`kur_all: gagal tampilkan pilihan target`) + pesan error
+  ke user agar tidak diam-diam.
+- Tes: semua 4 pemakaian harus spread; validitas struktur row (array of Object),
+  `text` non-kosong, `callback_data` string 1–64 byte; dan tidak boleh ada
+  `.catch(() => {})` pada jalur menu target batch.
+
+### Verifikasi
+- Uji nyata ke API Telegram dengan keyboard hasil perbaikan → **OK** (pesan uji
+  dihapus).
+- `test-vidoy-uploader.js`: **82 pass, 0 fail**.
+- `test-html-safety` 22, `test-caption-html-escape` 6, `test-anime-topic-router` 18
+  — 0 fail.
+- PM2 restart (pid 25216), `Bot running`, 0 error baru.
+
+### Belum diuji live
+- Target `📥 Vidoy + TG` pada batch anime (`sam_allgo` / `kur_allgo`) — belum
+  pernah dijalankan sungguhan; menunggu user. Saran: mulai dari anime pendek.
