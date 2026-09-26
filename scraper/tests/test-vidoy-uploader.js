@@ -477,6 +477,55 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: link + pointer vidoy di choke point sendAnimeMedia ──────────
+t('link: withVidoyLink memakai keyPart (formula sama dgn vidoy.js:207)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('async function withVidoyLink');
+  const body = D.slice(i, D.indexOf('\n}', i));
+  if (!/withSeasonSuffix\(title, season, keyPart\)/.test(body)) {
+    throw new Error('key harus pakai keyPart — kalau tidak, media_key untuk anime ber-season/part tidak akan cocok');
+  }
+  if (/withSeasonSuffix\(title, season, null\)/.test(body)) throw new Error('jangan kunci tanpa part');
+});
+
+t('tidak ada panggilan withVidoyLink di luar fungsi (regresi cleanTitle/batchPart)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const calls = (D.match(/await withVidoyLink\(/g) || []).length;
+  if (calls !== 1) throw new Error('withVidoyLink harus dipanggil tepat 1x (di choke point), ditemukan ' + calls);
+  for (const bad of ['cleanTitle || customTitle, goPart', 'cleanTitle || customTitle, batchPart']) {
+    if (D.includes(bad)) throw new Error('"' + bad + '" = variabel di luar scope → ReferenceError');
+  }
+});
+
+t('choke point: initDownload membungkus sendAnimeMedia (1x, idempoten)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('function initDownload');
+  const body = D.slice(i, D.indexOf('\n}', i));
+  if (!/ctx\.sendAnimeMedia = async function trackedSendAnimeMedia/.test(body)) throw new Error('sendAnimeMedia tidak dibungkus');
+  if (!/__animeTracked/.test(body)) throw new Error('wrap harus idempoten (initDownload dipanggil >1x)');
+});
+
+t('choke point: caption dapat link DAN pointer vidoy_uploads ditulis', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('trackedSendAnimeMedia');
+  const body = D.slice(i, D.indexOf('ctx.__animeTracked = true;', i));
+  if (!/caption = await withVidoyLink\(/.test(body)) throw new Error('caption tidak mendapat link');
+  if (!/setVidoyTelegramPointer\(key, 'anime', episode, cid, msgId\)/.test(body)) throw new Error('pointer tidak ditulis');
+  if (!/\{ \.\.\.\(opts \|\| \{\}\), caption \}/.test(body)) throw new Error('caption hasil withVidoyLink tidak dikirim ke Telegram');
+  const db = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  if (!/UPDATE vidoy_uploads SET tg_chat_id = \$4, tg_message_id = \$5/.test(db)) throw new Error('setVidoyTelegramPointer harus UPDATE, bukan INSERT');
+});
+
+t('konteks episode di-set dan di-reset (tidak bocor ke episode berikutnya)', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const i = D.indexOf('async function downloadSamehadakuFile');
+  const body = D.slice(i, D.indexOf('\nasync function ', i + 10));
+  if (!/_curEpCtx = sameInfo \|\| null;/.test(body)) throw new Error('konteks episode tidak di-set');
+  const f = body.lastIndexOf('} finally {');
+  if (f < 0 || !/_curEpCtx = null;/.test(body.slice(f))) throw new Error('konteks episode tidak di-reset di finally');
+});
+
+
 // ── REGRESSION: !dell = hapus library + pesan Telegram, JANGAN link Vidoy ────
 t('A: deleteMedia ikut menghapus media_parts (bukan hanya media)', () => {
   const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
@@ -532,9 +581,13 @@ t('KONSISTENSI: flow Telegram (download.js) menambah baris Link dari Vidoy', () 
   // TIDAK boleh memanggil upload (tidak boleh ada uploadSingle di jalur ini)
   const fn = D.slice(D.indexOf('async function withVidoyLink'), D.indexOf('\n}', D.indexOf('async function withVidoyLink')));
   if (/uploadSingle|uploadFile|upload\(/.test(fn)) throw new Error('withVidoyLink tidak boleh upload');
-  // dipasang di kedua titik kirim (per-episode & batch)
-  const uses = (D.match(/withVidoyLink\(finalCap/g) || []).length;
-  if (uses < 2) throw new Error('harus dipasang di 2 titik kirim, ditemukan: ' + uses);
+  // Dipasang di SATU choke point (initDownload → sendAnimeMedia), bukan di tiap
+  // leaf handler. Versi lama menyisipkan 2 baris di handleGofileUrl memakai
+  // variabel di luar scope (cleanTitle/batchPart) → ReferenceError + link tidak
+  // pernah muncul di jalur batch.
+  const uses = (D.match(/await withVidoyLink\(/g) || []).length;
+  if (uses !== 1) throw new Error('harus tepat 1x di choke point, ditemukan: ' + uses);
+  if (!/function initDownload/.test(D)) throw new Error('choke point hilang');
   if (!/\u{1F4A7} Link :-/.test(D) && !/includes\('\\u2797 Link :-'\)/.test(D)) {
     throw new Error('harus mencegah baris Link dobel');
   }

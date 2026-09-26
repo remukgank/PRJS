@@ -17,7 +17,7 @@ const { vidoyLinkLine, withSeasonSuffix } = require('../lib/caption');
 const { detectTitleFromFilename } = require('../lib/titleDetect');
 
 // sendVideo/sendAudio/sendDocument injected via ctx (masih di bot.js, belum E3)
-const { getPartFileId, savePartFileId, upsertMedia, getSetting, findMediaByPattern, getVidoyLink } = require('../db');
+const { getPartFileId, savePartFileId, upsertMedia, getSetting, findMediaByPattern, getVidoyLink, setVidoyTelegramPointer } = require('../db');
 
 function hashUrl(url) {
   return require('crypto').createHash('md5').update(url).digest('hex');
@@ -34,6 +34,33 @@ function ucShareId(text) {
 let _ctx = null;
 function initDownload(ctx) {
   _ctx = ctx;
+  // Choke point tunggal untuk semua pengiriman media anime: caption dapat link
+  // Vidoy bila ep ini sudah ada di Vidoy, dan pointer pesan langsung dicatat di
+  // vidoy_uploads. Tanpa ini episode terkirim tetap "perlu dikirim" di picker
+  // (status 🗄 merah) lalu dikirim ulang.
+  // Hanya aktif untuk konteks samehadaku (JALUR TUNGGAL) — jalur Vidoy
+  // (handlers/vidoy.js) sudah menyimpan pointer-nya sendiri lewat ctx-nya.
+  if (ctx && typeof ctx.sendAnimeMedia === 'function' && !ctx.__animeTracked) {
+    const origSend = ctx.sendAnimeMedia;
+    ctx.sendAnimeMedia = async function trackedSendAnimeMedia(chatId, path, opts, cacheInfo) {
+      const ep = _curEpCtx;
+      const episode = ep ? (Number(ep.episode) || 0) : 0;
+      let caption = opts && opts.caption;
+      let key = null;
+      if (ep && ep.title && episode) {
+        key = withSeasonSuffix(ep.title, ep.season, ep.part);
+        caption = await withVidoyLink(caption, ep.title, episode, ep.season, ep.part);
+      }
+      const res = await origSend.call(ctx, chatId, path, { ...(opts || {}), caption }, cacheInfo);
+      const msgId = res && (res.message_id || (res.result && res.result.message_id));
+      if (key && msgId) {
+        const cid = (res && res.chat && res.chat.id) || chatId;
+        await setVidoyTelegramPointer(key, 'anime', episode, cid, msgId).catch(() => {});
+      }
+      return res;
+    };
+    ctx.__animeTracked = true;
+  }
 }
 function ensureCtx(caller) {
   if (!_ctx || !_ctx.bot) throw new Error(`handlers/download belum di-init — panggil initDownload({ bot, config, samehadakuEpisodeMap, ... }) dulu (dari ${caller})`);
@@ -49,6 +76,10 @@ function leafAlert(chatId, text) {
 
 // Saat batch: leaf handler TIDAK bikin RichProgress per-episode (trafik edit pesan)
 // cukup tabel batch utama. noopRp = object no-op agar kode leaf tetap jalan polos.
+// Konteks episode samehadaku yang SEDANG dikirim (dipakai choke point
+// sendAnimeMedia untuk lookup link + pointer vidoy_uploads).
+let _curEpCtx = null;
+
 function noopRp() {
   return {
     updateEpisode() {}, updateLabel() {}, update() {}, tick() {},
@@ -151,11 +182,6 @@ async function handleGofileUrl(chatId, url, customTitle = null) {
           ].join('\n');
         }
       }
-
-      // link Vidoy ikut kalau ep ini sudah ada di Vidoy (read-only, tanpa upload)
-      finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, goPart, sami && sami.season);
-      // link Vidoy ikut kalau ep ini sudah ada di Vidoy (read-only, tanpa upload)
-    finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, batchPart, sami && sami.season);
     sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap,
         supports_streaming: true,
@@ -902,9 +928,11 @@ async function handleGdriveUrl(chatId, url, customTitle = null, opts = {}) {
 // tetap menyertakan link-nya (baris `➧ Link :-`), supaya_flow Telegram-only
 // dan flow Vidoy menghasilkan caption yang sama. Tidak ada upload baru:
 // hanya membaca vidoy_uploads.
-async function withVidoyLink(caption, title, part, season) {
+async function withVidoyLink(caption, title, part, season, keyPart) {
   if (!title || !part) return caption;
-  const key = withSeasonSuffix(title, season, null);
+  // key WAJIB dihitung sama seperti handlers/vidoy.js (withSeasonSuffix) supaya
+  // media_key cocok persis dengan row vidoy_uploads.
+  const key = withSeasonSuffix(title, season, keyPart);
   const link = await getVidoyLink(key, 'anime', Number(part) || 0);
   if (!link) return caption;
   if (String(caption || '').includes('\u2797 Link :-')) return caption;
@@ -927,6 +955,7 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
   // Konteks samehadaku utk leaf handler (gofile/pixeldrain/filedon): caption → Provider samehadaku.
   // Di flow manual sudah di-set di sam_go; batch tidak → diset di sini agar identik.
   if (sameInfo) _ctx.samehadakuEpisodeMap?.set(url, sameInfo);
+  _curEpCtx = sameInfo || null;
   const prevQuiet = _samQuiet;
   _samQuiet = silent;
   try {
@@ -1015,10 +1044,11 @@ async function downloadSamehadakuFile(chatId, episodeUrl, server, servers, sameI
     return { ok: false, error: `server ${server} belum didukung` };
   } catch (err) {
     logger.warn({ server, episode: sameInfo?.episode ?? null, err: err.message }, 'sam server gagal');
-    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ ${server}${epTag} gagal (${err.message.slice(0, 80)})\n\nKlik ⬅️ Kembali ke pilihan server utk coba server lain.`, { reply_markup: backKb }).catch(() => {});
+    if (!silent) await _ctx.bot.sendMessage(chatId, `⚠️ ${server}${epTag} gagal (${err.message.slice(0, 80)})\n\nKlik ulang untuk coba server lain.`, { reply_markup: backKb }).catch(() => {});
     return { ok: false, error: err.message };
   } finally {
     _samQuiet = prevQuiet;
+    _curEpCtx = null;
   }
 }
 
@@ -1109,4 +1139,5 @@ function pickBestServer(servers = {}) {
 }
 const SAM_BATCH_PACE_MS = Number(process.env.SAM_BATCH_PACE_MS) || 1000;
 
-module.exports = { initDownload, resolveDirectUrl, epCapLabel, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert } };
+module.exports = { initDownload, resolveDirectUrl, epCapLabel, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert },
+  animeTrackTest: { setEpisodeContext: (v) => { _curEpCtx = v || null; } } };

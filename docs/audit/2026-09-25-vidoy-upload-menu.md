@@ -862,3 +862,50 @@ Konfirmasi `!dell` sekarang berbunyi:
 - 2 silent no-op tertangkap saat implementasi: helper `deleteTelegramMessagesRaw`
   dan import `./db` tidak ter-insert → would've `ReferenceError`. Keduanya
   tertangkap oleh `node --check` + verifikasi import eksplisit.
+
+## 27. Fix regresi: link Vidoy tidak pernah muncul + pointer tidak ditulis (26 Sep 2026)
+
+### Gejala
+User melaporkan caption `➧ Link` tidak pernah muncul di anime, padahal
+commit `adc5c81` "sudah" menyisipkannya.
+
+### Root cause — regresi dari `adc5c81` sendiri
+Sisipan diletakkan di **fungsi yang salah** (`handleGofileUrl`, baris 156/158):
+
+```js
+finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, goPart, …);
+finalCap = await withVidoyLink(finalCap, cleanTitle || customTitle, batchPart, …);
+```
+
+- `cleanTitle` di scope itu hanya `const` **di dalam** cabang `if/else` (baris
+  117/139/146) → **ReferenceError** tiap dipanggil.
+- `batchPart` baru dideklarasikan di baris 236 (fungsi lain) → **ReferenceError**.
+- Sheer `node --check` tidak menangkapnya (itu syntax, bukan scope).
+- Konsekuensi: jalur yang benar (`downloadSamehadakuFile` → leaf handler) tidak
+  pernah mendapat link → inilah gejala yang dilihat user.
+
+### Perbaikan
+1. Dua baris rusak dibuang.
+2. Choke point tunggal di `initDownload()` membungkus `_ctx.sendAnimeMedia` —
+   semua 9 titik kirim anime terlindungi tanpa menyisip 9 baris.
+3. `_curEpCtx` (konteks episode, pola sama seperti `_samQuiet`) diset dari
+   `sameInfo` lalu **direset di `finally`** supaya tidak bocor ke episode berikut.
+4. `withVidoyLink(caption, title, part, season, keyPart)` — `keyPart` supaya
+   `media_key` dihitung **sama persis** dengan `handlers/vidoy.js:207`
+   (`withSeasonSuffix(title, season, part)`). Versi lama memakai `null` → anime
+   ber-season/part tidak akan pernah cocok.
+5. Setelah terkirim, `setVidoyTelegramPointer(key, 'anime', episode, chatId, msgId)`
+   → episode langsung jadi 📨 di picker, tidak dikirim ulang.
+
+### Verifikasi fungsional (DB asli, mock Telegram, restore di `finally`)
+| Uji | Hasil |
+|---|---|
+| Kunci `Naruto Kecil` ep 1 & 61 vs row nyata | cocok (`vski.cc/e/…`, tg#5771/#5792) |
+| Choke point → caption berisi link | ✅ |
+| Choke point → pointer tertulis | ✅ (`chat -100123 msg#555001`) |
+| **Kasus kunci: ep18 pointer KOSONG (🗄)** | ✅ link masuk + pointer terisi → tidak dobel-kirim |
+| Restore state DB | ✅ kembali ke NULL |
+
+`test-vidoy-uploader` **127 pass** (+5 tes), suite lain 0 fail, `node --check` CLEAN.
+Satu assertion lama ("harus dipasang di 2 titik kirim") saya **perbaiki** — dia
+mendaratkan bug yang sama.
