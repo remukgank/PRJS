@@ -4,6 +4,7 @@
 //        cache: { cacheSlug, resolveSlug }, getPendingDeletes }
 // Tidak ada require('../bot') — cegah cyclical (pola E4).
 const { logger } = require('../logger');
+const BTN = require('../lib/btn');
 const { truncateText } = require('../lib/parser');
 const { cacheSlug, resolveSlug } = require('../lib/urlCache');
 const { listAllLibrary, searchDrama, listPartsWithFile, getMediaBySlug, getPartFileId } = require('../db');
@@ -94,12 +95,12 @@ function libraryPartsGrid(slug, parts, page = 1, opts = {}) {
   if (isAdminUser) {
     rows.push(delMode
       ? [
-          { text: '🗑️ Hapus Judul', callback_data: `lib_del_title:${sid}:${safePage}` },
-          { text: '✅ Selesai', callback_data: `lib_delmode:${sid}:${safePage}` },
+          BTN.btn('🗑️ Hapus Judul', `lib_del_title:${sid}:${safePage}`, 'danger'),
+          BTN.btn('✅ Selesai', `lib_delmode:${sid}:${safePage}`, 'success'),
         ]
       : [
-          { text: '🗑️ Hapus Ep', callback_data: `lib_delmode:${sid}:${safePage}` },
-          { text: '🗑️ Hapus Judul', callback_data: `lib_del_title:${sid}:${safePage}` },
+          BTN.btn('🗑️ Hapus Ep', `lib_delmode:${sid}:${safePage}`, 'danger'),
+          BTN.btn('🗑️ Hapus Judul', `lib_del_title:${sid}:${safePage}`, 'danger'),
         ]);
   }
   rows.push([{ text: '⬅️ Kembali', callback_data: 'act:lib_list' }]);
@@ -209,7 +210,7 @@ async function handleLibDelEp({ chatId, query, data }) {
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🗑️ Ya, Hapus', callback_data: 'dell_confirm' }, { text: '❌ Batal', callback_data: 'dell_cancel' }],
+          [BTN.btn('🗑️ Ya, Hapus', 'dell_confirm', 'danger'), BTN.nav('❌ Batal', 'dell_cancel')],
         ],
       },
     });
@@ -237,7 +238,7 @@ async function handleLibDelTitle({ chatId, query, data }) {
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🗑️ Ya, Hapus', callback_data: 'dell_confirm' }, { text: '❌ Batal', callback_data: 'dell_cancel' }],
+          [BTN.btn('🗑️ Ya, Hapus', 'dell_confirm', 'danger'), BTN.nav('❌ Batal', 'dell_cancel')],
         ],
       },
     });

@@ -1012,32 +1012,9 @@ function breadcrumbKeyboard() {
   ]);
 }
 
-function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = null, aiKey = null) {
-  const emoji = libSimpanOn ? '✅' : '❌';
-  const status = libSimpanOn ? 'ON' : 'OFF';
-  const epShort = aiEndpoint ? aiEndpoint.replace(/^https?:\/\//, '').slice(0, 18) + (aiEndpoint.length > 18 ? '…' : '') : 'OFF';
-  const epEmoji = aiEndpoint ? '✅' : '❌';
-  const modelCount = aiModel ? aiModel.split(',').filter(Boolean).length : 0;
-  const modelLabel = aiModel ? (modelCount > 1 ? `${modelCount} models` : aiModel.slice(0, 14)) : 'OFF';
-  const modelEmoji = aiModel ? '✅' : '❌';
-  const keyCount = aiKey ? aiKey.split(',').filter(Boolean).length : 0;
-  const keyEmoji = keyCount ? '✅' : '❌';
-  const keyLabel = keyCount ? (keyCount > 1 ? `${keyCount} keys` : 'SET') : 'OFF';
-  return {
-    inline_keyboard: [
-      [{ text: `💾 Simpan ke Library: ${emoji} ${status}`, callback_data: 'act:lib_toggle' }],
-      [{ text: `🤖 AI Endpoint: ${epEmoji} ${epShort}`, callback_data: 'act:ai_endpoint' }],
-      [{ text: `🔑 AI Key: ${keyEmoji} ${keyLabel}`, callback_data: 'act:ai_key' }],
-      [{ text: `🧠 AI Model: ${modelEmoji} ${modelLabel}`, callback_data: 'act:ai_model' }],
-      [{ text: '🌐 Domain Vidara', callback_data: 'act:vidara_domain' }],
-      [{ text: '🗂 Vidoy Links', callback_data: 'act:vidoy_links' }],
-      [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
-      [{ text: '📊 Status Server', callback_data: 'act:status' }],
-      [{ text: '⭐ Cek Saldo Stars', callback_data: 'act:balance' }],
-      [{ text: '⬅️ Kembali', callback_data: 'act:main_menu' }],
-    ],
-  };
-}
+// adminPanelKeyboard dipindah ke handlers/admin.js (satu sumber kebenaran) —
+// dulu ada duplikat di sini sehingga tombol '🗂 Vidoy Links' tidak pernah tampil
+// di handleAdminPanel.
 
 // Tombol target upload: Vidoy+TG = primary (rekomendasi terbaik), target lain
 // = success (menghasilkan berkas), yang belum terkonfigurasi = disabled tapi
@@ -2553,7 +2530,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
       const aiEpA = await getSetting('ai_endpoint');
       const aiModelA = await getSetting('ai_model');
       const aiKeyA = await getSetting('ai_api_key');
-      return bot.sendMessage(chatId, '🛠 <b>Admin Panel</b>', { parse_mode: 'HTML', reply_markup: adminPanelKeyboard(libsimpan, aiEpA, aiModelA, aiKeyA) });
+      return bot.sendMessage(chatId, '🛠 <b>Admin Panel</b>', { parse_mode: 'HTML', reply_markup: _adminHandlers.adminPanelKeyboard(libsimpan, aiEpA, aiModelA, aiKeyA) });
     }
   }
 
@@ -2647,7 +2624,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     const aiKey2 = await getSetting('ai_api_key');
     return bot.sendMessage(chatId, `💾 <b>Simpan ke Library:</b> ${status}\n\nSaat ${isOn ? 'ON' : 'OFF'}: ${isOn ? 'semua part yang terkirim otomatis masuk library' : 'video tidak disimpan ke library'}`, {
       parse_mode: 'HTML',
-      reply_markup: adminPanelKeyboard(isOn, aiEp2, aiModel2, aiKey2),
+      reply_markup: _adminHandlers.adminPanelKeyboard(isOn, aiEp2, aiModel2, aiKey2),
     });
   }
 
@@ -4475,7 +4452,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       `💾 <b>Simpan ke Library:</b> ${status}\n\nSaat ${isOn ? 'ON' : 'OFF'}: ${isOn ? 'semua part yang terkirim otomatis masuk library' : 'video tidak disimpan ke library'}`,
       {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-        reply_markup: adminPanelKeyboard(isOn, aiEp, aiModel, aiKey),
+        reply_markup: _adminHandlers.adminPanelKeyboard(isOn, aiEp, aiModel, aiKey),
       }
     ).catch(() => {});
   }

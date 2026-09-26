@@ -419,7 +419,10 @@ t('anti-drift: admin panel punya tombol Vidoy Links & refreshVidoyLink ada', () 
   const fsx = require('fs');
   const botSrc = fsx.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
   const adminSrc = fsx.readFileSync(path.join(__dirname, '..', 'handlers', 'admin.js'), 'utf8');
-  assert.ok(botSrc.includes("act:vidoy_links'"), 'tombol panel harus ada');
+  // Sumber kebenaran tunggal: keyboard admin panel hanya di handlers/admin.js
+  assert.ok(adminSrc.includes("act:vidoy_links'"), 'tombol panel harus ada di handlers/admin.js');
+  assert.ok(!/^function adminPanelKeyboard\(/m.test(botSrc), 'duplikat adminPanelKeyboard di bot.js harus dihapus');
+  assert.ok(botSrc.includes('_adminHandlers.adminPanelKeyboard('), 'bot.js harus memakai keyboard dari handler');
   assert.ok(botSrc.includes("act === 'vidoy_link_all'"), 'routing refresh semua');
   assert.ok(botSrc.includes("act.startsWith('vidoy_link_one:')"), 'routing refresh satu');
   assert.ok(adminSrc.includes('async function handleVidoyLinks'), 'handler panel');

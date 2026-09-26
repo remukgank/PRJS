@@ -3,6 +3,7 @@
 //        getSetting, setSetting, sendInvoiceFn? } — lihat catatan di bawah.
 // Tidak ada require('../bot') — cegah cyclical (pola E4/E5a/E5b).
 const { logger } = require('../logger');
+const BTN = require('../lib/btn');
 const { getSetting, setSetting, listRecentVidoyUploads, updateVidoyLink } = require('../db');
 const Vidoy = require('../vidoy-uploader');
 const { execFile } = require('child_process');
@@ -27,20 +28,19 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
   const keyCount = aiKey ? aiKey.split(',').filter(Boolean).length : 0;
   const keyEmoji = keyCount ? '✅' : '❌';
   const keyLabel = keyCount ? (keyCount > 1 ? `${keyCount} keys` : 'SET') : 'OFF';
-  return {
-    inline_keyboard: [
-      [{ text: `💾 Simpan ke Library: ${emoji} ${status}`, callback_data: 'act:lib_toggle' }],
-      [{ text: `🤖 AI Endpoint: ${epEmoji} ${epShort}`, callback_data: 'act:ai_endpoint' }],
-      [{ text: `🔑 AI Key: ${keyEmoji} ${keyLabel}`, callback_data: 'act:ai_key' }],
-      [{ text: `🧠 AI Model: ${modelEmoji} ${modelLabel}`, callback_data: 'act:ai_model' }],
-      [{ text: '🌐 Domain Vidara', callback_data: 'act:vidara_domain' }],
-      [{ text: '🗂 Vidoy Links', callback_data: 'act:vidoy_links' }],
-      [{ text: '📚 Cari Drama/Anime', callback_data: 'act:lib_search' }],
-      [{ text: '📊 Status Server', callback_data: 'act:status' }],
-      [{ text: '⭐ Cek Saldo Stars', callback_data: 'act:balance' }],
-      [{ text: '⬅️ Kembali', callback_data: 'act:main_menu' }],
-    ],
-  };
+  // Toggle ON = hijau, OFF = merah supaya statusnya terbaca langsung dari warna.
+  return BTN.kb([
+    [BTN.btn(`💾 Simpan ke Library: ${emoji} ${status}`, 'act:lib_toggle', libSimpanOn ? 'success' : 'danger')],
+    [BTN.nav(`🤖 AI Endpoint: ${epEmoji} ${epShort}`, 'act:ai_endpoint')],
+    [BTN.nav(`🔑 AI Key: ${keyEmoji} ${keyLabel}`, 'act:ai_key')],
+    [BTN.nav(`🧠 AI Model: ${modelEmoji} ${modelLabel}`, 'act:ai_model')],
+    [BTN.nav('🌐 Domain Vidara', 'act:vidara_domain')],
+    [BTN.nav('🗂 Vidoy Links', 'act:vidoy_links')],
+    [BTN.btn('📚 Cari Drama/Anime', 'act:lib_search', 'primary')],
+    [BTN.nav('📊 Status Server', 'act:status')],
+    [BTN.nav('⭐ Cek Saldo Stars', 'act:balance')],
+    [BTN.nav('⬅️ Kembali', 'act:main_menu')],
+  ]);
 }
 
 function vipPaymentRows(kind) {
@@ -185,11 +185,10 @@ async function handleVidoyLinks({ chatId, msgId, query }) {
     const cap = r.tg_message_id ? '📌' : '—';
     return `${i + 1}. ${alive} <b>${esc((r.title || r.media_key).slice(0, 34))}</b> · ${r.kind} Ep ${range}\n    <code>${esc(shortLink(r.link))}</code> · caption:${cap}`;
   });
-  const keyboard = rows.map((r, i) => [{
-    text: `🔄 Perbarui #${i + 1}`,
-    callback_data: `act:vidoy_link_one:${recordToken(r)}`,
-  }]);
-  keyboard.push([{ text: '🔄 Perbarui Semua', callback_data: 'act:vidoy_link_all' }]);
+  const keyboard = rows.map((r, i) => [
+    BTN.btn(`🔄 Perbarui #${i + 1}`, `act:vidoy_link_one:${recordToken(r)}`, 'primary'),
+  ]);
+  keyboard.push([BTN.btn('🔄 Perbarui Semua', 'act:vidoy_link_all', 'primary')]);
   keyboard.push([{ text: '⬅️ Kembali', callback_data: 'act:admin_panel' }]);
   return (msgId
     ? _ctx.bot.editMessageText(`🗂 <b>Vidoy Links</b> (terbaru)\n\n${lines.join('\n')}`, {
