@@ -108,5 +108,15 @@ Dikunci oleh `scraper/tests/test-media-contract.js`:
 - **Bahasa Indonesia**, ringkas. Jangan panjang-panjang, jangan mengulang.
 - Kalau tidak yakin → tanya, jangan asal kerjakan.
 - Sumber kebenaran API = `https://core.telegram.org/bots/api` (terbaru).
-- Jangan pernah mencetak nilai kredensial (`FOMO_DRAMA_PAT`, token bot, dll).
-  Token juga tidak boleh tersimpan di `.git/config` remote.
+- Jangan pernah mencetak nilai kredensial (`FOMO_DRAMA_PAT`, `PRJS_PAT`, token
+  bot, dll). Token juga tidak boleh tersimpan di `.git/config` remote.
+- **Kredensial GitHub PRJS = `PRJS_PAT`** (environment, bukan `.env`). Pakai itu
+  untuk `git push` dan GitHub API — **jangan** mengambil token dari URL remote.
+  Remote harus tetap `https://github.com/remukgank/PRJS.git` (tanpa kredensial);
+  auth git disuplai credential helper yang membaca `$PRJS_PAT`:
+  ```bash
+  git config credential.helper \
+    '!f() { test -n "$PRJS_PAT" && echo "username=x-access-token" && echo "password=$PRJS_PAT"; }; f'
+  ```
+  Kalau `gh auth login` sudah dipakai, utamakan `gh`. Verifikasi setelah
+  mengganti remote: `git ls-remote --tags origin` (memaaksa auth).
