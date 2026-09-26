@@ -582,3 +582,40 @@ lama ternyata masih hidup sebagai proses liar di luar pm2 (PID 219) →
   `test-html-safety` 22, `test-caption-html-escape` 6, `test-anime-topic-router` 18,
   `test-libmenu-grid` 14, `test-sam-*` exit 0 — 0 fail.
 - PM2 restart 01:30:21, `Bot running`, tanpa 409.
+
+## 20. Skip episode tidak bekerja → duplikat Telegram (26 Sep 2026, 02:31–02:37)
+
+### Gejala
+`hokireceh` menekan `sam_allgo:vyt:2` (Vidoy + TG). Video terkirim ke
+**topic Anime (threadId 655)** ✓, tapi:
+- **tidak ada** log `Vidoy upload sukses`
+- `vidoy_uploads` (anime) tetap **60 record**
+- pointer berubah: part 1 msg#5674 → **#5771**, part 2 → #5772
+
+Artinya episode **1–60 terkirim ulang ke Telegram** (duplikat), sementara
+upload Vidoy dilewati (karena record ada). Persis yang tidak boleh terjadi.
+
+### Akar masalah
+`animeDoneMap()` membaca `r.tg_chat_id` / `r.tg_message_id`, tapi
+`listVidoyUploads()` **tidak mengambil kedua kolom itu** di SQL-nya
+(hanya kind, part, ep_start/end, title, folder_url, link, dashboard, provider,
+caption, uploaded_at). Akibatnya `hasTg` selalu `false` →
+`st.link && st.hasTg` selalu salah → tidak ada episode yang dilewati.
+
+Sudah terduga saat simulasi karena simulasi memakai **mock**, bukan
+`listVidoyUploads` asli — kelemahan tes saya.
+
+### Kerugian
+±20 pesan Telegram duplikat (part 1–20 sudah terkirim ulang, msg#5771+).
+Tidak ada duplikat di **Vidoy** (uploadSingle tetap skip). Pointer lama
+(msg#5674–5733) jadi orphan — pesan lama masih ada di topic tapi tak terlacak.
+
+### Perbaikan
+- `listVidoyUploads` sekarang mengambil `tg_chat_id, tg_message_id`.
+- Uji nyata ke DB: 60 record → **dilewati 60 · diproses 160** ✓
+- Bot dihentikan saat ditemukan agar duplikat tidak bertambah.
+- Tes baru mengunci: `listVidoyUploads` WAJIB mengambil kedua kolom pointer,
+  dan `animeDoneMap` WAJIB menghitung `hasTg` dari keduanya.
+
+### Verifikasi
+`test-vidoy-uploader` 107 pass, `test-media-contract` 10 pass — 0 fail.

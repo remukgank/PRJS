@@ -356,7 +356,11 @@ async function listRecentVidoyUploads(limit = 20) {
 async function listVidoyUploads(mediaKey, kind = 'drama') {
   try {
     const r = await pool.query(
-      `SELECT kind, part, ep_start, ep_end, title, folder_url, link, dashboard, provider, caption, uploaded_at
+      // tg_chat_id/tg_message_id WAJIB ikut: animeDoneMap memakainya untuk
+      // menentukan episode yang sudah terkirim ke Telegram. Tanpa kolom ini
+      // hasTg selalu false → episode terkirim ulang (duplikat).
+      `SELECT kind, part, ep_start, ep_end, title, folder_url, link, dashboard, provider, caption,
+              tg_chat_id, tg_message_id, uploaded_at
          FROM vidoy_uploads WHERE media_key = $1 AND kind = $2 ORDER BY part`,
       [mediaKey, kind]
     );

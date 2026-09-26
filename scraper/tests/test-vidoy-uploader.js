@@ -477,6 +477,33 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+t('KRITIS: listVidoyUploads WAJIB mengambil tg_chat_id & tg_message_id', () => {
+  const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  const i = src.indexOf('async function listVidoyUploads');
+  if (i < 0) throw new Error('listVidoyUploads tidak ada');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  for (const col of ['tg_chat_id', 'tg_message_id']) {
+    if (!body.includes(col)) {
+      throw new Error(`listVidoyUploads tidak mengambil ${col} → animeDoneMap hasTg selalu false → episode terkirim ulang (duplikat Telegram)`);
+    }
+  }
+  const m = body.match(/SELECT[\s\S]*?FROM vidoy_uploads/);
+  if (m && !/tg_chat_id[\s\S]*tg_message_id/.test(m[0]) && !/tg_message_id[\s\S]*tg_chat_id/.test(m[0])) {
+    throw new Error('kedua kolom pointer harus ada di SELECT');
+  }
+});
+
+t('KRITIS: animeDoneMap bergantung pada kolom pointer dari DB (bukan menebak)', () => {
+  const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const i = BOT.indexOf('async function animeDoneMap');
+  const body = BOT.slice(i, BOT.indexOf('\n}', i));
+  if (!/hasTg:\s*!!\(r\.tg_chat_id && r\.tg_message_id\)/.test(body)) {
+    throw new Error('hasTg harus dihitung dari r.tg_chat_id && r.tg_message_id');
+  }
+  if (!/listVidoyUploads\(String\(mediaKey\), 'anime'\)/.test(body)) throw new Error('harus lewat listVidoyUploads');
+});
+
+
 // ── REGRESSION: identifier yang dipakai WAJIB terdefinisi (objek & fungsi) ──
 t('KRITIS: tidak ada identifier tak-terdefinisi di jalur batch anime', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
