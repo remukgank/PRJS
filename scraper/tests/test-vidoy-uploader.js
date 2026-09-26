@@ -477,6 +477,37 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: jalur Vidoy harus bisa unduh file gofile (header auth) ───────
+t('vidaraService.downloadTo mengirim header auth gofile', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('async function downloadTo');
+  if (i < 0) throw new Error('downloadTo tidak ada');
+  const body = V.slice(i, V.indexOf('\n}', i));
+  if (!/GOFILE_TOKEN/.test(body)) throw new Error('header auth gofile tidak ikut');
+  if (!/Authorization/.test(body) || !/Bearer/.test(body)) throw new Error('Authorization: Bearer tidak dikirim');
+  if (!/gofile\\\.io/.test(body)) throw new Error('deteksi host gofile tidak ada');
+});
+
+t('konsistensi: jalur Telegram dan jalur Vidoy sama-sama pakai Authorization gofile', () => {
+  const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');
+  const n = (D.match(/Authorization':\s*`Bearer \$\{gofileToken\}`/g) || []).length;
+  if (n < 1) throw new Error('jalur Telegram (handlers/download.js extraHeaders) tidak mengirim Authorization gofile');
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  if (!/Authorization = `Bearer \$\{gofileTok\}`/.test(V)) {
+    throw new Error('jalur Vidoy (vidaraService.downloadTo) tidak mengirim Authorization gofile');
+  }
+});
+
+t('anti-regresi: gofile HARUS pakai header auth, tanpa itu dapat HTML 3 KB', () => {
+  // Fakta empiris (26 Sep 2026): tanpa Authorization → 3358 byte
+  // "Gofile needs JavaScript to run"; dengan Authorization → MP4 asli.
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  if (!/headers\.Referer\s*=\s*'https:\/\/gofile\.io\//.test(V)) {
+    throw new Error('Referer gofile ikut hilang — store host bisa menolak');
+  }
+});
+
+
 // ── REGRESSION: resolveDirectUrl harus baca field yang BENAR-BENAR dikembalikan provider ──
 t('gofile: dispatcher baca file.url (bukan file.link)', () => {
   const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');

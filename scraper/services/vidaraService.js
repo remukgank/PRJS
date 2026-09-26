@@ -17,7 +17,21 @@ function rangeLabel(a, b) { return `${pad(a)}-${pad(b)}`; }
 async function downloadTo(url, destPath) {
   const lib = url.startsWith('https:') ? https : http;
   return new Promise((resolve, reject) => {
-    const req = lib.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+    // Toko gofile (store*.gofile.io) HANYA melayani file bilaAuthorization
+    // premium ikut. Tanpa itu balasannya halaman HTML "needs JavaScript"
+    // (~3 KB) — botNlalu meng-upload HTML itu ke Vidoy dan ditolak.
+    // Jalur Telegram (handlers/download.js) sudah mengirim header ini lewat
+    // extraHeaders; jalur Vidoy lewat fungsi ini belum.
+    const gofileTok = (process.env.GOFILE_TOKEN || '').trim();
+    const isGofileStore = /^((cold|store|file)[\w-]*)\.gofile\.io$/i.test(
+      (() => { try { return new URL(url).hostname; } catch { return ''; } })()
+    );
+    const headers = { 'User-Agent': 'Mozilla/5.0' };
+    if (isGofileStore) {
+      headers.Referer = 'https://gofile.io/';
+      if (gofileTok) headers.Authorization = `Bearer ${gofileTok}`;
+    }
+    const req = lib.get(url, { headers }, (res) => {
       if (res.statusCode >= 400) {
         res.resume();
         return reject(new Error(`download HTTP ${res.statusCode}`));
