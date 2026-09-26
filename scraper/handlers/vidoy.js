@@ -18,9 +18,14 @@ let _ctx = null;
 function initVidoy(ctx) {
   _ctx = ctx;
 }
-function ensureCtx(caller) {
-  if (!_ctx || !_ctx.bot) throw new Error(`handlers/vidoy belum di-init — panggil initVidoy({ bot, ... }) dulu (dari ${caller})`);
-}
+  function ensureCtx(caller) {
+    if (!_ctx || !_ctx.bot) throw new Error(`handlers/vidoy belum di-init — panggil initVidoy({ bot, ... }) dulu (dilakukan oleh ${caller || 'pemanggil'})`);
+  }
+
+  /** Hostname aman untuk log — URL bisa berisi token, jangan dicetak utuh. */
+  function hostOf(u) {
+    try { return new URL(u).hostname; } catch { return String(u || '').slice(0, 40); }
+  }
 
 function buildResolveVideoUrl(session) {
   const { subdomain, id, slug, lang } = session;
@@ -233,9 +238,14 @@ async function actionAnimeEpisode(chatId, opts) {
   const out = { vidoy: null, vidara: null, tg: false, error: null };
   try {
     fs.mkdirSync(outDir, { recursive: true });
-    const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
-      if (!fs.existsSync(destPath)) {
+      const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
+      const logCtx = { chatId, target, ep, title: vidoyTitle };
+      if (fs.existsSync(destPath)) {
+        // File sudah ada → jangan unduh ulang (Vidoy: dilarang duplikat).
+        logger.info({ ...logCtx, mb: +(fs.statSync(destPath).size / 1048576).toFixed(1) }, 'skip download — file sudah ada');
+      } else {
         p.update('⬇️ download');
+        logger.info({ ...logCtx, host: hostOf(directUrl), resolveFresh: typeof opts.resolveFreshDirectUrl === 'function' }, 'mulai download episode');
         // resolveFresh WAJIB re-resolve, bukan memakai ulang directUrl: beberapa
         // provider (gdriveplayer) memberi URL ber-token yang berubah tiap resolve
         // dan cepat kedaluwarsa. Retry dengan URL sama = MUSTAHILH (percobaan
@@ -245,8 +255,10 @@ async function actionAnimeEpisode(chatId, opts) {
           : async () => directUrl;
         const ok = await ensureMp4(directUrl, destPath, {
           resolveFresh: async () => (await reResolve()) || directUrl,
+          logCtx,
         });
         if (!ok) throw new Error('gagal mengunduh video');
+        logger.info({ ...logCtx, mb: +(fs.statSync(destPath).size / 1048576).toFixed(1) }, 'download selesai');
       }
     if (needVidoy) {
       p.update('📤 upload Vidoy');

@@ -14,12 +14,31 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 function rangeLabel(a, b) { return `${pad(a)}-${pad(b)}`; }
 
-async function downloadTo(url, destPath) {
+const STALL_MS = 20000;    // 0 byte selama ini → anggap mati, jangan nunggu 3 menit
+const PROGRESS_MS = 10000; // interval log progres
+
+/**
+ * Unduh URL → destPath.
+ *
+ * BUG YANG PERNAH TERJADI (26 Sep 2026): server memotong transfer di tengah,
+ * `res` stream mati, tapi kodenya hanya mendengar `out.on('finish')` /
+ * `req.on('error')`. Hasilnya: promise tidak pernah settle, `await` menggantung
+ * selamanya — file beku ratusan detik, TANPA log error apa pun, progress bar
+ * terus jalan seolah-olah normal. `req.setTimeout(180000)` pun berhenti
+ * berguna begitu socket-nya mati.
+ *
+ * Sekarang: `res.on('error'|'aborted'|'close')` wajib menolak, plus watchdog
+ * stall 20 dtk yang mengukur byte sungguhan (bukan aktivitas socket), resume
+ * via `Range` supaya retry tidak mulai dari nol, dan log progres tiap 10 dtk
+ * supaya "macet" dan "jalan" bisa dibedakan dari log.
+ */
+async function downloadTo(url, destPath, opts = {}) {
   const lib = url.startsWith('https:') ? https : http;
+  const logCtx = opts.logCtx || {};
   return new Promise((resolve, reject) => {
-    // Toko gofile (store*.gofile.io) HANYA melayani file bilaAuthorization
+    // Toko gofile (store*.gofile.io) HANYA melayani file bila Authorization
     // premium ikut. Tanpa itu balasannya halaman HTML "needs JavaScript"
-    // (~3 KB) — botNlalu meng-upload HTML itu ke Vidoy dan ditolak.
+    // (~3 KB) — bot lalu meng-upload HTML itu ke Vidoy dan ditolak.
     // Jalur Telegram (handlers/download.js) sudah mengirim header ini lewat
     // extraHeaders; jalur Vidoy lewat fungsi ini belum.
     const gofileTok = (process.env.GOFILE_TOKEN || '').trim();
@@ -31,22 +50,94 @@ async function downloadTo(url, destPath) {
       headers.Referer = 'https://gofile.io/';
       if (gofileTok) headers.Authorization = `Bearer ${gofileTok}`;
     }
-    const req = lib.get(url, { headers }, (res) => {
+
+    // Resume: file parsial dari percobaan sebelumnya → minta sisanya saja.
+    let have = 0;
+    try { if (fs.existsSync(destPath)) have = fs.statSync(destPath).size; } catch {}
+    if (have > 0) headers.Range = `bytes=${have}-`;
+
+    let req = null;
+    let out = null;
+    let settled = false;
+    let got = have;
+    let total = null;
+    let logBytes = have;
+    let lastAt = Date.now();
+    let lastLogAt = Date.now();
+
+    const stop = () => { if (watchdog) clearInterval(watchdog); };
+    const fail = (e) => {
+      if (settled) return;
+      settled = true;
+      stop();
+      try { req && req.destroy(); } catch {}
+      try { out && out.destroy(); } catch {}
+      reject(e);
+    };
+    const ok = () => { if (settled) return; settled = true; stop(); resolve(destPath); };
+
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      if (now - lastAt >= STALL_MS) {
+        return fail(new Error(`download macet — 0 byte selama ${Math.round((now - lastAt) / 1000)} dtk`));
+      }
+      if (now - lastLogAt >= PROGRESS_MS) {
+        const dt = (now - lastLogAt) / 1000;
+        const speed = dt > 0 ? (got - logBytes) / dt : 0;
+        lastLogAt = now;
+        logBytes = got;
+        const eta = total && speed > 0 ? Math.max(0, Math.round((total - got) / speed)) : null;
+        logger.info({
+          ...logCtx,
+          mb: +(got / 1048576).toFixed(1),
+          totalMb: total ? +(total / 1048576).toFixed(1) : null,
+          kbps: Math.round(speed / 1024),
+          etaSec: eta,
+        }, 'download progres');
+      }
+    }, 1000);
+
+    req = lib.get(url, { headers }, (res) => {
+      lastAt = Date.now();
+
       if (res.statusCode >= 400) {
         res.resume();
-        return reject(new Error(`download HTTP ${res.statusCode}`));
+        return fail(new Error(`download HTTP ${res.statusCode}`));
       }
       if (res.statusCode >= 300 && res.statusCode < 400) {
         res.resume();
-        return downloadTo(res.headers.location, destPath).then(resolve, reject);
+        return downloadTo(res.headers.location, destPath, opts).then(() => ok(), (e) => fail(e));
       }
-      const out = fs.createWriteStream(destPath);
+
+      // 416 = range tidak bisa dipenuhi → file sudah lengkap, biarkan divalidasi.
+      if (have > 0 && res.statusCode === 416) {
+        res.resume();
+        return ok();
+      }
+      // 206 = resume diterima. Selain itu server mengabaikan Range → tulis ulang
+      // dari nol (kalau tetap menempel, hasilnya file campur → corrupt).
+      const append = have > 0 && res.statusCode === 206;
+      if (have > 0 && !append) { have = 0; got = 0; logBytes = 0; }
+
+      const cr = /bytes\s+\d+-\d+\/(\d+)/.exec(res.headers['content-range'] || '');
+      if (cr) total = Number(cr[1]);
+      else if (res.headers['content-length']) {
+        const n = Number(res.headers['content-length']);
+        if (Number.isFinite(n)) total = (append ? got : 0) + n;
+      }
+
+      out = fs.createWriteStream(destPath, { flags: append ? 'a' : 'w' });
+      out.on('error', (e) => fail(e));
+      res.on('data', (chunk) => { lastAt = Date.now(); got += chunk.length; });
+      res.on('error', (e) => fail(new Error(`download terputus: ${e.message}`)));
+      res.on('aborted', () => fail(new Error('download terputus — koneksi dibatalkan')));
+      res.on('close', () => {
+        if (!settled && !res.complete) fail(new Error('download terputus — koneksi ditutup sebelum selesai'));
+      });
+      out.on('finish', () => out.close(() => ok()));
       res.pipe(out);
-      out.on('finish', () => out.close(() => resolve(destPath)));
-      out.on('error', reject);
     });
-    req.setTimeout(180000, () => req.destroy(new Error('download timeout')));
-    req.on('error', reject);
+    req.on('error', (e) => fail(e));
   });
 }
 
@@ -240,7 +331,7 @@ async function ensureMp4(url, destPath, opts = {}) {
           });
         });
       } else {
-        await downloadTo(url, destPath);
+        await downloadTo(url, destPath, { logCtx });
       }
       assertLooksLikeVideo(destPath);
 
@@ -489,6 +580,7 @@ async function uploadToVidara(opts) {
 
 module.exports = {
   detectVideoContainer,
+  downloadTo,
   isIosCompatible,
   reencodeForIos,
   assertLooksLikeVideo, uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };

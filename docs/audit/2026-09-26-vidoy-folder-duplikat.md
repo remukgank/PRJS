@@ -651,3 +651,62 @@ re-resolve provider URL → dapat token baru.
 ### Catatan soal kecepatan
 Sisa lamaanya itu **batas server**, bukan kode: 57 MB butuh 205 dtk
 (±280 KB/s) pada percobaan ini, tergantung kondisi (200-900 KB/s terukur).
+
+## S. downloadTo gantung selamanya saat koneksi dipotong (27 Sep 2026)
+
+### Gejala
+1 episode Shippuuden jalan 5+ menit tanpa update apa pun. File
+`downloads/anime/Naruto_Shippuuden/ep1/Naruto Shippuuden — Ep 01.mp4` membeku
+di 26.377.081 byte. Progress bar `⬇️ download` terus berputar seolah normal.
+
+### Bukti (bukan tebakan)
+- file diam **251 detik**, mtime tidak berubah
+- koneksi TCP ke `static.70.94.47.78` **sudah hilang** dari `lsof` (putus)
+- fd tulis `01.mp4` **masih terbuka** milik pid bot
+- **tidak ada satu baris log error/retry pun**
+- tidak ada proses ffmpeg/aria2c
+- CPU 0,6% (diam menunggu)
+
+### Root cause
+`downloadTo` (services/vidaraService.js) hanya memasang:
+```js
+out.on('finish', ...)
+out.on('error', reject)
+req.on('error', reject)
+req.setTimeout(180000, ...)
+```
+**`res.on('error' | 'aborted' | 'close')` tidak dipasang.** Saat server
+memotong transfer, stream `res` mati tanpa `finish` dan tanpa error pada `req`
+→ promise tidak pernah settle → `await downloadTo()` menggantung selamanya.
+`req.setTimeout(180000)` = 180 detik (terlalu lama) dan ikut mati begitu
+socket-nya putus.
+
+### Perbaikan
+1. `res.on('error')`, `res.on('aborted')`, `res.on('close')` dengan cek
+   `res.complete` → **reject** ("download terputus — ...")
+2. **Watchdog stall**: ukur byte sungguhan, 0 byte selama **20 detik** → reject
+   (`download macet — 0 byte selama N dtk`), bukan mengandalkan aktivitas socket
+3. **Resume** `Range: bytes=N-`; server balas 206 → lanjut menempel; balas 200 →
+   tulis ulang dari nol (mencegah file campur); balas 416 → file sudah utuh
+4. **Log progres tiap 10 dtk**: `mb`, `totalMb`, `kbps`, `etaSec` → "macet" dan
+   "jalan" bisa dibedakan dari log
+5. fd tulis ikut `destroy()` saat gagal (tidak bocor)
+6. `actionAnimeEpisode` log `mulai download episode` (host, target, ep) /
+   `skip download — file sudah ada` / `download selesai`; `downloadTo` ikut
+   `logCtx` dari `ensureMp4`
+
+### Verifikasi FUNGSIONAL (server HTTP lokal sungguhan, bukan mock)
+`scraper/tests/test-download-stall.js` — **7 pass / 0 fail**:
+| kasih | hasil |
+|---|---|
+| unduh normal 2 MB | isi identik |
+| **koneksi dipotong di tengah** | MENOLAK <15 dtk (dulu: gantung) |
+| **server diam sesudah header** | tolak 15–26 dtk (watchdog 20s) |
+| file parsial + Range 206 | hasil utuh, identik |
+| server abaikan Range (200) | tulis ulang, tidak campur |
+| HTTP 404 | tolak dengan kode status |
+| fd setelah gagal | tidak bocor |
+
+Suite penuh: **197 pass / 0 fail** (test-vidoy-uploader 157, media-contract 10,
+btn-style 10, caption-html-escape 6, sam-picker 7, download-stall 7).
+`downloadTo` kini ikut di-export agar bisa diuji nyata.
