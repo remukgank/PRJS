@@ -18,25 +18,45 @@ dramaFolderPath(title) → ["VVIP AKSES", "DATABASE", "DRAMA", title]   (vidoy-u
 Dipakai oleh `resolveFolder()` → `Vidoy.getOrCreateFolderPath(segments)`
 (`scraper/services/vidoyService.js:71-75`).
 
-### A2. Folder yang benar-benar dipakai 113 file anime
-`root/Naruto Kecil` = id `7pgok84sn88` — **satu level di atas** path yang
-dijamin di A1.
-Bukti: kolom `folder_id` pada baris `vidoy_uploads` episode 85-113 menunjuk
-id tersebut, dan `fetchFolders()` (listing root) memunculkan `Naruto Kecil`
-sebagai anak langsung root.
+### A2. ~~Folder yang benar-benar dipakai 113 file anime~~ → **SALAH, SUDAH DIKOREKSI**
+Klaim lama: "`root/Naruto Kecil` = id `7pgok84sn88`, satu level di atas A1".
+**Klaim ini salah.** Bukti yang salah: `fetchFolders()` tanpa argumen ternyata
+mengembalikan **daftar semua folder di akun**, bukan hanya anak root.
 
-### A3. Isi root Vidoy (7 item)
+### A3. ~~Isi root Vidoy~~ → **SALAH, SUDAH DIKOREKSI**
+Klaim lama: "`ANIME`/`DATABASE`/`DRAMA` di root = residue, path bersarang tidak
+dipakai". **Salah** — semuanya memang ada, tapi tidak di root.
+
+### A2b. STRUKTUR FOLDER YANG BENAR (terbukti, 26 Sep 2026 ~10:40 UTC)
+Ditelusuri lewat halaman publik `https://vidkud.com/f/<id>`, yang **server-rendered**
+lengkap dengan link "← Back" ke folder induk:
+
 ```
-bbwmuslimdalia
-VVIP AKSES        ← parent yang seharusnya dipakai
-DATABASE          ← ada juga di root (residue)
-ANIME             ← ada juga di root (residue)
-Naruto Kecil      ← 113 file anime KITA, salah tempat
-DRAMA             ← ada juga di root (residue)
-Terobsesi Padanya Siang dan Malam  ← 7 file drama KITA, salah tempat
+VVIP AKSES                 jv0pr371k5q
+└── DATABASE               re6biy4v4dn
+    ├── ANIME              0kemjvcuq8e
+    │   └── Naruto Kecil   7pgok84sn88   ← 113+ file anime
+    └── DRAMA              6z5d841fxym
+        └── Terobsesi…     nfyc0f69u8d   ← 7 file drama
 ```
-Kesimpulan: path bersarang `VVIP AKSES/DATABASE/ANIME/…` **tidak dipakai**;
-`ANIME`/`DATABASE`/`DRAMA` yang muncul di root adalah sisa percobaan path.
+Rantai "Back": Naruto Kecil → ANIME → DATABASE → VVIP AKSES.
+Artinya `folder_id = 7pgok84sn88` **benar** dan sesuai `animeFolderPath()`.
+→ **Tidak ada bug path folder.** H1 gugur.
+
+### A3b. Cross-check 20 file yang terlihat vs DB
+Halaman publik folder **keras dibatasi 20 item** (parameter `?page=` diabaikan,
+tidak ada paginasi di HTML). 20 file yang terlihat = Ep 1-10 dan Ep 100-109.
+
+| Cek | Hasil |
+|---|---|
+| File di folder | 20 |
+| Cocok dengan `link` di `vidoy_uploads` | **20 / 20** |
+| File asing / yatim | **tidak ada ✓** |
+| Nomor episode duplikat | **tidak ada ✓** |
+| Folder drama | 7 file, cocok 7/7 dengan DB ✓ |
+
+**Batas evidence:** hanya 20 dari 113+ file yang bisa dilihat. File ke-21 ke atas
+belum terverifikasi.
 
 ### A4. DB Naruto Kecil BERSIH — tidak ada duplikat di sisi kita
 - 113 baris, 113 `part` unik, 113 `link` unik
@@ -77,50 +97,48 @@ Setiap episode yang dilewati akan tercatat `folder_id` NULL (lihat A6).
 
 ## B. HIPOTESIS — BELUM terbukti. Jangan jadikan fakta.
 
-**H1 — Dua lokasi, bukan dua kali upload.**
-File yang sama ada di `VVIP AKSES/DATABASE/ANIME/Naruto Kecil` **dan**
-`root/Naruto Kecil`. Itu sebab duplikat.
-Status: **belum bisa dibuktikan** — tidak ada API untuk melihat isi folder
-(lihat C1).
+**H1 — Dua lokasi, bukan dua kali upload.** → **GUGUR (salah).**
+Ditemukan struktur folder benar di A2b: hanya ada SATU folder
+`VVIP AKSES/DATABASE/ANIME/Naruto Kecil`. Tidak ada duplikasi lokasi.
 
-**H2 — Upload ulang yang tidak tercatat.**
+**H2 — Upload ulang yang tidak tercatat.** → **MASIH MAYA BERLAKU.**
 Kalau episode ter-upload 2×, `ON CONFLICT` menimpa `link` sehingga file lama
 menjadi orphan yang tidak dirujuk DB. Mechanism yang mungkin:
 - (a) 2 instance bot berjalan bersamaan (ada riwayat `409 Conflict` di repo ini)
 - (b) dedup buta saat DB error: `listVidoyUploads(...).catch(() => [])`
   di `vidoyService.js:236` → `existing` undefined → upload ulang
 
-Status: **belum ada bukti** bahwa H2 terjadi.
+Status: 20 file yang terlihat tidak menunjukkan yatim, tapi hanya 20 dari 113+
+yang bisa diperiksa (lihat A3b). Jadi H2 **belum tersingkir**.
 
 ---
 
 ## C. Batasan yang diketahui
 
-- **C1.** Tidak bisa list isi folder Vidoy. `fetchFolders()` tanpa argumen
-  hanya listing root; `/folder/<id>` membalas HTML; `/folders/<id>`,
-  `/folder/files/<id>`, `/files?folder=<id>` → 404.
-  `getOrCreateFolderPath()` **bisa** dipanggil, tapi berk efek samping
-  membuat folder baru → jangan dipakai hanya untuk probing.
+- **C1. ~~Tidak bisa list isi folder~~ → SUDAH TERATASI.**
+  Solusi: halaman publik `https://vidkud.com/f/<folder_id>` di-render server-side
+  dan memuat nama file + link "← Back" ke folder induk.
+  Endpoint yang gagal: `/folder/<id>` (HTML app), `/folders/<id>`,
+  `/folder/files/<id>`, `/files?folder=<id>` (404), `/videos*` (HTML).
+  **Batas keras: hanya 20 item per folder.** Parameter `?page=` diabaikan dan
+  tidak ada kontrol paginasi di HTML. Untuk melihat >20 file, andalkan dashboard.
 - **C2.** Tidak boleh mengakses `fomo-drama/` tanpa perintah eksplisit user.
-- **C3.** `vidoy-uploads.folder_id` tidak bisa dipetakan ke file spesifik,
-  karena tabel tidak menyimpan id file Vidoy (hanya `link`).
+- **C3.** `vidoy_uploads` tidak menyimpan id file Vidoy, hanya `link`. Filecode
+  bisa diturunkan dari link: `https://vski.cc/e/<filecode>` → `https://vidkud.com/d/<filecode>`.
 
 ---
 
 ## D. Langkah verifikasi — WAJIB sebelum menghapus file di Vidoy
 
-1. **Hitung file di `VVIP AKSES / DATABASE / ANIME / Naruto Kecil`.**
-   Expectasi: 113 file `Naruto Kecil — Ep 01.mp4` … `Ep 113.mp4`.
-
-2. **Hitung file di root `Naruto Kecil`.**
-   Expectasi: 113 file dengan nama yang sama.
-
-3. **Keduaanya 113 → H1 terkonfirmasi**, dan itu yang menyebabkan duplikat.
-   Kalau hanya salah satu yang berisi → bukan H1, kembali ke H2.
-
+1. **Buka `VVIP AKSES/DATABASE/ANIME/Naruto Kecil` di dashboard.**
+   Expectasi: 1 file per episode, nama `Naruto Kecil — Ep NN.mp4`, tanpa nomor
+   episode yang muncul dua kali.
+2. **Cek satu episode yang terlihat di A3b (mis. Ep 1) di dashboard** —
+   filecode-nya harus `voit3jakr51l`, cocok dengan `link` di DB.
+3. **Kalau di dashboard terlihat nomor episode ganda** → H2 terjadi. Cari file
+   mana yang **tidak** ada di `docs/audit/2026-09-26-vidoy-link-naruto-kecil.csv`:
+   itu kandidat orphan.
 4. **Cross-check dengan DB fomo-drama SEBELUM menghapus apa pun.**
-   Daftar link: `docs/audit/2026-09-26-vidoy-link-naruto-kecil.csv`
-   (113 link; 87 episode punya pesan Telegram, 26 tidak).
    ⚠️ Peringatan: `!dell` pernah menghapus **69 pesan Telegram** yang isinya
    link. fomo-drama bisa sudah menyimpan link itu sebelum pesannya dihapus.
    "Tidak ada pointer Telegram" **bukan** bukti aman dihapus.
