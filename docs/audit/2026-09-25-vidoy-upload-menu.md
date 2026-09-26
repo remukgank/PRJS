@@ -815,3 +815,50 @@ yang **tidak tahu-menahu soal Vidoy** — caption-nya tidak pernah mengambil lin
 sumber tunggal `lib/caption`), `test-media-contract` 10, `test-btn-style` 10,
 `test-caption-html-escape` 6, `test-anime-topic-router` 18 — 0 fail,
 `node --check` CLEAN.
+
+## 26. `!dell` sekarang lengkap: hapus library + pesan Telegram, LINK VIDOY DIPERTAHANKAN (26 Sep 2026)
+
+### Diskusi dengan user & hasil trace
+Alur yang diinginkan user:
+```
+!dell <judul> → hapus (library + Telegram), TIDAK menghapus Vidoy
+→ Download Semua: cek Vidoy (ada → skip upload) + cek Telegram (belum → kirim)
+→ caption + link Vidoy yang sudah ada
+```
+Trace menemukan **3 hal**:
+
+| Asumsi | Kenyataan |
+|---|---|
+| `!dell` hapus semua | ❌ `deleteMedia()` hanya `DELETE FROM media` — **`media_parts` tidak dihapus** (bug) |
+| `!dell` hapus pesan Telegram | ❌ **tidak ada** `deleteMessage` di jalur itu (PRJS maupun fomo-drama) |
+| link Vidoy tetap | ✅ `vidoy_uploads` tidak disentuh |
+
+Karena `media_parts` tidak dihapus, episode tetap ditandai "sudah ada" → alur user
+**macet di langkah pertama**.
+
+### Perubahan (A + B + C, disetujui user)
+| | Perubahan |
+|---|---|
+| **A** | `deleteMedia()` sekarang menghapus `media_parts` **dan** `media` (selaras fomo-drama) |
+| **B** | `clearVidoyTelegramPointers(mediaKey, kind)` — `UPDATE … SET tg_chat_id=NULL, tg_message_id=NULL` **tanpa menyentuh `link`** (ATURAN KERAS #1) → episode jadi `🗄` merah = "perlu dikirim" |
+| **C** | `deleteTelegramMessagesRaw()` menghapus pesan dari pointer library **dan** pointer `vidoy_uploads`; jumlah terhapus dilaporkan di pesan konfirmasi. Ditambah `setPartTelegramPointer()` yang menyimpan `chat_id`/`message_id` setiap kali library mengirim part (agar `!dell` bisa menghapusnya ke depan) |
+
+Konfirmasi `!dell` sekarang berbunyi:
+`🗑️ … dihapus dari library (semua part)` + `📨 Pesan Telegram dihapus: N` +
+`🗄 Link Vidoy tetap disimpan: N episode → ditandai 🗄 (perlu kirim ulang ke Telegram)`
+
+### Catatan
+- Pointer library **baru** diisi sejak deploy ini; 147 slug lama belum punya
+  pointer, jadi `!dell` untukJudul lama hanya bisa menghapus pesan yang tercatat
+  di `vidoy_uploads` (jalur Vidoy).
+- `listVidoyTelegramPointers(media.nama, 'anime')` memakai **nama**-judul
+  (`"Naruto Kecil"`) yang sama dengan `media_key` di `vidoy_uploads`.
+
+### Verifikasi
+- Smoke test DB: semua 6 fungsi terdefinisi; pointer Naruto tersedia **69**
+  (mis. part 1 → msg#5771); pointer library 0 (expected, kolom baru).
+- `test-vidoy-uploader` **122 pass** (+4 tes: A, B, C×2), suite lain 0 fail,
+  `node --check` CLEAN.
+- 2 silent no-op tertangkap saat implementasi: helper `deleteTelegramMessagesRaw`
+  dan import `./db` tidak ter-insert → would've `ReferenceError`. Keduanya
+  tertangkap oleh `node --check` + verifikasi import eksplisit.

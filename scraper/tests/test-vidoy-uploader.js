@@ -477,6 +477,53 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── REGRESSION: !dell = hapus library + pesan Telegram, JANGAN link Vidoy ────
+t('A: deleteMedia ikut menghapus media_parts (bukan hanya media)', () => {
+  const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  const i = src.indexOf('async function deleteMedia');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  if (!/DELETE FROM media_parts WHERE media_slug = \$1/.test(body)) {
+    throw new Error('media_parts tidak dihapus → episode tetap ditandai "sudah ada"');
+  }
+  if (!/DELETE FROM media WHERE slug = \$1/.test(body)) throw new Error('media tidak dihapus');
+});
+
+t('B: pointer Telegram vidoy dikosongkan, LINK TETAP ADA', () => {
+  const src = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  const i = src.indexOf('async function clearVidoyTelegramPointers');
+  if (i < 0) throw new Error('clearVidoyTelegramPointers tidak ada');
+  const body = src.slice(i, src.indexOf('\n}', i));
+  if (!/SET tg_chat_id = NULL, tg_message_id = NULL/.test(body)) throw new Error('pointer tidak dikosongkan');
+  if (/SET[^;]*link = NULL/.test(body)) throw new Error('JANGAN kosongkan link (ATURAN KERAS: link Vidoy tidak hilang)');
+  if (!/UPDATE vidoy_uploads SET tg_chat_id = NULL/.test(body)) throw new Error('harus UPDATE (pointer), bukan menghapus record');
+  if (/DELETE FROM vidoy_uploads/.test(body)) throw new Error('tidak boleh DELETE dari vidoy_uploads');
+});
+
+t('C: !dell menghapus pesan Telegram (library + vidoy) dan melaporkannya', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  if (!/async function deleteTelegramMessagesRaw/.test(B)) throw new Error('helper hapus pesan tidak ada');
+  if (!/bot\.deleteMessage\(/.test(B)) throw new Error('tidak memanggil deleteMessage');
+  if (!/deleted\+\+/.test(B)) throw new Error('tidak menghitung yang terhapus');
+  const d = B.slice(B.indexOf('if (pending.part === null)'), B.indexOf('const ok = await deletePart'));
+  for (const need of ['listPartTelegramPointers', 'listVidoyTelegramPointers', 'clearVidoyTelegramPointers', 'deleteMedia']) {
+    if (!d.includes(need)) throw new Error('jalur !dell judul tidak memanggil ' + need);
+  }
+  if (!/Pesan Telegram dihapus:/.test(d)) throw new Error('tidak melapor jumlah pesan terhapus');
+  if (!/Link Vidoy tetap disimpan/.test(d)) throw new Error('tidak melapor link Vidoy yang dipertahankan');
+});
+
+t('C: pointer pesan library disimpan saat library mengirim part', () => {
+  const B = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  const n = (B.match(/setPartTelegramPointer\(/g) || []).length;
+  if (n < 2) throw new Error('penyimpanan pointer harus di 2 situs kirim library: ' + n);
+  if (!/setPartTelegramPointer,/.test(B)) throw new Error('tidak di-import dari ./db');
+  const db = require('fs').readFileSync(require.resolve('../db'), 'utf8');
+  if (!/UPDATE media_parts SET tg_chat_id = \$3, tg_message_id = \$4/.test(db)) {
+    throw new Error('setPartTelegramPointer tidak menulis ke media_parts');
+  }
+});
+
+
 // ── REGRESSION: flow Telegram-only ikut membawa link Vidoy ─────────────────
 t('KONSISTENSI: flow Telegram (download.js) menambah baris Link dari Vidoy', () => {
   const D = require('fs').readFileSync(require.resolve('../handlers/download'), 'utf8');

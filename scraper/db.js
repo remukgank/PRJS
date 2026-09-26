@@ -330,6 +330,68 @@ async function getVidoyLink(mediaKey, kind = 'anime', part) {
   }
 }
 
+// Pointer pesan Telegram per part library (dipakai !dell untuk menghapus pesan).
+async function setPartTelegramPointer(slug, part, chatId, messageId) {
+  try {
+    await pool.query(
+      `UPDATE media_parts SET tg_chat_id = $3, tg_message_id = $4
+        WHERE media_slug = $1 AND part = $2`,
+      [slug, Number(part) || 0, chatId, messageId]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, slug, part }, 'Failed to set part telegram pointer');
+  }
+}
+
+// Pointer pesan yang tersimpan: part = null → semua part.
+async function listPartTelegramPointers(slug, part = null) {
+  try {
+    const r = part === null || part === undefined
+      ? await pool.query(
+        'SELECT part, tg_chat_id, tg_message_id FROM media_parts WHERE media_slug = $1 AND tg_chat_id IS NOT NULL AND tg_message_id IS NOT NULL ORDER BY part',
+        [slug])
+      : await pool.query(
+        'SELECT part, tg_chat_id, tg_message_id FROM media_parts WHERE media_slug = $1 AND part = $2 AND tg_chat_id IS NOT NULL AND tg_message_id IS NOT NULL',
+        [slug, Number(part) || 0]);
+    return r.rows;
+  } catch (err) {
+    logger.error({ err: err.message, slug }, 'Failed to list part telegram pointers');
+    return [];
+  }
+}
+
+// Pointer pesan Telegram milik satu judul di vidoy_uploads (link tidak diubah).
+async function listVidoyTelegramPointers(mediaKey, kind) {
+  try {
+    const r = await pool.query(
+      `SELECT part, tg_chat_id, tg_message_id FROM vidoy_uploads
+        WHERE media_key = $1 AND kind = $2 AND tg_chat_id IS NOT NULL AND tg_message_id IS NOT NULL
+        ORDER BY part`,
+      [String(mediaKey), kind]
+    );
+    return r.rows;
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind }, 'Failed to list vidoy telegram pointers');
+    return [];
+  }
+}
+
+// Kosongkan pointer Telegram untuk satu judul TANPA menghapus link Vidoy
+// (ATURAN KERAS: link di Vidoy tidak boleh hilang/terduplikasi).
+async function clearVidoyTelegramPointers(mediaKey, kind) {
+  try {
+    const r = await pool.query(
+      `UPDATE vidoy_uploads SET tg_chat_id = NULL, tg_message_id = NULL
+        WHERE media_key = $1 AND kind = $2 AND tg_message_id IS NOT NULL`,
+      [String(mediaKey), kind]
+    );
+    return r.rowCount || 0;
+  } catch (err) {
+    logger.error({ err: err.message, mediaKey, kind }, 'Failed to clear vidoy telegram pointers');
+    return 0;
+  }
+}
+
 async function setVidoyTelegramPointer(mediaKey, kind, part, chatId, messageId) {
   try {
     await pool.query(
@@ -501,6 +563,9 @@ async function deletePart(slug, part) {
 
 async function deleteMedia(slug) {
   try {
+    // Parts ikut dihapus — kalau tidak, episode tetap ditandai "sudah ada" di
+    // picker walau judulnya sudah dihapus. (fomo-drama juga delete keduanya.)
+    await pool.query('DELETE FROM media_parts WHERE media_slug = $1', [slug]);
     await pool.query('DELETE FROM media WHERE slug = $1', [slug]);
     return true;
   } catch (err) {
@@ -580,6 +645,10 @@ module.exports = {
   setVidoyTelegramPointer,
   clearVidoyTelegramPointer,
   getVidoyLink,
+  setPartTelegramPointer,
+  listPartTelegramPointers,
+  clearVidoyTelegramPointers,
+  listVidoyTelegramPointers,
   updateVidoyLink,
   listRecentVidoyUploads,
   getVidaraUpload,

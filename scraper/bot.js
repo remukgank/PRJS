@@ -29,7 +29,7 @@ const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -1032,6 +1032,27 @@ function targetBtn(text, data, enabled, style = 'success') {
 function batchTargetLabel(target) {
   const map = { tg: 'Telegram', vt: 'Vidara + Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidara + Vidoy' };
   return map[target] || String(target || 'Telegram');
+}
+
+// Hapus pesan Telegram dari daftar pointer (bentuk kolom DB: tg_chat_id/tg_message_id)
+// lalu laporkan jumlah berhasil / sudah tidak ada.
+async function deleteTelegramMessagesRaw(list) {
+  let deleted = 0;
+  let missing = 0;
+  for (const p of list || []) {
+    const chatId = p.chat_id !== undefined ? p.chat_id : p.tg_chat_id;
+    const msgId = p.message_id !== undefined ? p.message_id : p.tg_message_id;
+    if (!chatId || !msgId) continue;
+    try {
+      await bot.deleteMessage(chatId, msgId);
+      deleted++;
+    } catch (err) {
+      const m = String((err && err.message) || err || '');
+      if (/message to delete not found|message can't be deleted|MESSAGE_ID_INVALID/i.test(m)) missing++;
+      else logger.warn({ err: m, chatId, msgId }, 'Gagal hapus pesan Telegram');
+    }
+  }
+  return { deleted, missing };
 }
 
 // Peta status per episode dari vidoy_uploads: episode yang punya link Vidoy tapi
@@ -2547,7 +2568,13 @@ bot.on('message', safeHandler('message')(async (msg) => {
         `➧ ${unit} :- <b>${unit} ${part}</b>`,
         `➧ Provider :- <tg-spoiler>${extractProvider(file.file_name || '')}</tg-spoiler>`,
       ].join('\n');
-      return sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      const sent1 = await sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      const m1 = sent1 && (sent1.message_id || (sent1.result && sent1.result.message_id));
+      if (m1 && slug && part) {
+        // simpan di mana pesannya berada agar !dell bisa menghapusnya (C)
+        setPartTelegramPointer(slug, part, (sent1.chat && sent1.chat.id) || chatId, m1).catch(() => {});
+      }
+      return sent1;
     }
 
     // Deep link dari web: /start dl_<code> (minta file per part)
@@ -4127,9 +4154,18 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!pending) return bot.answerCallbackQuery(query.id, { text: '⚠️ Session habis' });
 
     if (pending.part === null) {
+      // A) hapus library (media + media_parts) — keduanya
+      const libPtrs = await listPartTelegramPointers(pending.slug);
+      // C) pesan dari jalur library + jalur Vidoy
+      const vidPtrs = await listVidoyTelegramPointers(pending.name, 'anime');
+      const del = await deleteTelegramMessagesRaw([...libPtrs, ...vidPtrs]);
+      // B) kosongkan pointer Telegram di vidoy_uploads, LINK TETAP ADA
+      const cleared = await clearVidoyTelegramPointers(pending.name, 'anime');
       await deleteMedia(pending.slug);
       return bot.editMessageText(
-        `🗑️ <b>${pending.name}</b> dihapus dari library (semua part)`,
+        `🗑️ <b>${pending.name}</b> dihapus dari library (semua part)\n`
+        + `📨 Pesan Telegram dihapus: ${del.deleted}${del.missing ? ` (sudah tidak ada: ${del.missing})` : ''}\n`
+        + `🗄 Link Vidoy tetap disimpan: ${cleared} episode → ditandai 🗄 (perlu kirim ulang ke Telegram)`,
         { chat_id: chatId, message_id: msgId, parse_mode: 'HTML' }
       ).catch(() => {});
     }
@@ -4275,7 +4311,11 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           logger.warn({ slug, poster: media.poster_url }, 'Library poster gagal dikirim');
         }
       }
-      await sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      const sent2 = await sendVideo(chatId, file.file_id, { caption, parse_mode: 'HTML' });
+      const m2 = sent2 && (sent2.message_id || (sent2.result && sent2.result.message_id));
+      if (m2 && slug && part) {
+        setPartTelegramPointer(slug, part, (sent2.chat && sent2.chat.id) || chatId, m2).catch(() => {});
+      }
     } catch (err) {
       logger.error({ chatId, slug, part, err: err.message }, 'Library send failed');
       await bot.sendMessage(chatId, `❌ Gagal kirim ${unit} ${part}: ${err.message.slice(0, 100)}`);
