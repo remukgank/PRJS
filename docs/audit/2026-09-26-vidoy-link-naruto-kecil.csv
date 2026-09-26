@@ -1,5 +1,8 @@
 # Link Vidoy yang-dirujuk Telegram (fomo-drama kemungkinan punya ini)
-#-total 113 episode | dibuat 2026-09-26T10:21:04.990Z
+# CATATAN: ini snapshot 113 episode (pukul 10:21 UTC, saat batch masih di ep 113).
+# Scan penuh 220/220 episode dilakukan terpisah (checker tools/check-vidoy-links.js),
+# file mentahnya di /tmp dan terhapus saat instance restart — hasil ringkas ada di
+# docs/audit/2026-09-26-vidoy-folder-duplikat.md bagian F.
 
 part | link | pesan_telegram | uploadterakhir
 1 | https://vski.cc/e/voit3jakr51l | 5908 | Sat Sep 26 2026 09:
