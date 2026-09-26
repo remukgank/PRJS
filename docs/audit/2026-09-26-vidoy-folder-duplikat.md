@@ -538,3 +538,45 @@ perilaku nyata:
 Keempat pemanggil (`samehadakuAnimeSlug:1936`, `buildSamehadakuEpisodePicker:1947`,
 `sam_all:3386`, `sam_go:3655`) **semuanya sudah menambahkan season** → hasil
 slug identik. Tidak ada regresi.
+
+## P. BUG NYATA: .ts terkirim sebagai .mp4 → iOS layar hitam (27 Sep 2026)
+
+### Gejala user
+"suara muncul tapi layar hitam di iOS, di PC harus download dulu"
+
+### Fix sebelumnya (d25ec41) TIDAK BERFUNGSI
+Aku sudah tambahkan konversi .ts→.mp4, tapi tidak pernah tereksekusi.
+
+### Root cause
+Format dibaca dari **EKSTENSI NAMA FILE TUJUAN**, bukan dari isi file:
+
+```js
+// handlers/vidoy.js:236 — SELALU menamai tujuan "…Ep 01.mp4"
+const destPath = `…Ep 01.mp4`;
+await ensureMp4(directUrl, destPath)   // file .ts ditulis ke nama .mp4
+```
+```js
+// services/vidaraService.js — cabangnya tidak pernah tersentuh
+const ext = path.extname(destPath);   // '.mp4' ← bukan format aslinya
+if (ext !== '.mp4') { remuxToMp4(...) } // ← DEAD CODE
+```
+`remuxToMp4()` punya bug sama: `if (ext === '.mp4') return inputPath;` → skip.
+
+### Bukti eksperimen (file nyata, sebelum & sesudah)
+| | Sebelum | Sesudah |
+|---|---|---|
+| Input .ts 245 KB bernama `.mp4` | tetap MPEG-TS (`G@B…%`) → layar hitam ✗ | `ftypisom` → MP4 ✓ |
+| Input .ts H.265 | tidak terdeteksi | remux → re-encode → `h264,yuv420p` ✓ |
+
+### Perbaikan
+1. `detectVideoContainer(filePath)` — baca **magic bytes**: `ftyp`@4 → mp4,
+   `0x1A45DFA3` → mkv, sync `0x47` tiap 188 byte → ts.
+2. `ensureMp4()` — konversi berdasarkan `detectVideoContainer`, bukan ekstensi.
+3. `remuxToMp4()` — skip hanya jika magic bytes memang `ftyp`.
+4. `isIosCompatible()` — **kontainer harus MP4**; .ts ber-codec H.264 tetap tidak
+   bisa inline di iOS (sebelumnya lolos cek dan tidak dikonversi).
+5. `assertLooksLikeVideo()` — MPEG-TS kini diakui sebagai signature sah
+   (sebelumnya ditolak sebagai "tidak dikenali" bila < 100 KB).
+
+### Verifikasi
+`test-vidoy-uploader` **152 pass** (+5), suite lain 0 fail, kontrak media 10/10.

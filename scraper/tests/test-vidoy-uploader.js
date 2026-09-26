@@ -478,15 +478,83 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
 
 console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
+// ── KRITIS: format deteksi dari ISI FILE, bukan ekstensi nama ───────────────
+// Bug: handlers/vidoy.js menamai tujuan "Ep 01.mp4" padahal isinya .ts dari
+// server → remux tidak pernah jalan → iOS layar hitam (suara keluar, video tidak).
+t('detectVideoContainer membaca magic bytes, bukan ekstensi', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { detectVideoContainer } = require('../services/vidaraService');
+  const dir = os.tmpdir() + '/_vc_' + Date.now();
+  fs.mkdirSync(dir, { recursive: true });
+  const mk = (name, buf) => { const p = dir + '/' + name; fs.writeFileSync(p, buf); return p; };
+  const size = 4096;
+  try {
+    // MP4: ftyp di offset 4 (disebut .ts supaya ekstensi menipu)
+    const mp4 = Buffer.alloc(size); Buffer.from('ftypisom').copy(mp4, 4);
+    if (detectVideoContainer(mk('a.ts', mp4)) !== 'mp4') throw new Error('MP4 (ftyp) tak terdeteksi');
+    // MKV
+    const mkv = Buffer.alloc(size); mkv.writeUInt32BE(0x1a45dfa3, 0);
+    if (detectVideoContainer(mk('b.mp4', mkv)) !== 'mkv') throw new Error('MKV tak terdeteksi');
+    // MPEG-TS: sync 0x47 tiap 188 byte (disebut .mp4 supaya menipu)
+    const ts = Buffer.alloc(size);
+    for (let o = 0; o < size; o += 188) ts[o] = 0x47;
+    ts[1] = 0x40;
+    if (detectVideoContainer(mk('c.mp4', ts)) !== 'ts') throw new Error('MPEG-TS tak terdeteksi');
+  } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+});
+
+t('remuxToMp4 TIDAK skip hanya karena ekstensi .mp4', () => {
+  const D = require('fs').readFileSync(require.resolve('../downloader'), 'utf8');
+  const i = D.indexOf('async function remuxToMp4');
+  const body = D.slice(i, D.indexOf('\n}', i) + 2);
+  if (/path\.extname\(inputPath\).*===\s*'\.mp4'/.test(body)) {
+    throw new Error('masih skip berdasarkan ekstensi — .ts bernama .mp4 akan lolos tanpa konversi');
+  }
+  if (!/head\.slice\(4, 8\)\.toString\('latin1'\) === 'ftyp'/.test(body)) {
+    throw new Error('harus memastikan MP4 lewat magic bytes');
+  }
+});
+
+t('assertLooksLikeVideo MENERIMA MPEG-TS (bukan "tidak dikenali")', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('function assertLooksLikeVideo');
+  const body = V.slice(i, V.indexOf('\n}', i) + 2);
+  if (!/isTs/.test(body)) throw new Error('.ts dianggap file tidak dikenal → ditolak sia-sia');
+  if (!/if \(isContainer \|\| isTs\) return;/.test(body)) {
+    throw new Error('MPEG-TS harus lolos validasi (signature sah)');
+  }
+});
+
+t('isIosCompatible menolak .ts/.mkv walau codec-nya H.264', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('function isIosCompatible');
+  const body = V.slice(i, V.indexOf('\n}', i) + 2);
+  if (!/detectVideoContainer\(videoPath\) !== 'mp4'/.test(body)) {
+    throw new Error('kontainer harus dicek — .ts ber-codec H.264 tetap tidak bisa inline di iOS');
+  }
+});
+
+t('KRITIS: ensureMp4 pakai detectVideoContainer, bukan ekstensi', () => {
+  const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
+  const i = V.indexOf('async function ensureMp4');
+  const body = V.slice(i, V.indexOf('\n}\n', i + 10));
+  if (!/const container = detectVideoContainer\(destPath\)/.test(body)) {
+    throw new Error('ensureMp4 harus deteksi format dari isi file');
+  }
+  if (/path\.extname\(destPath\)\.toLowerCase\(\) !== '\.mp4'/.test(body)) {
+    throw new Error('masih pakai ekstensi → bug .ts bernama .mp4 berulang');
+  }
+});
+
+
 // ── KRITIS: jalur Vidoy WAJIB konversi .ts/.mkv → .mp4 + iOS-compatible ────
 t('ensureMp4 mengonversi .ts/.mkv ke .mp4 sebelum upload', () => {
   const V = require('fs').readFileSync(require.resolve('../services/vidaraService'), 'utf8');
   const i = V.indexOf('async function ensureMp4');
   const body = V.slice(i, V.indexOf('\n}\n', i + 10));
   if (!/remuxToMp4\(destPath/.test(body)) throw new Error('ensureMp4 tidak memanggil remuxToMp4');
-  if (!/ext !== '\.mp4'/.test(body)) {
-    throw new Error('tidak ada cek ekstensi sebelum remux');
-  }
+  if (!/container !== 'mp4'/.test(body)) throw new Error('tidak ada gerbang konversi ke MP4');
 });
 
 t('ensureMp4 memastikan iOS-compatible (H.264 + yuv420p)', () => {
@@ -499,6 +567,7 @@ t('ensureMp4 memastikan iOS-compatible (H.264 + yuv420p)', () => {
   const remux = body.indexOf('remuxToMp4');
   const ios = body.indexOf('isIosCompatible');
   if (ios < remux) throw new Error('cek iOS harus setelah remux');
+  if (!/detectVideoContainer/.test(body)) throw new Error('harus pakai deteksi isi file');
 });
 
 t('isIosCompatible: H.264+yuv420p = true, H.265 = false', () => {

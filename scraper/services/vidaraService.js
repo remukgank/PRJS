@@ -136,9 +136,10 @@ function assertLooksLikeVideo(destPath) {
   const txt = head.toString('utf8').trimStart().slice(0, 120).toLowerCase();
   const isContainer = head.indexOf(Buffer.from('ftyp')) >= 0          // MP4/MOV
     || head.readUInt32BE(0) === 0x1a45dfa3;                           // Matroska/WebM
-  // Signature container = bukti otoritatif. MP4 sah boleh kecil (fragmen/clip),
-  // jadi JANGAN ditolak karena ukuran — hanya signature yang menentukan.
-  if (isContainer) return;
+  const isTs = head[0] === 0x47 && (head[1] === 0x40 || head[1] === 0x4e); // MPEG-TS
+  // Signature container = bukti otoritatif. MP4/MKV/TS sah boleh kecil
+  // (fragmen/clip), jadi JANGAN ditolak karena ukuran — hanya signature yang menentukan.
+  if (isContainer || isTs) return;
   if (txt.startsWith('<!doctype') || txt.startsWith('<html') || txt.startsWith('<')) {
     throw new Error(`unduhan bukan video — dapat HTML (${st.size} byte, awal: "${txt.slice(0, 48).replace(/\s+/g, ' ')}"). Provider butuh header auth yang sesuai.`);
   }
@@ -152,9 +153,39 @@ function assertLooksLikeVideo(destPath) {
   }
 }
 
+// Deteksi format ASLI dari isi file (magic bytes), BUKAN dari ekstensi nama.
+// WAJIB: pemanggil (handlers/vidoy.js) selalu menamai tujuan "…Ep 01.mp4",
+// padahal isinya bisa .ts/.mkv dari server. Kalau format dibaca dari ekstensi,
+// cabang remux tidak pernah jalan → file .ts terkirim ke Telegram → iOS layar
+// hitam (suara keluar, video tidak). Bug yang sudah "diperbaiki" tetap muncul
+// karena akar masalahnya tidak disentuh.
+function detectVideoContainer(filePath) {
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(512);
+    const n = fs.readSync(fd, buf, 0, 512, 0);
+    fs.closeSync(fd);
+    head = buf.slice(0, n);
+  } catch { return 'unknown'; }
+  if (head.length < 16) return 'unknown';
+  if (head.slice(4, 8).toString('latin1') === 'ftyp') return 'mp4';
+  if (head.readUInt32BE(0) === 0x1a45dfa3) return 'mkv';
+  // MPEG-TS: sync byte 0x47 di offset 0 lalu setiap 188 byte
+  if (head[0] === 0x47 && head[1] === 0x40) {
+    const syncs = [188, 376].every((off) => head[off] === 0x47);
+    if (syncs) return 'ts';
+  }
+  if (head[0] === 0x47 && head[1] === 0x4e) return 'ts';  // sinkron di tengah stream
+  if (head.slice(0, 4).toString('latin1') === 'FLV\x01') return 'flv';
+  return 'unknown';
+}
+
 // iOS/Telegram inline playback butuh H.264 + yuv420p. .ts (MPEG-TS) tidak bisa
 // diputar inline sama sekali (layar putih), jadi wajib dikonversi ke .mp4.
 function isIosCompatible(videoPath) {
+  // Kontainer harus MP4 — .ts/.mkv zwar tidak diputar inline meski codec-nya H.264.
+  if (detectVideoContainer(videoPath) !== 'mp4') return false;
   try {
     const out = execFileSync('ffprobe', [
       '-v', 'error', '-select_streams', 'v:0',
@@ -213,12 +244,12 @@ async function ensureMp4(url, destPath, opts = {}) {
       }
       assertLooksLikeVideo(destPath);
 
-      // Konversi .ts/.mkv → .mp4 (iOS tidak bisa putar .ts inline → layar putih)
-      const ext = path.extname(destPath).toLowerCase();
-      if (ext !== '.mp4') {
-        // lazy require: memutus circular dependency downloader ↔ vidaraService
+      // Konversi ke MP4 berdasarkan ISI FILE, bukan ekstensi nama tujuan.
+      const container = detectVideoContainer(destPath);
+      if (container !== 'mp4') {
         const { remuxToMp4 } = require('../downloader');
-        destPath = await remuxToMp4(destPath, (m) => logger.info({ ...logCtx, m }, 'remux ke .mp4'));
+        const remuxed = await remuxToMp4(destPath, (m) => logger.info({ ...logCtx, m, container }, 'remux ke .mp4'));
+        if (remuxed && remuxed !== destPath) destPath = remuxed;
         assertLooksLikeVideo(destPath);
       }
 
@@ -457,6 +488,7 @@ async function uploadToVidara(opts) {
 }
 
 module.exports = {
+  detectVideoContainer,
   isIosCompatible,
   reencodeForIos,
   assertLooksLikeVideo, uploadToVidara, uploadDramaBatchesVidara, ensureMp4, ffmpegConcat, isHlsUrl, providerDownSig, providerDownVerdict, providerDownSerialMsg, pushStreak, collectVerdict, downloadChunk };

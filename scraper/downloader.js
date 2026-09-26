@@ -236,10 +236,22 @@ function cleanupFiles(...files) {
  * Return path mp4 hasil; jika gagal/gagal container, kembalikan input asli.
  */
 async function remuxToMp4(inputPath, onLog = null) {
-  const ext = path.extname(inputPath || '').toLowerCase();
-  if (ext === '.mp4') return inputPath; // sudah mp4 — skip
+  // PENTING: jangan pakai ekstensi nama untuk memutuskan. Pemanggil sering
+  // menamai tujuan "…Ep 01.mp4" padahal isinya .ts/.mkv dari server. Kalau
+  // skip berdasarkan ".mp4", file .ts lolos tanpa dikonversi → iOS layar hitam.
   const ob = FFMPEG;
   const outPath = tempPath(path.basename(inputPath).replace(/\.[^.]+$/, '') + '_remux.mp4');
+
+  // Kalau isinya memang sudah MP4 (magic 'ftyp' di offset 4), tidak perlu remux.
+  let head = Buffer.alloc(0);
+  try {
+    const fd = fs.openSync(inputPath, 'r');
+    const buf = Buffer.alloc(16);
+    const n = fs.readSync(fd, buf, 0, 16, 0);
+    fs.closeSync(fd);
+    head = buf.slice(0, n);
+  } catch {}
+  if (head.length >= 8 && head.slice(4, 8).toString('latin1') === 'ftyp') return inputPath;
 
   function runFfmpeg(args) {
     return new Promise((resolve) => {
