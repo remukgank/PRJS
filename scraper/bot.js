@@ -3595,6 +3595,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     // yang dilarang AGENTS.md §4. Tolak dengan jelas supaya tidak disalahartikan
     // sebagai "sedang berjalan".
     if (data.startsWith('kam_all:')) {
+      logger.info({ data: data.slice(0, 30) }, 'kam_all: ditolak — fitur download-all kamenime belum ada');
       return bot.answerCallbackQuery(query.id, {
         text: '⬇️ Download Semua untuk Kamenime belum tersedia. Pilih episode satu per satu.',
         show_alert: true,
