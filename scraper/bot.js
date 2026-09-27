@@ -4382,9 +4382,12 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
 
     if (target === 'tg') {
-      if (isGofileUrl(url)) return handleGofileUrl(chatId, url, detectedTitle || undefined);
+      if (isGofileUrl(url)) return handleGofileUrl(chatId, url, titleForCap);
       if (isGdriveUrl(url)) {
-        let gdTitle = detectedTitle;
+        // Mulai dari judul kustom (kalau ada), baru judul terdeteksi. Logika
+        // season/part di bawahnya TIDAK boleh disederhanakan — itu yang menempelkan
+        // "S2 P3" ke judul, dan menghapusnya = regresi.
+        let gdTitle = customTitle || detectedTitle;
         if (gdTitle) {
           try {
             const gdsCb = parseSamehadakuFilename((await resolveGdriveFile(url).catch(() => null))?.name || '');
@@ -4398,10 +4401,10 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         }
         return handleGdriveUrl(chatId, url, gdTitle || undefined);
       }
-      if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
-        if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
+      if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, titleForCap);
+        if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, titleForCap);
         if (isKamenimeUrl(url)) return handleKamenimeUrl(chatId, url, titleForCap);
-        if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
+        if (isMegaUrl(url)) return handleMegaUrl(chatId, url, titleForCap);
     }
 
     // target = vyt atau vv → Vidoy

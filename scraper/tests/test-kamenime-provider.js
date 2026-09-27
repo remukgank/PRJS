@@ -177,13 +177,21 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
   // tapi file dikirim ke Vidoy. Salah target.
   await t('i) dl_go target tg → handleKamenimeUrl (bukan resolveDirectUrl/Vidoy)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
-    // Blok dispatch dl_go:tg = rangkaian "return handleXUrl(chatId, url, detectedTitle".
-    const start = src.indexOf("if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);");
-    assert.ok(start > 0, 'blok dl_go:tg harus ada');
-    const end = src.indexOf('// target = vyt atau vv', start);
-    assert.ok(end > start, 'harus ada penanda akhir blok tg sebelum jalur vyt/vv');
+    // Blok dispatch dl_go:tg.
+    //
+    // Penanda AWAL dulu mengunci teks literal
+    // "…handlePixeldrainUrl(chatId, url, detectedTitle || undefined);" — jadi
+    // tiap kali argumen judul di cabang mana pun berubah, test ini gagal
+    // padahal perilakunya tidak berubah. Sekarang dianchor ke penanda yang
+    // tidak disentuh fix mana pun: blok `if (target === 'tg') {` TERAKHIR
+    // (yang ada di dl_go; dua yang sebelumnya milik loop batch), dibatasi
+    // oleh penanda akhir yang sama seperti sebelumnya.
+    const end = src.indexOf('// target = vyt atau vv', src.lastIndexOf("if (target === 'tg') {"));
+    assert.ok(end > 0, 'harus ada penanda akhir blok tg sebelum jalur vyt/vv');
+    const start = src.lastIndexOf("if (target === 'tg') {");
+    assert.ok(start > 0 && start < end, 'blok dl_go:tg harus ada');
     const block = src.slice(start, end);
-      assert.ok(/if \(isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\);/.test(block),
+    assert.ok(/if \(isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\);/.test(block),
       `blok tg tidak punya cabang kamenime (atau tidak meneruskan titleForCap):\n${block}`);
     // Fallback ke resolveDirectUrl hanya boleh SETELAH semua cabang handler.
     const lastHandler = block.lastIndexOf('return handle');
