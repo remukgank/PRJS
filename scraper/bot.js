@@ -3589,8 +3589,22 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
     }
 
-  if (data.startsWith('sam_ep:')) {
-    if (!isAdmin(query.from.id)) {
+    // Download Semua untuk kamenime: BELUM diimplementasikan (juga untuk kuronime).
+    // Tombolnya tetap dibuat oleh buildPicker, jadi tanpa handler di sini user
+    // akan menekan tombol mati tanpa balasan apa pun — persis "kegagalan diam-diam"
+    // yang dilarang AGENTS.md §4. Tolak dengan jelas supaya tidak disalahartikan
+    // sebagai "sedang berjalan".
+    if (data.startsWith('kam_all:')) {
+      return bot.answerCallbackQuery(query.id, {
+        text: '⬇️ Download Semua untuk Kamenime belum tersedia. Pilih episode satu per satu.',
+        show_alert: true,
+      }).catch(() => {}).then(() => bot.sendMessage(chatId,
+        '⬇️ <b>Download Semua</b> untuk Kamenime belum tersedia.\n\nPilih episode satu per satu dari daftar — tiap episode punya tombol sendiri di bawah.\n\nKalau kamu butuh ini untuk 500 episode, bilang saja: fiturnya butuh antrean + batas upload agar tidak kena limit Telegram.',
+        { parse_mode: 'HTML' })).catch(() => {});
+    }
+
+    if (data.startsWith('sam_ep:')) {
+      if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
     const rawUrl = data.slice(7);

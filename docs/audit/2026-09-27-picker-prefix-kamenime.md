@@ -52,9 +52,10 @@ terbaca seolah semua episode rusak.
 |------|-----------|
 | `scraper/bot.js` | `prefix: 'kam'` di picker kamenime (baris 1992) |
 | `scraper/bot.js` | Handler `kam_page:` baru (baris ~3558) — navigasi Prev/Next |
+| `scraper/bot.js` | Handler `kam_all:` baru (baris ~3592) — tolak dengan jelas |
 | `scraper/bot.js` | `kamenimeEpisodesCache` — cache listing, dipakai `kam_page:` |
 | `scraper/bot.js` | `sam_all:` Guard: tolak URL non-Samehadaku dengan pesan jelas |
-| `scraper/tests/test-picker-prefix.js` | BARU — 10 test |
+| `scraper/tests/test-picker-prefix.js` | BARU — 12 test |
 
 ### `prefix: 'kam'`
 
@@ -79,11 +80,21 @@ Pertahanan lapis kedua. Kalau karena alasan apa pun callback `sam_all:` membawa 
 non-Samehadaku, bot menolak dengan pesan yang menyebut provider sebenarnya,
 bukan melempar error mentah yang tampil sebagai `Unhandled error`.
 
-> Catatan: tombol `⬇️ Download Semua` di picker Kamenime **belum punya handler
-> `kam_all:`** — sengaja. Menjalankan 500 episode sekaligus adalah operasi
-> besar; itu keputusan terpisah, bukan perbaikan diam-diam.rael untuk
-> sekarang: tombol tersebut akan menerima callback yang tidak dikenali, dan
-> `sam_all:` guard mencegah salah-parsing.
+### Handler `kam_all:` (tambahan setelah verifikasi E2E)
+
+Verifikasi E2E (77 callback tercatat, 12:35–12:37) menunjukkan `kam_all:` masuk
+**16× tanpa balasan apa pun** — user menekan tombol yang tidak merespons. Itu
+justru “kegagalan diam-diam” yang dilarang `AGENTS.md §4`: user tidak bisa
+membedakan “sedang berjalan” dari “mati”.
+
+Sekarang `kam_all:` membalas `answerCallbackQuery` dengan `show_alert` + pesan
+bahwa fiturnya belum tersedia, plus arahan pilih episode satu per satu.
+Fitur download-all **sendiri** belum dibuat — itu operasi besar (antrean, batas
+concurrency, target upload) dan bukan perbaikan bug.
+
+Test 6b mencari **otomatis** setiap `callback_data` yang dihasilkan `buildPicker`
+lalu memastikan prefix-nya punya handler — supaya kelas bug “tombol mati” ini
+tertangkap di masa depan, bukan menunggu user melapor.
 
 ## Verification
 

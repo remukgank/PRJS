@@ -38,7 +38,10 @@ function buildPickerCallAt(mapName, extra = 18) {
   return LINES.slice(ln, ln + extra).join('\n');
 }
 
-const mkEp = (e) => ({ text: `Ep ${e.ep}`, callback_data: `x_ep:${e.ep}` });
+// mkEp meniru picker kamenime sungguhan (bot.js:1996) — callback_data-nya
+// dari map internal, bukan prefix picker. Pakai prefix 'kam_ep' supaya test
+// 6b memeriksa prefix yang BENAR-benar ada di bot.js.
+const mkEp = (e) => ({ text: `Ep ${e.ep}`, callback_data: `kam_ep:${String(e.ep).padStart(8, '0')}` });
 const eps = Array.from({ length: 500 }, (_, i) => ({ ep: i + 1, url: `https://x/episode/${i + 1}` }));
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -89,10 +92,31 @@ t('5) BUKTI RUN: picker kamenime tidak bisa menghasilkan sam_all', () => {
 });
 
 t('6) setiap prefix yang dipakai picker PUNYA handler di bot.js', () => {
-  for (const p of ['kam_ep', 'kam_page', 'kur_ep', 'kur_page', 'sam_ep', 'sam_page']) {
+  for (const p of ['kam_ep', 'kam_page', 'kam_all', 'kur_ep', 'kur_page', 'sam_ep', 'sam_page']) {
     assert.ok(SRC.includes(`'${p}:'`) || SRC.includes(`'${p}:`),
       `handler ${p}: tidak ada di bot.js → callback akan jatuh ke provider lain`);
   }
+});
+
+t('6b) TIDAK ADA callback tanpa handler (tombol mati = kesalahan diam-diam)', () => {
+  // Setiap prefix yang buildPicker hasilkan harus punya blok if di bot.js.
+  const { keyboard: kb } = buildPicker(eps, { urlId: 'u', mkEp, prefix: 'kam' });
+  const datas = new Set();
+  for (const row of kb) for (const b of row) if (b.callback_data) datas.add(b.callback_data);
+  for (const d of datas) {
+    const head = d.split(':')[0];
+    assert.ok(SRC.includes(`'${head}:'`), `tombol "${head}" tidak punya handler di bot.js`);
+  }
+  console.log(`      tombol dicek: ${[...datas].map((d) => d.split(':')[0]).filter((v,i,a)=>a.indexOf(v)===i).join(', ')}`);
+});
+
+t('6c) kam_all: menjawab dengan jelas (bukan diam, bukan Unhandled error)', () => {
+  const i = SRC.indexOf("data.startsWith('kam_all:')");
+  assert.ok(i > 0, 'handler kam_all: tidak ada — tombol akan mati diam-diam');
+  const blk = SRC.slice(i, i + 900);
+  assert.ok(blk.includes('answerCallbackQuery'), 'harus membalas lewat answerCallbackQuery (popup)');
+  assert.ok(blk.includes('show_alert'), 'popup harus show_alert agar terlihat');
+  assert.ok(/belum tersedia/i.test(blk), 'pesan harus menyebutkan fitur belum tersedia');
 });
 
 t('7) handler kam_page: ada, dan memakai listKamenimeEpisodes + buildKamenimeEpisodePicker', () => {
@@ -124,7 +148,7 @@ t('9) guard: sam_all menolak URL non-Samehadaku (pesan jelas, bukan Unhandled er
 t('10) picker kamenime tetap 500 episode & paginasi 25 halaman', () => {
   const { keyboard: kb, meta } = buildPicker(eps, { urlId: 'u', mkEp, prefix: 'kam' });
   assert.strictEqual(meta.totalPages, 25);
-  assert.strictEqual(kb.filter((r) => r.length === 5 && r[0].callback_data.startsWith('x_ep')).length, 4);
+  assert.strictEqual(kb.filter((r) => r.length === 5 && r[0].callback_data.startsWith('kam_ep')).length, 4);
   // tombol per halaman: 1 batch + 20 ep + 1 nav = 22 < 100 (limit Telegram)
   const perPage = 1 + 20 + 1;
   assert.ok(perPage < 100, 'tombol per halaman harus < 100');
