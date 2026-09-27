@@ -9,9 +9,13 @@ const { isFiledonUrl, resolveFiledonFile } = require('../providers/filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../providers/gdrive');
 const { isMegaUrl, resolveMegaFile, downloadMegaFile } = require('../providers/mega');
 const { isGdrivePlayerUrl, resolveGdrivePlayerFile, GPLAYER_UA, GPLAYER_REF } = require('../providers/gdriveplayer');
+const { isKamenimeUrl, resolveKamenimeFile } = require('../providers/kamenime');
 const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive');
 const axios = require('axios');
 const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4 } = require('../downloader');
+// downloadTo (jalur fetch/undici + speed floor + fail-fast resume) — dipakai
+// handleKamenimeUrl. Provider lain pakai aria2c, jadi tidak perlu import ini.
+const { downloadTo } = require('../services/vidaraService');
 const { cleanCaption, parseKuronimeSeasonEpisode, extractPartFromFilename, sanitizeSlug, extractSourcePattern, extractProvider, parseSamehadakuFilename } = require('../lib/parser');
 const { vidoyLinkLine, withSeasonSuffix } = require('../lib/caption');
 const { detectTitleFromFilename } = require('../lib/titleDetect');
@@ -727,6 +731,82 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
   }
 }
 
+  // ─── Kamenime: MP4 direct, tanpa remux & tanpa halaman share ─────────────
+  // Bentuk /storage/ = URL final; bentuk /anime/<slug>/episode/<N> di-resolve
+  // dulu oleh resolveKamenimeFile (1 GET). File MP4 sudah jadi, jadi TIDAK ada
+  // remuxToMp4 di sini —namun extensi .mp4 WAJIB dipertahankan (kalau dipaksa
+  // .ts oleh jalur gdriveplayer, remux jalan dan file salah tipe).
+  async function handleKamenimeUrl(chatId, url, customTitle = null, expectedEp = null) {
+    ensureCtx('handleKamenimeUrl');
+    let outPath = null;
+    let cap = '';
+    let capWithEp = '';
+    let rp = null;
+    try {
+      const km = await resolveKamenimeFile(url);
+      const kmName = km.fileName;
+      const kmSame = parseSamehadakuFilename(kmName);
+      const partN = kmSame?.episode ?? extractPartFromFilename(kmName);
+      const mismatch = partMismatch(expectedEp, partN);
+      if (mismatch) {
+        await leafAlert(chatId, `⚠️ Kamenime utk Ep ${expectedEp} menunjuk file salah (${kmName}).\n${mismatch}`);
+        return { ok: false, error: mismatch };
+      }
+      const patFile = kmSame?.short ? kmSame.short : extractSourcePattern(kmName);
+      let title = null;
+      if (patFile) {
+        const m = await findMediaByPattern(patFile).catch(() => null);
+        if (m) title = m.nama;
+      }
+      if (!title && customTitle) title = customTitle;
+      const titleForCap = title;
+      cap = titleForCap || cleanCaption(kmName);
+      capWithEp = epCapLabel(cap, !!titleForCap, null, partN);
+      const cacheInfo = { urlHash: hashUrl(url), source: 'kamenime', fileName: kmName };
+      rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+      rp.updateEpisode(capWithEp, 'download');
+      // .mp4 dipertahankan — JANGAN remux (sudah MP4).
+      outPath = tempPath(kmName.endsWith('.mp4') ? kmName : `${kmName}.mp4`);
+      await downloadTo(km.fileUrl, outPath, { logCtx: { chatId, file: kmName } });
+      const finalSize = fileSizeMb(outPath);
+      logger.info({ chatId, file: kmName, sizeMb: finalSize.toFixed(1) }, 'Kamenime download selesai');
+      rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
+      const info = await getVideoInfo(outPath).catch(() => ({}));
+      let finalCap = cap;
+      if (titleForCap) {
+        finalCap = [
+          `➧ Judul :- ${titleForCap}`,
+          `➧ Episode :- ${partN}`,
+          `➧ Provider :- ${kmSame ? 'samehadaku' : extractProvider(kmName)}`,
+        ].join('\n');
+      }
+      const sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
+        caption: finalCap, supports_streaming: true,
+        ...(info.duration && { duration: info.duration }),
+        ...(info.width && { width: info.width }),
+        ...(info.height && { height: info.height }),
+      }, cacheInfo);
+      if (title && sendResult?.video?.file_id && (await getSetting('libsimpan')) === 'on') {
+        const slug = `anime:${sanitizeSlug(title)}`;
+        const existing = await getPartFileId(slug, partN);
+        if (!existing) {
+          await upsertMedia(slug, title, 0, url, patFile);
+          await savePartFileId(slug, partN, sendResult.video.file_id, Math.round(finalSize * 1024 * 1024), kmName, finalCap);
+        }
+      }
+      rp.updateEpisode(capWithEp, 'done', `${finalSize.toFixed(1)} MB`);
+      rp.done();
+      return { ok: true, file: kmName, sizeMb: finalSize, part: partN };
+    } catch (err) {
+      logger.error({ chatId, url: String(url).slice(0, 90), err: err.message }, 'Kamenime gagal');
+      if (rp) { rp.updateEpisode(capWithEp || cap || 'file', 'fail', err.message.slice(0, 50)); rp.done().catch(() => {}); }
+      await leafAlert(chatId, `⚠️ Kamenime gagal: ${err.message.slice(0, 120)}`);
+      return { ok: false, error: err.message };
+    } finally {
+      cleanupFiles(outPath);
+    }
+  }
+
 
 async function handleMegaUrl(chatId, url, customTitle = null) {
   ensureCtx('handleMegaUrl');
@@ -1112,11 +1192,18 @@ async function resolveDirectUrl(url) {
       const link = info && (info.directUrl || info.url);
       return link ? { url: link, name: info.name } : null;
     }
-    if (isFiledonUrl(url)) {
-      const f = await resolveFiledonFile(url);
-      return f?.url ? { url: f.url, name: f.name } : null;
-    }
-    if (isGdrivePlayerUrl(url)) {
+      if (isFiledonUrl(url)) {
+        const f = await resolveFiledonFile(url);
+        return f?.url ? { url: f.url, name: f.name } : null;
+      }
+      // kamenime: MP4 direct, sudah URL final untuk bentuk /storage/ (tanpa request).
+      // WAJIB sebelum cabang gdriveplayer di bawah — kalau bocor ke sana, .mp4
+      // dipaksa jadi .ts dan remuxToMp4 dijalankan (file salah tipe).
+      if (isKamenimeUrl(url)) {
+        const k = await resolveKamenimeFile(url);
+        return k?.fileUrl ? { url: k.fileUrl, name: k.fileName } : null;
+      }
+      if (isGdrivePlayerUrl(url)) {
       const f = await resolveGdrivePlayerFile(url);
       // resolveGdrivePlayerFile() mengembalikan { fileUrl, fileName, quality,
       // cookies } — field URL-nya "fileUrl", bukan "url".
@@ -1152,5 +1239,5 @@ function pickBestServer(servers = {}) {
 }
 const SAM_BATCH_PACE_MS = Number(process.env.SAM_BATCH_PACE_MS) || 1000;
 
-module.exports = { initDownload, resolveDirectUrl, epCapLabel, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert },
+module.exports = { initDownload, resolveDirectUrl, epCapLabel, handleGofileUrl, handleGofileBatch, handleUcDriveUrl, handlePixeldrainUrl, handleFiledonUrl, handleKamenimeUrl, handleGdriveUrl, handleMegaUrl, downloadSamehadakuFile, downloadKuronimeFile, pickBestServer, pickBestServerList, partMismatch, SAM_BATCH_PACE_MS, leafAlertTest: { setQuiet: (v) => { _samQuiet = !!v; }, alert: leafAlert },
   animeTrackTest: { setEpisodeContext: (v) => { _curEpCtx = v || null; } } };

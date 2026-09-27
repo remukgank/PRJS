@@ -157,8 +157,10 @@ t('label progress film: "— Movie" (bukan "— Episode 1") di semua tahap', () 
   const anime = { title: 'One Piece', movie: false, season: 2, part: 1, episode: 1125 };
   assert.strictEqual(epCapLabel('One Piece S2 P1', true, anime, 1125), 'One Piece S2 P1 — Episode 1125');
   assert.strictEqual(epCapLabel(cap, false, null, 3), cap, 'tanpa customTitle label tetap polos');
-  const sites = (handlerSrc.match(/epCapLabel\(/g) || []).length;
-  assert.strictEqual(sites, 6, 'helper dipakai 5 situs + definisinya (ditemukan ' + sites + ')');
+    // 27 Sep 2026: 6 → 7. Provider kamenime (MP4 direct) memakai epCapLabel
+    // juga, supaya label film/episode konsisten di semua jalur.
+    const sites = (handlerSrc.match(/epCapLabel\(/g) || []).length;
+    assert.strictEqual(sites, 7, 'helper dipakai 6 situs + definisinya (ditemukan ' + sites + ')');
 });
 
 t('caption movie di SEMUA handler (gofile direct+folder, pixeldrain, gdrive, gdriveplayer)', () => {

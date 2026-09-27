@@ -18,6 +18,7 @@ const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseS
 const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
+const { isKamenimeUrl, resolveKamenimeFile } = require('./providers/kamenime');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
@@ -1460,6 +1461,10 @@ async function handleFiledonUrl(chatId, url, customTitle = null) {
   return _downloadHandlers.handleFiledonUrl(chatId, url, customTitle);
 }
 
+async function handleKamenimeUrl(chatId, url, customTitle = null) {
+  return _downloadHandlers.handleKamenimeUrl(chatId, url, customTitle);
+}
+
 /**
  * Mega — resolve mega.nz/file#key → download stream → kirim Telegram.
  */
@@ -2431,6 +2436,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'filedon') return handleFiledonUrl(chatId, pending.url, customTitle);
+    if (pending.handler === 'kamenime') return handleKamenimeUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'mega') return handleMegaUrl(chatId, pending.url, customTitle);
   }
 
@@ -3110,6 +3116,22 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
   }
 
+  // Kamenime — MP4 direct, admin only (mirip filedon)
+  if (isKamenimeUrl(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info Kamenime...').catch(() => null);
+    try {
+      await resolveKamenimeFile(text.trim());
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return handleKamenimeUrl(chatId, text.trim());
+    } catch (err) {
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      await bot.sendMessage(chatId, `⚠️ Kamenime gagal: ${err.message.slice(0, 150)}`).catch(() => {});
+    }
+  }
+
   // Google Drive — admin only (flow prompt judul seperti gofile/pixeldrain)
   if (isGdriveUrl(text)) {
     if (!isAdmin(msg.from.id)) {
@@ -3187,7 +3209,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
 
   const params = parseDramaUrl(text);
   if (!params || !params.id) {
-    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>reelfren.com</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>mega.nz</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
+    return bot.sendMessage(chatId, '⚠️ Link tidak dikenali. Kirim link dari <b>dramafren.org</b>, <b>reelfren.dramafren.org</b>, <b>reelfren.com</b>, <b>v2.samehadaku.how</b>, <b>gofile.io</b>, <b>pixeldrain.com</b>, <b>filedon.co</b>, <b>kamenime.com</b>, <b>mega.nz</b>, <b>drive.google.com</b>, atau <b>uc-share.com</b>.', { parse_mode: 'HTML' });
   }
 
   // Dramafren scraper — admin only
@@ -4165,7 +4187,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const isCustom = data.startsWith('dl_title_custom:');
 
     if (isCustom) {
-      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : isFiledonUrl(url) ? 'filedon' : isMegaUrl(url) ? 'mega' : 'pixeldrain' });
+      pendingDownloads.set(String(chatId), { url, handler: isGofileUrl(url) ? 'gofile' : isGdriveUrl(url) ? 'gdrive' : isFiledonUrl(url) ? 'filedon' : isKamenimeUrl(url) ? 'kamenime' : isMegaUrl(url) ? 'mega' : 'pixeldrain' });
       await bot.editMessageText('✏️ Ketik judul untuk caption video:', { chat_id: chatId, message_id: msgId }).catch(() => {});
       return;
     }
@@ -4175,7 +4197,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
     // Tampilkan pilihan target — konsisten dengan alur Samehadaku
     const urlId = cacheUrl(url);
-    const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
+    const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isKamenimeUrl(url) ? 'kamenime' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
     const titleShown = detectedTitle || fileName || 'file';
     const preview = `📥 <b>Download</b>\n\n` +
       `➧ Judul :- <b>${escHtml(titleShown)}</b>\n` +
