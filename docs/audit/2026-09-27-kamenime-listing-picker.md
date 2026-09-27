@@ -64,9 +64,37 @@ Respons sukses: `components[0].effects.html` = **271.165 byte** berisi grid
 - Callback `kam_ep:<epId>` → `handleKamenimeUrl`.
 - Kegagalan listing menampilkan pesan jujur + contoh URL episode manual.
 
+## 4.3 Bug: `kam_ep:` langsung unduh, tanpa pilih target
+
+Dilaporkan user setelah picker dipakai: memilih episode **langsung mengunduh**,
+tidak ada tombol target sama sekali.
+
+**Akibatnya:** user tidak bisa memilih Telegram / Vidoy+TG / Vidoy — dan karena
+`tg` memberi caption 3 baris tanpa link, padahal `vyt` memberi 4 baris + link
+Vidoy, opsi itu jadi mustahil dipilih.
+
+**Penyebab:** handler `kam_ep:` memanggil `handleKamenimeUrl` secara langsung.
+Semua provider lain (`sam_ep`, `kur_go`) selalu menanyakan target dulu.
+
+**Fix** — daftarkan URL ke `urlCache`, lalu pakai alur `dl_go` yang sudah ada
+(sudah punya cabang kamenime di target `tg` dan `resolveDirectUrl` untuk vyt/vv):
+
+```js
+const urlId = cacheUrl(episodeUrl);
+return bot.editMessageText('📥 <b>Kamenime</b>\n\nPilih target:', {
+  chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+  reply_markup: { inline_keyboard: animeTargetKeyboard(
+    `dl_go:tg:${urlId}`, `dl_go:vyt:${urlId}`, `dl_go:vv:${urlId}`) },
+}).catch(() => {});
+```
+
+Test (p) mengunci: `kam_ep` harus memuat `animeTargetKeyboard` + ketiga tombol
+`dl_go:tg/vyt/vv` + `cacheUrl`, dan **dilarang** memanggil `handleKamenimeUrl`.
+Bukti mutasi: kembalikan bug → 15 pass / **1 fail**.
+
 ## 5. Verifikasi
 
-`test-kamenime-provider.js` **15 pass / 0 fail** (dari 10 → 15).
+`test-kamenime-provider.js` **16 pass / 0 fail** (dari 10 → 16 lewat 2 tahap).
 
 Kasus baru:
 
@@ -77,6 +105,7 @@ Kasus baru:
 | m) | Livewire gagal → error menyebut penyebab + "kirim URL episode manual", **bukan** daftar karangan |
 | n) | **regresi**: `/storage/...mp4` tetap instan, 0 request |
 | o) | `bot.js` punya dispatcher + `kam_ep:` + map; anime-page **sebelum** `isKamenimeUrl` |
+| p) | `kam_ep:` menampilkan pilihan target (tg/vyt/vv) dan **tidak** langsung unduh |
 
 Fixture `tests/fixtures/kamenime/effects-episodes.html` (5.067 bytes) =
 potongan nyata `effects.html` (14 episode, termasuk anchor navigasi ep 1 & 500).
@@ -88,11 +117,12 @@ Bukti mutasi:
 | `snapshot` jadi objek | 14 pass / **1 fail** (l) — "snapshot harus string" |
 | pilih komponen pertama (`offcanvas-navbar`) | 14 pass / **1 fail** (l) — "pilih komponen salah" |
 | hapus `kam_ep:` dari `bot.js` | 14 pass / **1 fail** (o) |
+| `kam_ep:` dikembalikan ke langsung-unduh | 15 pass / **1 fail** (p) |
 
 Bukti live: `listKamenimeEpisodes('.../anime/naruto-shippuden')` →
 **500 episode, 0 lubang** (min 1, max 500), 500 judul unik, tidak ada `undefined`.
 
-Suite penuh: **234 pass / 0 fail**.
+Suite penuh: **235 pass / 0 fail**.
 
 ## 6. Catatan
 

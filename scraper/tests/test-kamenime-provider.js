@@ -296,6 +296,23 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(iPage > 0 && iFile > iPage, `anime-page (${iPage}) harus sebelum isKamenimeUrl (${iFile})`);
   });
 
+  // ── p) kam_ep WAJIB minta target dulu (bug: langsung unduh) ──
+  await t('p) kam_ep: → tampilkan pilihan target, TIDAK langsung unduh', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    const i = src.indexOf("if (data.startsWith('kam_ep:')) {");
+    assert.ok(i > 0, 'butuh handler kam_ep:');
+    const e = src.indexOf("if (data.startsWith('sam_ep:')) {", i);
+    const block = src.slice(i, e > i ? e : undefined);
+    // harus memilih target, bukan memanggil handler unduh
+    assert.ok(/animeTargetKeyboard\(/.test(block), 'kam_ep harus menampilkan animeTargetKeyboard (pilih target)');
+    for (const t of ['dl_go:tg:', 'dl_go:vyt:', 'dl_go:vv:']) {
+      assert.ok(block.includes(t), `butuh tombol target ${t}`);
+    }
+    assert.ok(/cacheUrl\(episodeUrl\)/.test(block), 'harus daftarkan URL ke urlCache untuk alur dl_go');
+    assert.ok(!/handleKamenimeUrl\(/.test(block), 'kam_ep TIDAK boleh langsung unduh — harus lewat dl_go');
+    assert.ok(/editMessageText/.test(block), 'pilihan target dikirim lewat editMessageText');
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

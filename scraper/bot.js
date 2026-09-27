@@ -3439,15 +3439,32 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Samehadaku server select callbacks ──────────────────────────────────────
-  if (data.startsWith('kam_ep:')) {
-    const epId = data.slice(7);
-    const episodeUrl = kamenimeEpisodeMap.get(epId);
-    if (!episodeUrl) {
-      return bot.answerCallbackQuery(queryId, { text: 'Episode kedaluwarsa — buka ulang picker', show_alert: true }).catch(() => {});
+    if (data.startsWith('kam_ep:')) {
+      if (!isAdmin(query.from.id)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {});
+      }
+      const epId = data.slice(7);
+      const episodeUrl = kamenimeEpisodeMap.get(epId);
+      if (!episodeUrl) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang', show_alert: true }).catch(() => {});
+      }
+      // WAJIB pilih TARGET dulu (Telegram / Vidoy+TG / Vidoy) — konsisten dengan
+      // sam_ep & kuronime. Sebelumnya langsung handleKamenimeUrl, jadi episode
+      // terunduh tanpa opsi sama sekali.
+      // Registrasi ke urlCache lalu pakai alur dl_go yang sudah ada (sudah punya
+      // cabang kamenime di target tg, dan resolveDirectUrl untuk vyt/vv).
+      const urlId = cacheUrl(episodeUrl);
+      return bot.editMessageText('📥 <b>Kamenime</b>\n\nPilih target:', {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: animeTargetKeyboard(
+            `dl_go:tg:${urlId}`,
+            `dl_go:vyt:${urlId}`,
+            `dl_go:vv:${urlId}`,
+          ),
+        },
+      }).catch(() => {});
     }
-    try { return await handleKamenimeUrl(chatId, episodeUrl); }
-    catch (err) { logger.error({ err: err.message }, 'kam_ep gagal'); }
-  }
 
   if (data.startsWith('sam_ep:')) {
     if (!isAdmin(query.from.id)) {
