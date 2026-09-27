@@ -365,6 +365,48 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(/providerLabel = [^;]*'hokireceh'/.test(b), "caption provider harus 'hokireceh'");
   });
 
+  // ── r) judul picker harus judul ASLI, bukan slug ──
+  await t('r) listKamenimeEpisodes mengembalikan judul asli (bukan slug)', async () => {
+    const { listKamenimeEpisodes, kamenimeTitleFromHtml } = require('../providers/kamenime');
+    //-judul asli dari <title> — helper yang sama dipakai listing
+    assert.strictEqual(kamenimeTitleFromHtml('<title>  Naruto Shippuden - Kamenime\n</title>', null), 'Naruto Shippuden');
+    assert.strictEqual(kamenimeTitleFromHtml('<title>Black Torch — Kamenime</title>', null), 'Black Torch');
+    assert.strictEqual(kamenimeTitleFromHtml('<title>Tanpa Judul</title>', 'fallback'), 'Tanpa Judul');
+    assert.strictEqual(kamenimeTitleFromHtml('', 'fallback'), 'fallback');
+
+    // listing harus mengembalikan title dari halaman yang sama (tanpa request tambahan)
+    const fx = fs.readFileSync(path.join(__dirname, 'fixtures', 'kamenime', 'effects-episodes.html'), 'utf8');
+    const pageHtml = '<html><head><meta name="csrf-token" content="T"></head><body>'
+      + '<div wire:id="BBB" wire:snapshot="{&quot;memo&quot;:{&quot;name&quot;:&quot;show.anime-show&quot;},&quot;data&quot;:{}}"></div>'
+      + '</body></html>';
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (u) => String(u).endsWith('/livewire/update')
+      ? { ok: true, status: 200, text: async () => JSON.stringify({ components: [{ effects: { html: fx } }] }) }
+      : { ok: true, status: 200, headers: { getSetCookie: () => [] }, text: async () => pageHtml };
+    let r;
+    try { r = await listKamenimeEpisodes('https://www.kamenime.com/anime/naruto-shippuden'); }
+    finally { globalThis.fetch = realFetch; }
+    // tanpa <title> di fixture → judul jatuh ke slug (harus tetap ada, bukan undefined)
+    assert.ok(r.title, 'title harus selalu ada');
+    assert.ok(typeof r.title === 'string' && r.title.length > 0, `title tidak boleh kosong: ${r.title}`);
+    console.log(`      → judul dari <title>: "Naruto Shippuden" | fallback: "${r.title}"`);
+  });
+
+  // ── s) picker TIDAK boleh pakai slug sebagai judul ──
+  await t('s) picker pakai title asli, bukan slug (kunci library harus cocok)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    const s = src.indexOf('async function buildKamenimeEpisodePicker');
+    const e = src.indexOf('async function buildSamehadakuEpisodePicker', s);
+    const body = src.slice(s, e > s ? e : undefined);
+    assert.ok(/titleOverride/.test(body), 'builder harus menerima title dari listing');
+    assert.ok(/const title = titleOverride \|\| slug;/.test(body),
+      'judul harus pakai titleOverride (judul asli) sebelum jatuh ke slug');
+    // dispatcher harus meneruskan title dari listKamenimeEpisodes
+    assert.ok(/listKamenimeEpisodes\(text\.trim\(\)\);/.test(src), 'dispatcher harus memanggil listing');
+    assert.ok(/title: animeTitle/.test(src), 'dispatcher harus meneruskan title ke builder');
+    console.log('      → picker memakai judul asli; slug hanya fallback');
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

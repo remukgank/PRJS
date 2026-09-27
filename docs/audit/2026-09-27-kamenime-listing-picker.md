@@ -197,9 +197,41 @@ terganti jadi `'hokireceh'`. Kalau begitu, cabang
 yang sudah diketik user diam-diam hilang. Test (q) mengunci pemisahan ini:
 `handler` internal = `kamenime`, label tampil = `hokireceh`.
 
+## 4.6 Judul picker = slug (laporkan user)
+
+Picker menampilkan `📺 naruto-shippuden` — itu **slug**, bukan judul.
+
+**Root cause:** `parseKamenimeAnime()` return `{ slug, title: null }` (judul tidak
+diambil karena tidak ada fetch), lalu builder jatuh ke `parsedTitle || slug`.
+Slug tidak bisa dipakai: `media_key` di DB = **judul asli** ("Naruto Shippuden"),
+dan `sanitizeSlug('naruto-shippuden')` = `naruto-shippuden` ≠ kunci yang dipakai
+`handleKamenimeUrl` saat menyimpan. Jadi status "sudah ada" tidak akan pernah
+cocok.
+
+**Fix:** `listKamenimeEpisodes()` sekarang ikut mengembalikan `title` dari
+`<title>` halaman (`"Naruto Shippuden - Kamenime"` → `"Naruto Shippuden"`).
+Halaman itu **sudah di-fetch** untuk Livewire, jadi **tanpa request tambahan**.
+Builder menerima `titleOverride`; slug hanya fallback.
+
+Terverifikasi live:
+```
+slug : naruto-shippuden
+title: "Naruto Shippuden"
+kunci library: anime:naruto-shippuden   ← sama dengan yang dipakai handleKamenimeUrl
+```
+
+**Bug kecil yang ikut ketemu:** helper `kamenimeTitleFromHtml` hanya meng-strip
+`-`, `–`, `|` — **tidak** em-dash `—`. Judul ber-em-dash tidak akan terbersih
+("Black Torch — Kamenime" utuh). Test (r) menambah kasus itu.
+
+Catatan: "⬜ 500 belum ada" itu **akurat** — DB memang kosong (user mengonfirmasi
+sudah dibersihkan). Episode yang dikirim via kamenime hanya terekam di
+`media_parts` kalau `libsimpan` on **dan** judulnya ketemu; dengan kunci yang
+sama sekarang, episode berikutnya akan muncul sebagai 📦.
+
 ## 5. Verifikasi
 
-`test-kamenime-provider.js` **18 pass / 0 fail** (dari 10).
+`test-kamenime-provider.js` **20 pass / 0 fail** (dari 10).
 
 Kasus baru:
 
@@ -216,6 +248,8 @@ Kasus baru:
 | g) | caption lewat `buildCaption`: 3 baris (4 + link), tidak pernah 1 baris |
 | p) | `kam_ep:` pakai `titlePromptKeyboard` (ada "Ganti Judul") + `resolveProviderTitle` punya cabang kamenime |
 | q) | label provider `hokireceh`; internal dispatch key tetap `kamenime` |
+| r) | `listKamenimeEpisodes` mengembalikan judul asli (bukan slug); strip em-dash |
+| s) | picker memakai judul asli; slug hanya fallback |
 
 Fixture `tests/fixtures/kamenime/effects-episodes.html` (5.067 bytes) =
 potongan nyata `effects.html` (14 episode, termasuk anchor navigasi ep 1 & 500).
@@ -233,11 +267,13 @@ Bukti mutasi:
 | hapus prompt judul dari `kam_ep` | 17 pass / **1 fail** (p) |
 | label provider kembali ke `extractProvider` | 17 pass / **1 fail** (q) |
 | hapus cabang kamenime di `resolveProviderTitle` | 17 pass / **1 fail** (p) |
+| picker kembali pakai slug | 19 pass / **1 fail** (s) |
+| strip em-dash (`—`) dihapus | 19 pass / **1 fail** (r) |
 
 Bukti live: `listKamenimeEpisodes('.../anime/naruto-shippuden')` →
 **500 episode, 0 lubang** (min 1, max 500), 500 judul unik, tidak ada `undefined`.
 
-Suite penuh: **237 pass / 0 fail**.
+Suite penuh: **239 pass / 0 fail**.
 
 ## 6. Pelajaran
 

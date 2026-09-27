@@ -156,7 +156,7 @@ function parseKamenimeAnime(url) {
 function kamenimeTitleFromHtml(html, fallback) {
   const t = /<title>([^<]*)<\/title>/i.exec(String(html || ''));
   if (!t) return fallback;
-  const clean = decodeHtml(t[1]).replace(/\s*[-–|]\s*Kamenime\s*$/i, '').trim();
+  const clean = decodeHtml(t[1]).replace(/\s*[-–—|]\s*Kamenime\s*$/i, '').trim();
   return clean || fallback;
 }
 
@@ -215,7 +215,9 @@ async function _livewireUpdate({ pageUrl, call, timeoutMs }) {
     });
     const text = await res.text();
     if (!res.ok) throw new Error(`Livewire HTTP ${res.status}`);
-    return JSON.parse(text);
+    // pageHtml ikut dikembalikan: halaman anime sudah di-fetch di atas, jadi
+    // judul (<title>) bisa diambil TANPA request tambahan.
+    return { json: JSON.parse(text), pageHtml: html };
   } finally {
     clearTimeout(timer);
   }
@@ -237,7 +239,8 @@ async function listKamenimeEpisodes(animeUrl, { timeoutMs = KAMENIME_TIMEOUT_MS 
   } catch (e) {
     throw new Error(`Kamenime: ${LISTING_ERROR} (${(e && e.name === 'AbortError' ? `timeout ${timeoutMs}ms` : e.message) || e})`);
   }
-  const effectHtml = json?.components?.[0]?.effects?.html;
+  const pageHtml = json && json.pageHtml;
+  const effectHtml = json?.json?.components?.[0]?.effects?.html;
   if (!effectHtml) throw new Error(`Kamenime: ${LISTING_ERROR} (Livewire tidak mengembalikan HTML episode)`);
 
   const out = [];
@@ -263,7 +266,11 @@ async function listKamenimeEpisodes(animeUrl, { timeoutMs = KAMENIME_TIMEOUT_MS 
   }
   if (!out.length) throw new Error(`Kamenime: ${LISTING_ERROR} (0 episode di respons Livewire)`);
   out.sort((x, y) => x.ep - y.ep);
-  return { slug, episodes: out, pageUrl };
+  // Judul asli dari <title> halaman ("Naruto Shippuden - Kamenime" →
+  // "Naruto Shippuden"). Dipakai untuk caption & kunci library — slug
+  // "naruto-shippuden" tidak bisa dicari di DB (media_key = judul asli).
+  const title = kamenimeTitleFromHtml(pageHtml, null) || slug;
+  return { slug, title, episodes: out, pageUrl };
 }
 
 /** Halaman anime (bukan episode, bukan file) — pintu masuk ke picker. */
@@ -283,6 +290,7 @@ module.exports = {
   resolveKamenimeFile,
   parseKamenimeAnime,
   listKamenimeEpisodes,
+  kamenimeTitleFromHtml,
   fileNameFromUrl,
   absolutize,
   KAMENIME_UA,

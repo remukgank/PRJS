@@ -1931,9 +1931,11 @@ function samehadakuAnimeSlug(animeUrl) {
 // Status "sudah ada" dari library (media_parts) memakai kunci anime:<slug> yang
 // sama seperti handleKamenimeUrl, jadi episode yang sudah dikirim dari sumber
 // mana pun tampil 📦.
-async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0) {
-  const { slug, title: parsedTitle } = parseKamenimeAnime(animeUrl);
-  const title = parsedTitle || slug;
+async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0, titleOverride = null) {
+  const { slug } = parseKamenimeAnime(animeUrl);
+  // Judul WAJIB judul asli ("Naruto Shippuden"), bukan slug — slug dipakai untuk
+  // pencocokan media_key/library dan slug tidak bisa dicari di DB.
+  const title = titleOverride || slug;
   const done = new Set();
   let statusMap = new Map();
   try {
@@ -3169,9 +3171,9 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
     const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil daftar episode Kamenime...').catch(() => null);
     try {
-      const { episodes } = await listKamenimeEpisodes(text.trim());
+      const { episodes, title: animeTitle } = await listKamenimeEpisodes(text.trim());
       if (!episodes.length) throw new Error('tidak ada episode di listing');
-      const { keyboard, caption } = await buildKamenimeEpisodePicker(episodes, text.trim());
+      const { keyboard, caption } = await buildKamenimeEpisodePicker(episodes, text.trim(), 0, animeTitle);
       if (statusMsg) {
         return bot.editMessageText(caption, {
           chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
