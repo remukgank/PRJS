@@ -476,7 +476,6 @@ t('alur VIDOYY SAJA: batch ter-skip tak pernah unduh ulang', async () => {
   try { fs.unlinkSync(pathx.join(osx.tmpdir(), pathx.basename(pathx.dirname(wd)), 'track.json')); } catch {}
 });
 
-console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
 // ── KRITIS: retry harus RE-RESOLVE, bukan pakai URL basi ────────────────────
 // gdriveplayer memberi URL ber-token yang berubah tiap resolve. Dulu
@@ -1983,5 +1982,12 @@ t('kode: initAdmin menerima isAdmin (guard panel tidak boleh blank)', () => {
   const bot = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   if (!/initAdmin\(\{[^}]*isAdmin/.test(bot)) throw new Error('initAdmin tidak menerima isAdmin');
 });
+
+// Ringkasan dicetak di AKHIR file, bukan di tengah.
+// Sebelumnya baris ini ada di tengah (~baris 479) sementara ~80 test lain
+// masih jalan SETELAHNYA — jadi ringkasannya selalu tampak hijau walau
+// sudah ada FAIL di bawahnya, dan exit code tetap 0. Featured the
+// proposal 2026-09-27-logger-terminalkeys-test-summary.md item 2.
+console.log(`RESULT: ${passed} pass, ${failed} fail`);
 
 process.exit(failed ? 1 : 0);

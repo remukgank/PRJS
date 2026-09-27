@@ -38,8 +38,25 @@ const baseOpts = {
 // Format: HH:MM:SS LEVEL  pesan  ·  key=value
 // Matikan dengan LOG_TERMINAL=off.
 const TERMINAL_ON = (process.env.LOG_TERMINAL || 'on').toLowerCase() !== 'off';
-const terminalKeys = ['mb', 'totalMb', 'kbps', 'etaSec', 'ep', 'target', 'title', 'file',
-  'chatId', 'server', 'quality', 'container', 'sizeMb', 'source', 'attempt', 'err'];
+// Field yang dicetak ke terminal. Harus mencakup semua field log yang dipakai
+// untuk trace — kalau tidak, informasi hanya ada di logs/app.log (JSON) padahal
+// yang enak dibaca cepat justru yang muncul di `pm2 logs`.
+// Dipakai: progres unduhan + query/hasil !dell & !vdell (f4428ca).
+const terminalKeys = [
+  // unduhan
+  'mb', 'totalMb', 'kbps', 'etaSec', 'container', 'sizeMb', 'source', 'attempt',
+  // media & target
+  'ep', 'part', 'target', 'title', 'file', 'server', 'quality',
+  // !dell / !vdell — query & hasil (f4428ca)
+  'q', 'hasil', 'slugs', 'rows', 'keys', 'media_key', 'terhapus', 'sisa', 'dari',
+  'fileTerhapus', 'gagal',
+  // konteks umum
+  'chatId', 'err',
+];
+function fmtVal(v) {
+  if (Array.isArray(v)) return v.length ? `[${v.join(',')}]` : '[]';
+  return String(v);
+}
 function terminalFormat(obj) {
   const o = obj || {};
   const time = o.time ? new Date(o.time).toTimeString().slice(0, 8)
@@ -48,7 +65,7 @@ function terminalFormat(obj) {
   const msg = o.msg ? String(o.msg) : (o.err ? String(o.err) : '');
   const rest = [];
   for (const k of terminalKeys) {
-    if (o[k] !== undefined && o[k] !== null && k !== 'err') rest.push(`${k}=${o[k]}`);
+    if (o[k] !== undefined && o[k] !== null && k !== 'err') rest.push(`${k}=${fmtVal(o[k])}`);
   }
   const err = o.err && o.err !== o.msg ? `  ! ${o.err}` : '';
   const tail = rest.length ? '  ·  ' + rest.join(' ') : '';
