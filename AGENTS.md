@@ -29,8 +29,14 @@ Semuanya berasal dari kegagalan nyata (lihat `docs/audit/`).
 
 ## 3. Proses & pm2
 
-- **Jangan start/stop/kill proses tanpa izin user.** Termasuk `pm2`, `9router`,
-  FlareSolverr, dan apa pun yang bukan `scraper/bot.js`.
+- **Izin restart bot sudah didelegasikan (27 Sep 2026).** Bot jalan di pm2
+  (`prjs-bot`) → **bebas `pm2 restart prjs-bot && pm2 save` tanpa Tanya**, asal:
+  1. **tidak ada** download/upload yang sedang jalan — cek `logs/app.log` untuk
+     `download progres` / `Kamenime download` yang masih berjalan (< 2 menit lalu);
+  2. **tidak sedang di Replit** — restart *instance* Replit menyentuh
+     infrastruktur (`9router`/FlareSolverr) dan **tetap perlu izin**.
+  Yang **tetap butuh izin**: `9router` (jangan pernah kill), FlareSolverr, dan
+  proses apa pun selain `scraper/bot.js`.
 - `9router` = infrastruktur Replit (dari `start.sh`). **Jangan pernah kill.**
 - Hanya boleh **1** instance bot. `409 Conflict: terminated by other getUpdates
   request` = ada instance lain (cek `ps -eo pid,etimes,cmd | grep bot.js`).
@@ -85,6 +91,25 @@ Semuanya berasal dari kegagalan nyata (lihat `docs/audit/`).
   (`Vidoy CDN status invalid ... explode(): Passing null`).
 - **Signature format lebih otoritatif daripada ukuran.** MP4 sah boleh kecil
   (fragmen/clip); jangan menolak hanya karena kecil kalau `ftyp`/Matroska ada.
+- **Klaim dari baca kode BUKAN hasil run.** Aturan ini lahir dari 3 bug berturut
+  (27 Sep 2026), semuanya kelalaian yang sama: lebih cepatPacket "sudah benar"
+  tanpa menjalankan alurnya.
+  - "caption 3 baris" → nyata **1 baris** (judul kosong jatuh ke `cap` mentah).
+  - "sudah MP4 jadi tidak perlu remux" → itu yang **mematikan streaming**
+    (short-circuit `remuxToMp4` melewatkan `-movflags +faststart`).
+  - "kunci library pakai slug" → `media_key` = **judul asli**, jadi status
+    "sudah ada" tidak akan pernah cocok.
+  → Kalau escreveu "sudah X / aman / tidak berubah", jalankan alurnya sungguhan
+  dan laporkan **hasilnya** (angka, output, ukuran file). Kalau tidak bisa
+  dijalankan, katakan begitu — jangan menyatakan sebagai fakta.
+- **Test yang mengunci asumsi salah lebih berbahaya dari tidak ada test.** Test
+  (f) "handleKamenimeUrl tidak boleh remux" terlihat menjaga, tapi justru
+  **melarang perbaikannya sendiri**. Kalau test mengunci perilaku, pastikan
+  perilakunya benar lebih dulu (jalankan sekali, lihat hasilnya).
+- **Penggantian teks (replace) yang gagal TIDAK boleh diam-diam gagal.** Dubb-
+  periksa dengan `assert` di script yang memakainya; `assert s != before` hanya
+  membuktikan *salah satu* penggantian berhasil, bukan semuanya. Bug nyata:
+  `dl_go:tg` tidak dapat cabang kamenime karena replace-nya tidak cocok.
 
 ## 5. Kontrak media (tidak boleh dilanggar)
 

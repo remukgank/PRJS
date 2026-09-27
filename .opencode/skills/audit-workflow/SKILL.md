@@ -13,8 +13,16 @@ description: Use at the start of every session and whenever fixing bugs, changin
 3. **Cari potensi bug/error/ketidaksesuaian** → cross-check penggunaan API/endpoint dengan dokumentasi/response asli; cek bug kelas yang sama di call path saudara
 4. **Sumber kebenaran API = dokumentasi terbaru** https://core.telegram.org/bots/api (boleh fetch via jina.ai: `https://r.jina.ai/https://core.telegram.org/bots/api`); fitur wajib modern & profesional demi kenyamanan pengguna
 5. **Setelah selesai** → LOG perubahan (file apa saja yang kena + folder mana) di docs/audit/
-6. **Deploy dulu, baru commit**: Tanya user dulu sebelum restart via pm2 (biar gak konflik) → restart → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
-   - Tag wajib lengkap & proporsional terhadap besar perubahan: `v<major>.<minor>.<patch>` — bedakan kecil (patch) / sedang (minor) / besar (major)
+6. **Deploy dulu, baru commit**: restart via pm2 → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
+   - **Izin restart sudah didelegasikan user (27 Sep 2026).** Bot jalan di pm2
+     (`prjs-bot`) → ** bebas restart tanpa Tanya**, ASAL:
+     - tidak ada download/upload yang sedang berjalan (cek `logs/app.log` untuk
+       `download progres` / `Kamenime download` yang < 2 menit lalu), dan
+     - **tidak** sedang di Replit (restart instance Replit = infrastruktur
+       `9router`/FlareSolverr = **tetap perlu izin**; `9router` jangan pernah kill)
+   - Start standar: `pm2 restart prjs-bot && pm2 save` (atau `pm2 start scraper/bot.js --name prjs-bot --cwd /home/runner/workspace --max-memory-restart 700M` kalau prosesnya mati)
+   - Verifikasi: `pm2 list` = online, **1** proses `bot.js`, log startup `Bot running` + `Polling started`, dan kode yang jalan = HEAD
+   - **Tag wajib lengkap & proporsional** terhadap besar perubahan: `v<major>.<minor>.<patch>` — bedakan kecil (patch) / sedang (minor) / besar (major)
    - Jangan commit/push/tag sebelum deploy terverifikasi jalan normal
 
 ## Prinsip Penting
@@ -26,6 +34,22 @@ description: Use at the start of every session and whenever fixing bugs, changin
 - **Tugas gue (opencode) = PRJS saja.** Repo fomo-drama / cs-hokireceh itu milik user — kodenya ditangani user. Jangan sentuh/edit/commit repo fomo-drama tanpa perintah eksplisit. Proposal untuk fomo-drama boleh dibikin di docs/audit PRJS, tapi implementasi + commit = user. (Kasus 3 Aug: gue edit sync-check.js fomo-drama tanpa izin scope.)
 - **Kalau nemu isu lain di luar scope proposal saat implementasi → laporkan dulu, jangan langsung fix.**
 - **Gunakan Bahasa Indonesia** untuk semua komunikasi.
+- **Jangan menyatakan "sudah benar" dari baca kode — jalankan alurnya.** Aturan ini
+  lahir dari 3 bug berturut (27 Sep 2026), semuanya kelalaian yang sama:
+  - "caption 3 baris" → nyata **1 baris** (judul kosong jatuh ke `cap` mentah).
+  - "sudah MP4 jadi tidak perlu remux" → itu yang **mematikan streaming**
+    (short-circuit `remuxToMp4` melewatkan `-movflags +faststart`).
+  - "kunci library pakai slug" → `media_key` = **judul asli**, jadi status
+    "sudah ada" tidak akan pernah cocok.
+  Kalau tidak bisa menjalankan alurnya, katakan begitu — jangan menyatakan sebagai
+  fakta.
+- **Test yang mengunci asumsi salah lebih berbahaya dari tidak ada test.** Test
+  "handleKamenimeUrl tidak boleh remux" terlihat menjaga, tapi justru **melarang
+  perbaikannya sendiri**. Kalau test mengunci perilaku, pastikan perilakunya benar
+  lebih dulu (jalankan sekali, lihat hasilnya).
+- **Penggantian teks yang gagal tidak boleh diam-diam gagal.** `assert s != before`
+  hanya membuktikan *salah satu* penggantian berhasil. Bug nyata: `dl_go:tg` tidak
+  dapat cabang kamenime karena `str.replace` tidak cocok.
 
 ## Format Audit Log
 
