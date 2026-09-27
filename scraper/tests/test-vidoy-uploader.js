@@ -529,8 +529,16 @@ t('!vdell hapus file fisik di Vidoy lewat deleteItem, bukan hanya DB', () => {
   if (!body.includes("/view/") || !body.includes("/e/")) {
     throw new Error('filecode harus diambil dari dashboard atau link');
   }
-  // record DB hanya dihapus kalau file fisik sukses
-  if (!/if \(okDel\) delDb \+= await deleteVidoyRecord/.test(body)) {
+  // record DB hanya dihapus kalau file fisik sukses.
+  // Regex lama mengunci TEKS sumber persis (`if (okDel) delDb += …`), jadi
+  // sekadar menambah satu baris log di dalamnya bikin test ini gagal padahal
+  // perilakunya tidak berubah — persis jebakan "test yang mengunci asumsi
+  // salah lebih berbahaya dari tidak ada test".
+  // Sekarang: `if (okDel)` harus muncul SEBELUM `delDb +=` (boleh ada
+  // pernyataan lain di antaranya, mis. logger.info). Jaminan perilakunya
+  // diuji langsung di tests/test-dell-vdell-logging.js
+  // ("TIDAK dilog kalau file fisik gagal dihapus" → terhapus=0).
+  if (!/if \(okDel\)[\s\S]{0,400}?delDb \+= await deleteVidoyRecord/.test(body)) {
     throw new Error('record DB harus dihapus hanya bila file fisik terhapus');
   }
 });

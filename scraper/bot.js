@@ -2843,6 +2843,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
       : args.join(' ');
 
     const found = await findMediaByName(mediaName);
+    logger.info({ q: mediaName, part: isNaN(partNum) ? null : partNum, hasil: found.length, slugs: found.map((m) => m.slug) }, '!dell query');
     if (!found.length) return bot.sendMessage(chatId, `❌ Tidak ditemukan: "<b>${mediaName}</b>"`, { parse_mode: 'HTML' });
 
     if (found.length > 1 && isNaN(partNum)) {
@@ -2880,6 +2881,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
     const titleQ = hasEp ? args.slice(0, -1).join(' ') : args.join(' ');
 
     const rows = await findVidoyRecords(titleQ, hasEp ? epNum : null);
+    logger.info({ q: titleQ, ep: hasEp ? epNum : null, rows: rows.length, keys: rows.map((r) => r.media_key) }, '!vdell query');
     if (!rows.length) {
       return bot.sendMessage(chatId, `❌ Tidak ada file Vidoy cocok: "<b>${escHtml(titleQ)}</b>"${hasEp ? ` Ep ${epNum}` : ''}`, { parse_mode: 'HTML' });
     }
@@ -4441,6 +4443,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const del = await deleteTelegramMessagesRaw([...libPtrs, ...vidPtrs]);
       // B) kosongkan pointer Telegram di vidoy_uploads, LINK TETAP ADA
       const cleared = await clearVidoyTelegramPointers(pending.name, 'anime');
+      logger.info({ slug: pending.slug, part: pending.part, name: pending.name, semuaPart: true }, '!dell hapus library');
       await deleteMedia(pending.slug);
       return bot.editMessageText(
         `🗑️ <b>${pending.name}</b> dihapus dari library (semua part)\n`
@@ -4497,9 +4500,20 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }
       // Record DB hanya dihapus kalau file fisiknya benar-benar terhapus, supaya
       // tidak pernah ada record yang menunjuk file yang masih ada.
-      if (okDel) delDb += await deleteVidoyRecord(r.media_key, r.kind, r.part);
+      // Catatan: tabel vidoy_uploads tidak punya kolom `id` (PK = media_key+kind+part),
+      // jadi yang dilog adalah pointer Telegram — itu satu-satunya identitas lain
+      // yang tersedia dan justru berguna untuk trace.
+      if (okDel) {
+        logger.info({ media_key: r.media_key, kind: r.kind, part: r.part, link: r.link, tg_chat_id: r.tg_chat_id, tg_message_id: r.tg_message_id }, '!vdell hapus record');
+        delDb += await deleteVidoyRecord(r.media_key, r.kind, r.part);
+      }
     }
     const withMsg = rows.filter((r) => r.tg_message_id).length;
+    // Bukti apakah record benar-benar hilang: query ulang setelah delete.
+    // "berhasil" di pesan Telegram tidak cukup — kalau `sisa` > 0 berarti
+    // record masih menunjuk file yang sudah tidak ada (atau kebalik).
+    const sisa = (await findVidoyRecords(pend.titleQ, pend.ep)).length;
+    logger.info({ terhapus: delDb, sisa, dari: rows.length, fileTerhapus: delFile, gagal: gagal.length }, '!vdell selesai');
     let out = `🗑️ <b>Vidoy dihapus</b>\n\n`
       + `📁 File terhapus: ${delFile}/${rows.length}\n`
       + `🗃️ Record DB dihapus: ${delDb}\n`;
