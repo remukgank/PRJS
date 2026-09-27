@@ -192,6 +192,110 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     console.log(`      → spy: ${JSON.stringify(calls)} (bukan resolveDirectUrl)`);
   });
 
+  // ── k) parseKamenimeAnime + isKamenimeAnimePage (offline) ──
+  await t('k) parseKamenimeAnime() → slug dari URL, isKamenimeAnimePage pisahkan halaman vs episode', () => {
+    const { parseKamenimeAnime, isKamenimeAnimePage } = require('../providers/kamenime');
+    const a = parseKamenimeAnime('https://www.kamenime.com/anime/naruto-shippuden');
+    assert.strictEqual(a.slug, 'naruto-shippuden');
+    assert.strictEqual(a.pageUrl, 'https://www.kamenime.com/anime/naruto-shippuden');
+    // halaman anime → true; episode & file → false (bukan pintu picker)
+    assert.strictEqual(isKamenimeAnimePage('https://www.kamenime.com/anime/naruto-shippuden'), true);
+    assert.strictEqual(isKamenimeAnimePage('https://www.kamenime.com/anime/naruto-shippuden/'), true);
+    assert.strictEqual(isKamenimeAnimePage('https://www.kamenime.com/anime/naruto-shippuden/episode/1'), false);
+    assert.strictEqual(isKamenimeAnimePage(FILE_EP1), false);
+    assert.strictEqual(isKamenimeAnimePage('https://gofile.io/d/abc'), false);
+    console.log('      → slug:', a.slug, '| halaman anime=true, episode/file=false');
+  });
+
+  // ── l) listKamenimeEpisodes dari FIXTURE (tanpa network) ──
+  await t('l) listKamenimeEpisodes() parse effects.html fixture → [{ep,url,title}]', async () => {
+    const { listKamenimeEpisodes } = require('../providers/kamenime');
+    const fx = fs.readFileSync(path.join(__dirname, 'fixtures', 'kamenime', 'effects-episodes.html'), 'utf8');
+    const realFetch = globalThis.fetch;
+    // 1) GET halaman anime (snap + csrf)  2) POST /livewire/update → effects.html
+    const pageHtml = '<html><head><meta name="csrf-token" content="TESTTOKEN"></head><body>'
+      + '<div wire:id="AAA" wire:snapshot="{&quot;memo&quot;:{&quot;name&quot;:&quot;offcanvas-navbar&quot;},&quot;data&quot;:{}}"></div>'
+      + '<div wire:id="BBB" wire:snapshot="{&quot;memo&quot;:{&quot;name&quot;:&quot;show.anime-show&quot;},&quot;data&quot;:{&quot;video_open&quot;:false}}"></div>'
+      + '</body></html>';
+    let posted = 0;
+    globalThis.fetch = async (u, opt) => {
+      if (String(u).endsWith('/livewire/update')) {
+        posted++;
+        const body = JSON.parse(opt.body);
+        // snapshot WAJIB string — kalau objek, Livewire asli membalas 500.
+        assert.strictEqual(typeof body.components[0].snapshot, 'string', 'snapshot harus string');
+        // WAJIB komponen show.anime-show, BUKAN komponen pertama di halaman
+        // (offcanvas-navbar) — memilih yang salah = 404 / data salah.
+        const memo = JSON.parse(body.components[0].snapshot).memo;
+        assert.strictEqual(memo.name, 'show.anime-show', `pilih komponen salah: ${memo.name}`);
+        assert.ok(body.components[0].calls.some((c) => c.method === 'toggleVideo'), 'harus panggil toggleVideo');
+        return { ok: true, status: 200, text: async () => JSON.stringify({ components: [{ effects: { html: fx } }] }) };
+      }
+      return { ok: true, status: 200, headers: { getSetCookie: () => ['XSRF-TOKEN=X; path=/'] }, text: async () => pageHtml };
+    };
+    let r;
+    try { r = await listKamenimeEpisodes('https://www.kamenime.com/anime/naruto-shippuden'); }
+    finally { globalThis.fetch = realFetch; }
+    assert.strictEqual(posted, 1, `harus 1 POST Livewire, dapat ${posted}`);
+    assert.strictEqual(r.slug, 'naruto-shippuden');
+    const nums = r.episodes.map((e) => e.ep);
+    assert.ok(nums.includes(1) && nums.includes(13), `harus berisi ep 1 & 13, dapat ${nums.join(',')}`);
+    // Anchor navigasi (EPISODE TERLAMA/TERBARU) tidak boleh jadi judul
+    assert.ok(!r.episodes.some((e) => /terlama|terbaru/i.test(e.title)), 'judul navigasi bocor');
+    assert.ok(r.episodes.every((e) => /^Episode \d+$/.test(e.title)), `judul harus ternormalisasi: ${r.episodes.map((e) => e.title).slice(0, 3)}`);
+    assert.strictEqual(nums.length, [...new Set(nums)].length, 'tidak boleh ada ep duplikat');
+    console.log(`      → ${r.episodes.length} episode dari fixture: ep ${nums.join(',')}`);
+    console.log(`      → contoh: ${JSON.stringify(r.episodes[1])}`);
+  });
+
+  // ── m) listing gagal → error jujur, bukan tebakan ──
+  await t('m) Livewire gagal → error "kirim URL episode manual", bukan daftar karangan', async () => {
+    const { listKamenimeEpisodes } = require('../providers/kamenime');
+    const realFetch = globalThis.fetch;
+    const pageHtml = '<html><head><meta name="csrf-token" content="TESTTOKEN"></head><body>'
+      + '<div wire:id="BBB" wire:snapshot="{&quot;memo&quot;:{&quot;name&quot;:&quot;show.anime-show&quot;},&quot;data&quot;:{}}"></div>'
+      + '</body></html>';
+    // Halaman anime OK, tapi POST /livewire/update yang gagal.
+    globalThis.fetch = async (u) => {
+      if (String(u).endsWith('/livewire/update')) return { ok: false, status: 500, text: async () => 'boom' };
+      return { ok: true, status: 200, headers: { getSetCookie: () => [] }, text: async () => pageHtml };
+    };
+    let err = null;
+    try { await listKamenimeEpisodes('https://www.kamenime.com/anime/naruto-shippuden'); }
+    catch (e) { err = e; }
+    globalThis.fetch = realFetch;
+    assert.ok(err, 'harus melempar error');
+    assert.ok(/kirim URL episode manual/.test(err.message), `pesan harus: ${err.message}`);
+    assert.ok(/Livewire HTTP 500/.test(err.message), `harus sebut penyebab: ${err.message}`);
+    console.log(`      → ${err.message}`);
+  });
+
+  // ── n) regression: /storage/ tetap resolve TANPA request ──
+  await t('n) REGRESI: /storage/...mp4 tetap instan (tanpa request) setelah ada listing', async () => {
+    const realFetch = globalThis.fetch;
+    let called = 0;
+    globalThis.fetch = () => { called++; throw new Error('tidak boleh request untuk /storage/'); };
+    let r;
+    try { r = await resolveKamenimeFile(FILE_EP1); } finally { globalThis.fetch = realFetch; }
+    assert.strictEqual(called, 0, `harus 0 request, dapat ${called}`);
+    assert.strictEqual(r.fileUrl, FILE_EP1);
+    console.log(`      → ${r.fileUrl} (0 request)`);
+  });
+
+  // ── o) picker: bot.js punya dispatcher anime-page + callback kam_ep ──
+  await t('o) bot.js: dispatcher halaman anime + callback kam_ep + map', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    assert.ok(/if \(isKamenimeAnimePage\(text\)\) \{/.test(src), 'butuh dispatcher halaman anime');
+    assert.ok(/listKamenimeEpisodes\(text\.trim\(\)\)/.test(src), 'dispatcher harus memanggil listKamenimeEpisodes');
+    assert.ok(/data\.startsWith\('kam_ep:'\)/.test(src), 'butuh handler kam_ep:');
+    assert.ok(/kamenimeEpisodeMap\.set\(epId, e\.url\)/.test(src), 'butuh map epId → url');
+    assert.ok(/callback_data: `kam_ep:\$\{epId\}`/.test(src), 'butuh callback_data kam_ep');
+    // dispatcher halaman anime harus SEBELUM isKamenimeUrl (keduanya mulai 'kamenime')
+    const iPage = src.indexOf('if (isKamenimeAnimePage(text)) {');
+    const iFile = src.indexOf('if (isKamenimeUrl(text)) {');
+    assert.ok(iPage > 0 && iFile > iPage, `anime-page (${iPage}) harus sebelum isKamenimeUrl (${iFile})`);
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

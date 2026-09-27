@@ -18,13 +18,17 @@ const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseS
 const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
-const { isKamenimeUrl, resolveKamenimeFile } = require('./providers/kamenime');
+const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime } = require('./providers/kamenime');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
 // Cache daftar episode utk navigasi halaman picker (jangan fetch ulang tiap tap).
 const samehadakuEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const SAM_PAGE_EP = Number(process.env.SAM_PAGE_EP) || 20; // ep per halaman (5 per baris × 4)
+
+// epId (hash 8) → URL episode kamenime. Hash, bukan cacheUrl numerik, supaya
+// tidak ada kedaluwarsa/tabrakan seperti sam_ep.
+const kamenimeEpisodeMap = new Map();
 const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 // Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
 const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
@@ -1921,6 +1925,47 @@ function samehadakuAnimeSlug(animeUrl) {
 }
 
 // Keyboard episode + caption dgn centang ✅ utk part yg sudah ada di library.
+// ─── Kamenime picker episode ───────────────────────────────────────────────
+// Satu tombol per episode; klik → kam_ep:<epId> → handleKamenimeUrl.
+// Status "sudah ada" dari library (media_parts) memakai kunci anime:<slug> yang
+// sama seperti handleKamenimeUrl, jadi episode yang sudah dikirim dari sumber
+// mana pun tampil 📦.
+async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0) {
+  const { slug, title: parsedTitle } = parseKamenimeAnime(animeUrl);
+  const title = parsedTitle || slug;
+  const done = new Set();
+  let statusMap = new Map();
+  try {
+    statusMap = await episodeStatusMap(`anime:${sanitizeSlug(title)}`, title);
+  } catch (err) {
+    logger.warn({ err: err.message }, 'kamenime picker done-state gagal, tampil tanpa centang');
+  }
+  const total = eps.length;
+  const { keyboard, meta } = buildPicker(eps, {
+    urlId: cacheUrl(animeUrl),
+    page,
+    pageSize: SAM_PAGE_EP,
+    done,
+    mkEp: (e) => {
+      const epId = hashUrl(e.url).slice(0, 8);
+      kamenimeEpisodeMap.set(epId, e.url);
+      const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
+      return { text: b.text, callback_data: `kam_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
+    },
+  });
+  const { first, last, doneCount } = meta;
+  let caption;
+  if (doneCount > 0) {
+    const filled = Math.round((doneCount / total) * 10);
+    const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
+    const pct = Math.round((doneCount / total) * 100);
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ${statusBreakdown(statusMap, total)}\n${bar} ${pct}%\nEpisode ${first}-${last} ditampilkan`;
+  } else {
+    caption = `📺 <b>${title}</b>\n🎞 ${total} episode · ${statusBreakdown(statusMap, total)}\nEpisode ${first}-${last} ditampilkan`;
+  }
+  return { keyboard, caption };
+}
+
 async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
   // Judul dari URL anime (deterministik) — data worker cuma berisi nomor ep.
   let title = 'Samehadaku';
@@ -3116,6 +3161,30 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
   }
 
+  // Kamenime — halaman anime → picker episode; file/episode → unduh langsung
+  if (isKamenimeAnimePage(text)) {
+    if (!isAdmin(msg.from.id)) {
+      return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
+    }
+    const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil daftar episode Kamenime...').catch(() => null);
+    try {
+      const { episodes } = await listKamenimeEpisodes(text.trim());
+      if (!episodes.length) throw new Error('tidak ada episode di listing');
+      const { keyboard, caption } = await buildKamenimeEpisodePicker(episodes, text.trim());
+      if (statusMsg) {
+        return bot.editMessageText(caption, {
+          chat_id: chatId, message_id: statusMsg.message_id, parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: keyboard },
+        }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
+      }
+      return bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+    } catch (err) {
+      // Gagal listing TIDAK boleh diam-diam: user perlu tahu harus kirim URL episode manual.
+      if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
+      return bot.sendMessage(chatId, `⚠️ <b>Kamenime gagal</b>\n\n<code>${safeHtml(String(err.message || err).slice(0, 220))}</code>\n\nKirim URL episode manual, contoh:\n<code>https://www.kamenime.com/anime/naruto-shippuden/episode/1</code>`, { parse_mode: 'HTML' });
+    }
+  }
+
   // Kamenime — MP4 direct, admin only (mirip filedon)
   if (isKamenimeUrl(text)) {
     if (!isAdmin(msg.from.id)) {
@@ -3370,6 +3439,16 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   // ─── Samehadaku server select callbacks ──────────────────────────────────────
+  if (data.startsWith('kam_ep:')) {
+    const epId = data.slice(7);
+    const episodeUrl = kamenimeEpisodeMap.get(epId);
+    if (!episodeUrl) {
+      return bot.answerCallbackQuery(queryId, { text: 'Episode kedaluwarsa — buka ulang picker', show_alert: true }).catch(() => {});
+    }
+    try { return await handleKamenimeUrl(chatId, episodeUrl); }
+    catch (err) { logger.error({ err: err.message }, 'kam_ep gagal'); }
+  }
+
   if (data.startsWith('sam_ep:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
