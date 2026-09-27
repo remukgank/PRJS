@@ -131,29 +131,55 @@ const FAST_TH = { SPEED_FLOOR_BPS: 70 * 1024, SPEED_WINDOW_MS: 900, SPEED_MIN_RU
     console.log(`      → ${err.message}  (noRetry=${err.noRetry})`);
   });
 
-  // ── e) 416 saat have>0 ── KNOWN BUG (pre-existing, sudah ada di HEAD) ──
-  // Cabang `have > 0 && statusCode === 416` TIDAK terjangkau: `statusCode >= 400`
-  // menutup duluan, jadi 416 jatuh ke `download HTTP 416` (retryable) — padahal
-  // 416 artinya "file sudah lengkap". Akibatnya ensureMp4 retry sia-sia.
-  // Test ini mengunci perilaku SEKARANG; belum diperbaiki karena di luar scope
-  // proposal (menunggu keputusan).
-  await t('e) KNOWN BUG: 416 jatuh ke "download HTTP 416", cabang 416 tak terjangkau', async () => {
-    const srv = http.createServer((req, res) => { res.writeHead(416); res.end(); });
+  // ── e) 416 dengan have > 0 → SUKSES (berkas sudah utuh di server) ──
+  // 26 Sep 2026: blok 416 berada SETELAH `statusCode >= 400` sehingga tidak
+  // terjangkau → 416 jatuh jadi error retryable dan ensureMp4 mengulang 4×
+  // berkas yang sebenarnya sudah jadi. Persis "retry sia-sia" item 2.
+  await t('e) 416 dengan have>0 → sukses (bukan error retryable)', async () => {
+    const srv = http.createServer((req, res) => {
+      assert.ok(req.headers.range, `server harus menerima Range; yang datang: ${JSON.stringify(req.headers.range)}`);
+      res.writeHead(416); res.end();
+    });
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
     const port = srv.address().port;
     const dest = tmp('e.mp4');
-    fs.writeFileSync(dest, Buffer.alloc(1024));
+    const partial = Buffer.alloc(1024, 0x5a);
+    fs.writeFileSync(dest, partial);
+    let err = null, resolved = false;
+    try { await downloadTo(`http://127.0.0.1:${port}/v`, dest, { thresholds: FAST_TH }); resolved = true; }
+    catch (e) { err = e; }
+    srv.close();
+    assert.ok(resolved, `416 dengan have>0 harus SUKSES, dapat error: ${err && err.message}`);
+    assert.ok(!err, `tidak boleh ada error: ${err && err.message}`);
+    // file parsial dibiarkan utuh — validasi (assertLooksLikeVideo) yang memvonis
+    assert.ok(fs.readFileSync(dest).equals(partial), 'file tidak boleh ditimpa');
+    console.log('      → 416 + have>0 = sukses (file dianggap sudah utuh, tanpa retry)');
+  });
+
+  // ── g) 416 dengan have == 0 → tetap ERROR (permintaan rusak) ──
+  await t('g) 416 dengan have==0 → tetap error 416 (tidak salah accept)', async () => {
+    const srv = http.createServer((req, res) => { res.writeHead(416); res.end(); });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const dest = tmp('g.mp4');
+    fs.rmSync(dest, { force: true }); // tidak ada file parsial → have = 0
     let err = null;
     try { await downloadTo(`http://127.0.0.1:${port}/v`, dest, { thresholds: FAST_TH }); }
     catch (e) { err = e; }
     srv.close();
-    assert.ok(err && /HTTP 416/.test(err.message), `perilaku saat ini: gagal HTTP 416, dapat ${err && err.message}`);
-    assert.ok(err.noRetry !== true, 'galat 416 saat ini masih retryable (itulah bugnya)');
-    // buktikan cabang 416 benar-benar tidak terjangkau di sumber
+    assert.ok(err, '416 tanpa Range harus tetap gagal');
+    assert.ok(/HTTP 416/.test(err.message), `pesan harus menyebut 416, dapat: ${err && err.message}`);
+    console.log(`      → 416 + have=0 = error "${err.message}" (permintaan rusak, bukan "sudah utuh")`);
+  });
+
+  // ── h) 416 harus Dicek SEBELUM >= 400 (anti-regresi urutan) ──
+  await t('h) cabang 416 berada SEBELUM cek statusCode >= 400', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'vidaraService.js'), 'utf8');
-    const ge400 = src.indexOf('res.statusCode >= 400');
-    const is416 = src.indexOf('res.statusCode === 416');
-    assert.ok(ge400 >= 0 && is416 > ge400, 'cabang 416 berada SETELAH >= 400 → tidak terjangkau');
+    const i416 = src.indexOf('res.statusCode === 416');
+    const i400 = src.indexOf('res.statusCode >= 400');
+    assert.ok(i416 >= 0, 'blok 416 harus ada');
+    assert.ok(i400 >= 0, 'cek >= 400 harus ada');
+    assert.ok(i416 < i400, `blok 416 (idx ${i416}) harus SEBELUM >= 400 (idx ${i400}) — kalau tidak, 416 tidak terjangkau`);
   });
 
   // ── f) ensureMp4 TIDAK retry pada galat noRetry (anti retry sia-sia) ──

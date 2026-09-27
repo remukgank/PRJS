@@ -69,7 +69,49 @@ selalu ≥ window.
 bukan diam-diam restart dari nol. `ensureMp4` menghormati `noRetry` → berhenti di
 percobaan pertama.
 
-### 3.4 Tiga pesan berbeda
+### 3.4 416 tidak terjangkau — diperbaiki (bagian dari item 2)
+
+Cabang `if (have > 0 && res.statusCode === 416)` berada **setelah**
+`if (res.statusCode >= 400)`, sehingga tidak pernah terjangkau. 416 = "Range Not
+Satisfiable" = berkas **sudah utuh** di server, tapi ia jatuh jadi
+`download HTTP 416` yang **retryable** → `ensureMp4` mengulang 4× berkas yang
+sudah jadi.  persis "retry sia-sia" yang item 2 harus hilangkan, jadi ini
+diperbaiki bersama, bukan dibiarkan.
+
+**Before** (HEAD):
+
+```js
+if (res.statusCode >= 400) {          // ← menutup duluan
+  res.resume();
+  return fail(new Error(`download HTTP ${res.statusCode}`));
+}
+if (res.statusCode >= 300 && res.statusCode < 400) { /* redirect */ }
+
+// 416 = range tidak bisa dipenuhi → file sudah lengkap, biarkan divalidasi.
+if (have > 0 && res.statusCode === 416) {   // ← TIDAK PERNAH terjangkau
+  res.resume();
+  return ok();
+}
+```
+
+Hasil: `416` → `fail("download HTTP 416")` → retryable → 4 percobaan sia-sia.
+
+**After:**
+
+```js
+// 416 = berkas sudah utuh di server. WAJIB dicek SEBELUM `>= 400`.
+// Syarat `have > 0` dipertahankan: tanpa Range, 416 = permintaan rusak.
+if (have > 0 && res.statusCode === 416) {
+  res.resume();
+  return ok();
+}
+if (res.statusCode >= 400) { /* ... */ }
+```
+
+Hasil: `416` + `have > 0` → **sukses** (tanpa retry). `416` + `have == 0` → tetap
+error `download HTTP 416` (permintaan rusak, bukan "sudah utuh").
+
+### 3.5 Tiga pesan berbeda
 
 | kondisi | pesan |
 |---|---|
@@ -90,7 +132,9 @@ anti-drift.
 | b) > ambang | tidak di-kill (tidak false-positive) |
 | c) stall | tetap di-kill `macet` |
 | d) Range diabaikan (200 ≠ 206) | `tidak mendukung resume` + `noRetry=true` |
-| e) 416 | **KNOWN BUG** — lihat §5 |
+| e) 416 + `have>0` | sukses (bukan error retryable) |
+| g) 416 + `have==0` | tetap error 416 (tidak salah accept) |
+| h) urutan cabang 416 sebelum `>= 400` | sesuai |
 | f) `ensureMp4` | **1 percobaan, bukan 4** |
 | anti-drift `SPEED_*` vs `downloader.js` | 4/4 cocok |
 | anti-drift tanpa angka magic | watchdog bebas literal |
@@ -99,28 +143,27 @@ Bukti mutasi (test harus gagal kalau perbaikannya dibatalkan):
 
 | mutasi | hasil |
 |---|---|
-| anchor `find(>=cutoff)` + gate `spanMs>=window` (bug asli) | 7 pass / **1 fail** (a) |
+| anchor `find(>=cutoff)` + gate `spanMs>=window` (bug speed floor) | 7 pass / **1 fail** (a) |
 | fail-fast resume dibatalkan | 6 pass / **1 fail** (d) |
 | `noRetry` tidak dihormati | 7 pass / **1 fail** (f) |
+| blok 416 dikembalikan ke SESUDAH `>= 400` | 8 pass / **2 fail** (e, h) |
+| syarat `have > 0` pada 416 dihapus | 9 pass / **1 fail** (g) |
 
 `test-download-stall.js` diperbarui: kasus "server mengabaikan Range" sebelumnya
 **meng-assert perilaku lama** (restart dari nol); sekarang meng-assert fail-fast +
 file parsial tidak berubah.
 
-Suite penuh: **217 pass / 0 fail** (4 file pre-existing dikecualikan: `test-rich*`
+Suite penuh: **219 pass / 0 fail** (4 file pre-existing dikecualikan: `test-rich*`
 butuh env token, `test-all-subdomains` jaringan dramafren, `test-watchdog-aria2c`
 >300 dtk).
 
-## 5. Known bug ditemukan — belum diperbaiki (di luar scope proposal)
+## 5. Known bug — sudah diperbaiki (§3.4)
 
-Cabang `if (have > 0 && res.statusCode === 416)` di `downloadTo` **tidak terjangkau**:
-`if (res.statusCode >= 400)` menutup duluan. Jadi 416 ("file sudah lengkap") jatuh ke
-`download HTTP 416` yang **retryable** — persis retry sia-sia yang item 2 intends
-hilangkan. Sudah ada di HEAD sebelum perubahan ini, bukan regresi baru.
+Cabang 416 tidak terjangkau → diperbaiki bersama item 2. Test (e) yang semula
+mengunci perilaku salah (`416 = error`) sudah diganti menjadi assert sukses, dan
+ditambah (g) untuk memastikan `have == 0` tetap error.
 
-Test (e) mengunci perilaku saat ini + membuktikan cabang tidak terjangkau di sumber.
-**Perbaikannya** = pindahkan cek 416 ke sebelum `>= 400`. Tidak dikerjakan karena
-di luar 4 item proposal — menunggu keputusan.
+Tidak ada known bug tersisa dari cakupan ini.
 
 ## 6. Catatan
 

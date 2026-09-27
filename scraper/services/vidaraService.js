@@ -148,6 +148,17 @@ async function downloadTo(url, destPath, opts = {}) {
     req = lib.get(url, { headers }, (res) => {
       lastAt = Date.now();
 
+      // 416 = "Range Not Satisfiable" = berkas yang diminta SUDAH UTUH di sisi
+      // server (kalau belum, server akan balas 200/206). HARUS diperiksa
+      // SEBELUM `>= 400`: sebelumnya blok ini berada setelahnya sehingga tidak
+      // terjangkau, dan 416 jatuh jadi `download HTTP 416` yang retryable —
+      // ensureMp4 lalu mengulang 4× berkas yang sebenarnya sudah jadi.
+      // Syarat `have > 0` dipertahankan: tanpa Range, 416 itu error sungguhan
+      // (permintaan rusak), bukan "sudah lengkap".
+      if (have > 0 && res.statusCode === 416) {
+        res.resume();
+        return ok();
+      }
       if (res.statusCode >= 400) {
         res.resume();
         return fail(new Error(`download HTTP ${res.statusCode}`));
@@ -155,12 +166,6 @@ async function downloadTo(url, destPath, opts = {}) {
       if (res.statusCode >= 300 && res.statusCode < 400) {
         res.resume();
         return downloadTo(res.headers.location, destPath, opts).then(() => ok(), (e) => fail(e));
-      }
-
-      // 416 = range tidak bisa dipenuhi → file sudah lengkap, biarkan divalidasi.
-      if (have > 0 && res.statusCode === 416) {
-        res.resume();
-        return ok();
       }
       // 206 = resume diterima. Selain itu server mengabaikan Range → tulis ulang
       // dari nol (kalau tetap menempel, hasilnya file campur → corrupt).
