@@ -171,3 +171,28 @@ Suite penuh **243 pass / 0 fail**.
 Setelah deploy: ganti judul **sekali** di episode mana pun → episode 2, 3, 4
 sampai 500 otomatis memakai judul itu, tanpa asks ulang. Tombol "✏️ Ganti Judul"
 masnya muncul hanya kalau judul belum pernah disimpan.
+
+---
+
+## 9. Koreksi versi: v4.0.0 → v3.2.0
+
+User Challenged: "kok tinggi banget udah v4".
+
+**Saya salah.** `v4.0.0` melanggar semver: provider kamenime adalah **fitur
+baru**, bukan perubahan yang mematahkan kontrak.
+
+Bukti dari repo sendiri — `v3.0.0 → v3.1.0` juga MINOR padahal memuat fitur
+baru `!dell` + tombol picker berwarna. Komenime Dummynez kategori yang sama.
+
+Tidak ada kontrak yang patah: kontrak media (caption 4 baris,
+`supports_streaming`, topic Anime), format `callback_data`, dan bentuk
+`inline_keyboard` tetap sama.
+
+**Tindakan:** `v4.0.0` dihapus (lokal + remote, tidak ada konsumen), diganti
+`v3.2.0`.
+
+**Pelajaran:** aturan "tag proporsional" sudah tertulis tapi saya sendiri salah
+memakainya. Ironis — aturan itu dibuat karena kesalahan serupa sebelumnya.
+Karena itu tabel Versions & tags (§3a) sekarang ditulis di AGENTS.md dengan
+**penentu eksplisit** (ada yang rusak atau tidak), bukan sekadar daftar jenis
+perubahan.

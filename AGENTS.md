@@ -24,8 +24,32 @@ Semuanya berasal dari kegagalan nyata (lihat `docs/audit/`).
 4. **Test** — `node --check` semua `.js` yang berubah + jalankan test suite.
    Jangan pakai mock untuk hal yang bisa diuji dengan fungsi asli/DB asli.
 5. **LOG** di `docs/audit/YYYY-MM-DD-judul.md` (format di `.opencode/skills/audit-workflow/SKILL.md`).
-6. **Deploy → verifikasi → baru commit + push + tag.** Tanya user sebelum
-   restart/kill proses. Jangan commit sebelum deploy terverifikasi.
+6. **Deploy → verifikasi → baru commit + push + tag.** Jangan commit sebelum
+   deploy terverifikasi jalan normal. Patokan tag ada di §3a.
+
+## 3a. Versi & tag (wajib proporsional)
+
+Format: `v<major>.<minor>.<patch>`. **Tag bukan hiasan** — kalau salah,
+riwayat remote jadi kotor dan harus dihapus (terjadi 27 Sep 2026: v4.0.0 untuk
+provider baru, ternyata seharusnya v3.2.0, sudah dihapus & diganti).
+
+| jenis perubahan | tag | contoh |
+|---|---|---|
+| fix bug, teks, dokumentasi, test | **patch** | `3.2.1` — fix `logCtx is not defined` |
+| **fitur baru** / provider baru / alur baru, kontrak yang ada **tidak berubah** | **minor** | `3.2.0` — provider kamenime + picker 500 episode |
+| menghapus/mengubah kontrak sehingga integrasi lama rusak | **major** | `4.0.0` — hapus `sendPaidMediaVideo`, ubah format callback |
+
+**Penentu utama: apakah ada yang rusak?** Kalau tidak ada konsumen lama yang
+harus berubah, itu **minor**, sesederhana quantify fiturnya. Banyaknya commit
+bukan penentu — 34 commit tetap boleh jadi satu minor.
+
+"Kontrak" di sini yang tidak boleh patah tanpa major:
+- Kontrak media (§5): caption 4 baris, `supports_streaming: true`, topic Anime
+- Format `callback_data` dan bentuk `inline_keyboard`
+- Nama/parameter yang sudah dipakai pemanggil di luar repo
+
+Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
+`!dell` + tombol picker berwarna. Gunakan itu sebagai acuan, bukan intuisi sendiri.
 
 ## 3. Proses & pm2
 

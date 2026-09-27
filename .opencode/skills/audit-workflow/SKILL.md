@@ -22,7 +22,19 @@ description: Use at the start of every session and whenever fixing bugs, changin
        `9router`/FlareSolverr = **tetap perlu izin**; `9router` jangan pernah kill)
    - Start standar: `pm2 restart prjs-bot && pm2 save` (atau `pm2 start scraper/bot.js --name prjs-bot --cwd /home/runner/workspace --max-memory-restart 700M` kalau prosesnya mati)
    - Verifikasi: `pm2 list` = online, **1** proses `bot.js`, log startup `Bot running` + `Polling started`, dan kode yang jalan = HEAD
-   - **Tag wajib lengkap & proporsional** terhadap besar perubahan: `v<major>.<minor>.<patch>` — bedakan kecil (patch) / sedang (minor) / besar (major)
+   - **Tag wajib lengkap & proporsional** terhadap besar perubahan: `v<major>.<minor>.<patch>` — kecil (patch) / sedang (minor) / besar (major)
+   - **Penentu utama: ada yang rusak atau tidak.** Kalau tidak ada konsumen lama
+     yang harus berubah → **minor**, sesederhana quantify fiturnya. Banyaknya
+     commit bukan penentu (34 commit tetap boleh jadi satu minor).
+     MAJOR hanya kalau ada kontrak yang patah: kontrak media (§5 caption 4
+     baris / `supports_streaming` / topic Anime), format `callback_data` +
+     bentuk `inline_keyboard`, atau nama/parameter yang sudah dipakai pemanggil
+     di luar repo.
+   - Teladan repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru `!dell`
+     + tombol picker berwarna. Gunakan itu sebagai acuan.
+   - **Tag yang salah harus dihapus & diganti**, bukan dibiarkan
+     (27 Sep 2026: v4.0.0 untuk provider baru → sebenarnya v3.2.0; sudah
+     dihapus dari lokal + remote).
    - Jangan commit/push/tag sebelum deploy terverifikasi jalan normal
 
 ## Prinsip Penting
