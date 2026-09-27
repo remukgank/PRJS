@@ -4241,8 +4241,9 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         return handleGdriveUrl(chatId, url, gdTitle || undefined);
       }
       if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
-      if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
-      if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
+        if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
+        if (isKamenimeUrl(url)) return handleKamenimeUrl(chatId, url, detectedTitle || undefined);
+        if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
     }
 
     // target = vyt atau vv → Vidoy

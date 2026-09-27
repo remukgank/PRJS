@@ -59,6 +59,36 @@ cepat di Samehadaku sama sekali.
 import · dispatcher pesan link · `pendingDownloads` handler · provider label ·
 `dl_go:tg` dispatch · pesan "Link tidak dikenali" (tambah `kamenime.com`).
 
+### 3.4 Bug: `dl_go:tg` sempat tidak punya cabang kamenime (salah target)
+
+Pada commit pertama (`f4d8a3b`), cabang `isKamenimeUrl` di blok **target `tg`**
+tidak ada — penggantian teksnya gagal diam-diam (string tidak cocok persis),
+sementara penggantian lain berhasil sehingga tidak ada error.
+
+**Akibat:** user mengirim link kamenime → memilih target **Telegram** →
+blok `tg` tidak mengenali kamenime → jatuh ke `resolveDirectUrl()`, yaitu
+**jalur Vidoy**. File dikirim ke Vidoy, bukan ke Telegram. Salah target,
+dan tidak ada error karena `resolveDirectUrl` kamenime memang berfungsi.
+
+**Fix** (27 Sep 2026):
+
+```js
+if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
+if (isKamenimeUrl(url)) return handleKamenimeUrl(chatId, url, detectedTitle || undefined);
+if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
+```
+
+**Pelajaran:** penggantian teks yang gagal harus diam-diam gagal kalau tidak
+diverifikasi. Test (i) + (j) sekarang mengunci keberadaan cabang ini.
+
+| test | yang dibuktikan |
+|---|---|
+| (i) | kode `bot.js` sungguhan punya `if (isKamenimeUrl(url)) return handleKamenimeUrl(...)` di blok `tg`, dan `resolveDirectUrl` (jalur Vidoy) tidak muncul mendahului cabang handler |
+| (j) | simulasi dispatch dengan spy: URL kamenime + target `tg` → `handleKamenimeUrl` dipanggil, **bukan** `resolveDirectUrl` |
+
+Bukti mutasi: cabangkan `isKamenimeUrl` dari blok `dl_go:tg` →
+**9 pass / 1 fail** (test i). Suite penuh **229 pass / 0 fail**.
+
 ## 4. Dua jebakan yang tertangkap test
 
 **a) Double-encode.** Versi pertama `absolutize()` memakai `encodeURI`, yang
