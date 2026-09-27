@@ -148,8 +148,49 @@ Dicualikan (butuh network/aria2c): `test-rich.js`, `test-rich-direct.js`,
 
 ## Yang TIDAK dikerjakan di sini
 
-- **Pindah Ep 7 & 16 ke folder `myci7nuu4s1`** — dikerjakan manual di dashboard
-  oleh user. API `move` di `vidoy-uploader.js` hanya mendukung
-  `move_type=folder`; tidak ada `move_type=file` di seluruh kode.
+- **Pindah Ep 7 & 16 ke folder `myci7nuu4s1`** — dikerjakan manual oleh user di
+  dashboard, dengan bukti request yang sudah tercatat (lihat di bawah).
 - **Update `folder_id` di DB** untuk 2 baris tersebut setelah dipindah.
 - **`test-episode-status.js`** — assertion usang, item terpisah.
+
+## KOREKSI: klaim "tidak ada API move file" — SALAH
+
+Versi pertama dokumen ini menyatakan:
+
+> "API `move` di `vidoy-uploader.js` hanya mendukung `move_type=folder`;
+> tidak ada `move_type=file` di seluruh kode."
+
+**Klaim itu salah, dan cara saya mendapatkannya keliru.** Saya menyimpulkan dari
+*kode kita tidak pernah memanggilnya*, lalu menyebutnya sebagai bukti *API tidak
+mendukungnya*. Dua hal yang berbeda.
+
+Bukti aktual dari request user (27 Sep 2026, 16:00:22 UTC):
+
+```
+POST https://vidoy.asia/move          303 See Other  →  Location: /videos
+Content-Type: application/x-www-form-urlencoded;charset=UTF-8
+Origin:  https://vidoy.asia
+Referer: https://vidoy.asia/
+
+move_data=ypx33125p9xs%0Afzozha3ajt7j
+move_type=video
+move_to=myci7nuu4s1
+```
+
+Tiga fakta yang tidak saya tahu sebelumnya:
+
+1. **`move_type=video` bekerja.** `moveFolderRaw` (baris 187) hanya memakai
+   `folder`, jadi `video` belum pernah dicoba oleh kode kita.
+2. **`move_data` menerima banyak ID sekaligus**, dipisah newline (`%0A`).
+   `ypx33125p9xs` dan `fzozha3ajt7j` dipindahkan dalam SATU request — padahal
+   keduanya file berbeda (Ep 16 & Ep 7).
+3. **303 See Other** = sukses (sama seperti yang sudah dianggap sukses oleh
+   `moveFolderRaw`: `[200, 302, 303]`).
+
+Kalau `move` ini dipakai lewat kode, ada satu perbedaan header yang perlu
+diperhatikan: browser mengirim `Referer: https://vidoy.asia/` (root),
+sedangkan `moveFolderRaw` mengirim `${VIDOY_BASE}/videos`. Belum diuji apakah
+server membedakan keduanya.
+
+Pelajaran: ini kejadian keempat dengan pola yang sama di sesi ini —
+mengambil kesimpulan "tidak didukung" dari "tidak ada di kode kita".
