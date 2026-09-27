@@ -331,21 +331,38 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(iPage > 0 && iFile > iPage, `anime-page (${iPage}) harus sebelum isKamenimeUrl (${iFile})`);
   });
 
-  // ── p) kam_ep WAJIB minta target dulu (bug: langsung unduh) ──
-  await t('p) kam_ep: → tampilkan pilihan target, TIDAK langsung unduh', () => {
+  // ── p) kam_ep: pilih judul (bisa Ganti Judul) lalu target ──
+  await t('p) kam_ep: pakai alur prompt judul (Ganti Judul), TIDAK langsung unduh', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
     const i = src.indexOf("if (data.startsWith('kam_ep:')) {");
     assert.ok(i > 0, 'butuh handler kam_ep:');
     const e = src.indexOf("if (data.startsWith('sam_ep:')) {", i);
     const block = src.slice(i, e > i ? e : undefined);
-    // harus memilih target, bukan memanggil handler unduh
-    assert.ok(/animeTargetKeyboard\(/.test(block), 'kam_ep harus menampilkan animeTargetKeyboard (pilih target)');
-    for (const t of ['dl_go:tg:', 'dl_go:vyt:', 'dl_go:vv:']) {
-      assert.ok(block.includes(t), `butuh tombol target ${t}`);
-    }
-    assert.ok(/cacheUrl\(episodeUrl\)/.test(block), 'harus daftarkan URL ke urlCache untuk alur dl_go');
-    assert.ok(!/handleKamenimeUrl\(/.test(block), 'kam_ep TIDAK boleh langsung unduh — harus lewat dl_go');
-    assert.ok(/editMessageText/.test(block), 'pilihan target dikirim lewat editMessageText');
+    // prompt judul → ada tombol Ganti Judul
+    assert.ok(/titlePromptKeyboard\(/.test(block), 'kam_ep harus pakai titlePromptKeyboard (prompt judul)');
+    assert.ok(/resolveProviderTitle\(/.test(block), 'harus resolveProviderTitle untuk judul terdeteksi');
+    assert.ok(!/handleKamenimeUrl\(/.test(block), 'kam_ep TIDAK boleh langsung unduh');
+    // resolveProviderTitle harus mengenal kamenime (kalau tidak, judul selalu fileName)
+    const rpt = src.slice(src.indexOf('async function resolveProviderTitle'), src.indexOf('async function', src.indexOf('async function resolveProviderTitle') + 10));
+    assert.ok(/isKamenimeUrl\(url\)/.test(rpt), 'resolveProviderTitle harus punya cabang kamenime');
+  });
+
+  // ── q) label provider = hokireceh, dan internal dispatch key tetap kamenime ──
+  await t('q) label provider "hokireceh"; internal dispatch key tetap "kamenime"', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    // internal dispatch (pending.handler) → harus 'kamenime' (dipakai dispatch)
+    assert.ok(/handler:[^;]*isKamenimeUrl\(url\) \? 'kamenime'/.test(src),
+      "pending.handler harus 'kamenime' — kalau 'hokireceh', dispatch `pending.handler === 'kamenime'` tidak akan jalan");
+    // dan harus ada branche dispatch
+    assert.ok(/pending\.handler === 'kamenime'/.test(src), 'butuh cabang dispatch pending.handler === kamenime');
+    // label tampilan → hokireceh
+    assert.ok(/const provider = [^;]*isKamenimeUrl\(url\) \? 'hokireceh'/.test(src),
+      "label provider harus 'hokireceh'");
+    // caption juga
+    const dl = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+    const s = dl.indexOf('async function handleKamenimeUrl');
+    const b = dl.slice(s, dl.indexOf('async function handleMegaUrl', s));
+    assert.ok(/providerLabel = [^;]*'hokireceh'/.test(b), "caption provider harus 'hokireceh'");
   });
 
   console.log(`\n${passed} pass / ${failed} fail`);

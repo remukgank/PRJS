@@ -1226,6 +1226,7 @@ async function resolveProviderTitle(url) {
     if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
     else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
     else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
+      else if (isKamenimeUrl(url)) { try { fileName = (await resolveKamenimeFile(url)).fileName; } catch {} }
     else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
     else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
     if (fileName) {
@@ -3185,16 +3186,26 @@ bot.on('message', safeHandler('message')(async (msg) => {
     }
   }
 
-  // Kamenime — MP4 direct, admin only (mirip filedon)
+  // Kamenime — MP4 direct, admin only. Alur SAMA dengan filedon: prompt judul
+  // dulu (biar bisa "Ganti Judul"), baru unduh via handleKamenimeUrl.
   if (isKamenimeUrl(text)) {
     if (!isAdmin(msg.from.id)) {
       return bot.sendMessage(chatId, '⚠️ Scraper khusus admin.', { parse_mode: 'HTML', reply_markup: mainMenuKeyboard(false) });
     }
     const statusMsg = await bot.sendMessage(chatId, '🔍 Mengambil info Kamenime...').catch(() => null);
     try {
-      await resolveKamenimeFile(text.trim());
+      const km = await resolveKamenimeFile(text.trim());
+      const kmName = km.fileName;
+      const detectedTitle = await findMediaByPattern(extractSourcePattern(kmName)).catch(() => null);
+      const titleShown = detectedTitle ? detectedTitle.nama : null;
+      const promptText = titleShown
+        ? `📥 <b>Kamenime Download</b>\n\nFile: <code>${kmName}</code>\n➧ Judul :- <b>${titleShown}</b>\n\nPilih judul untuk caption:`
+        : `📥 <b>Kamenime Download</b>\n\nFile: <code>${kmName}</code>\n\nPilih judul untuk caption:`;
       if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
-      return handleKamenimeUrl(chatId, text.trim());
+      return bot.sendMessage(chatId, promptText, {
+        parse_mode: 'HTML',
+        reply_markup: titlePromptKeyboard(kmName, text.trim(), titleShown),
+      });
     } catch (err) {
       if (statusMsg) await bot.deleteMessage(chatId, statusMsg.message_id).catch(() => {});
       await bot.sendMessage(chatId, `⚠️ Kamenime gagal: ${err.message.slice(0, 150)}`).catch(() => {});
@@ -3448,22 +3459,17 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (!episodeUrl) {
         return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang', show_alert: true }).catch(() => {});
       }
-      // WAJIB pilih TARGET dulu (Telegram / Vidoy+TG / Vidoy) — konsisten dengan
-      // sam_ep & kuronime. Sebelumnya langsung handleKamenimeUrl, jadi episode
-      // terunduh tanpa opsi sama sekali.
-      // Registrasi ke urlCache lalu pakai alur dl_go yang sudah ada (sudah punya
-      // cabang kamenime di target tg, dan resolveDirectUrl untuk vyt/vv).
-      const urlId = cacheUrl(episodeUrl);
-      return bot.editMessageText('📥 <b>Kamenime</b>\n\nPilih target:', {
-        chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: animeTargetKeyboard(
-            `dl_go:tg:${urlId}`,
-            `dl_go:vyt:${urlId}`,
-            `dl_go:vv:${urlId}`,
-          ),
+      // Alur SAMA dengan filedon/gofile: pilih judul dulu (ada "✏️ Ganti Judul"),
+      // baru pilih target. Kalau langsung ke target, judul tidak bisa diganti.
+      const { detectedTitle, fileName } = await resolveProviderTitle(episodeUrl);
+      const dTitle = detectedTitle ? detectedTitle.nama : null;
+      return bot.editMessageText(
+        `📥 <b>Kamenime</b>\n\nFile: <code>${escHtml(fileName || 'video.mp4')}</code>\n\nPilih judul untuk caption:`,
+        {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          reply_markup: titlePromptKeyboard(fileName || 'video.mp4', episodeUrl, dTitle),
         },
-      }).catch(() => {});
+      ).catch(() => {});
     }
 
   if (data.startsWith('sam_ep:')) {
@@ -4293,7 +4299,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
     // Tampilkan pilihan target — konsisten dengan alur Samehadaku
     const urlId = cacheUrl(url);
-    const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isKamenimeUrl(url) ? 'kamenime' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
+    const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isKamenimeUrl(url) ? 'hokireceh' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
     const titleShown = detectedTitle || fileName || 'file';
     const preview = `📥 <b>Download</b>\n\n` +
       `➧ Judul :- <b>${escHtml(titleShown)}</b>\n` +

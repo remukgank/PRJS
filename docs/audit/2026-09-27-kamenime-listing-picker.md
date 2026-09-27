@@ -164,9 +164,42 @@ info    : {"width":1280,"height":720,"duration":1387,"codec":"h264"}
 
 `1339ms` — karena `-c copy` (tanpa re-encode). Codec & resolusi tetap utuh.
 
+## 4.5 Permintaan user: "Ganti Judul" + label provider `hokireceh`
+
+### 1. Ganti Judul di kamenime
+
+**Keluhan:** judul hasil kamenime tidak cocok, dan tidak ada cara mengubahnya.
+
+**Root cause:** dispatcher episode kamenime memanggil `handleKamenimeUrl` langsung,
+melewati `titlePromptKeyboard`. Semua provider lain (filedon/gdrive/gofile) lewat
+satu prompt: `[📥 Download: <judul> | ✏️ Ganti Judul]` → pilih target → unduh.
+Kamenime tidak punya tombol itu sama sekali.
+
+Selain itu `resolveProviderTitle()` **tidak punya cabang kamenime**, sehingga
+jatuh ke `else` → `getPixeldrainInfo()` (gagal) → `fileName` null → judul selalu
+nama file.
+
+**Fix:**
+- `resolveProviderTitle()` punya cabang `isKamenimeUrl` → `resolveKamenimeFile().fileName`
+- Dispatcher episode kamenime memakai `titlePromptKeyboard` (sama filedon)
+- `kam_ep:` (dari picker) memakai `titlePromptKeyboard` juga — sebelumnya langsung
+  ke `animeTargetKeyboard`, jadi judul tetap tak bisa diganti dari picker
+
+### 2. Label provider = `hokireceh`
+
+Provider di caption sebelumnya `extractProvider(kmName)`, yang untuk
+`"Naruto Shippuden-episode-1.mp4"` tidak menghasilkan apa-apa yang berguna.
+Sekarang label tetap: `hokireceh`.
+
+**Jebakan yang hampir terjadi:** `pending.handler` (internal dispatch key) ikut
+terganti jadi `'hokireceh'`. Kalau begitu, cabang
+`if (pending.handler === 'kamenime')` tidak akan pernah jalan dan judul kustom
+yang sudah diketik user diam-diam hilang. Test (q) mengunci pemisahan ini:
+`handler` internal = `kamenime`, label tampil = `hokireceh`.
+
 ## 5. Verifikasi
 
-`test-kamenime-provider.js` **17 pass / 0 fail** (dari 10).
+`test-kamenime-provider.js` **18 pass / 0 fail** (dari 10).
 
 Kasus baru:
 
@@ -181,6 +214,8 @@ Kasus baru:
 | f) | pertahankan `.mp4` + cek faststart + `supports_streaming: true` |
 | f2) | `remuxToMp4` memaksa remux untuk MP4 non-faststart |
 | g) | caption lewat `buildCaption`: 3 baris (4 + link), tidak pernah 1 baris |
+| p) | `kam_ep:` pakai `titlePromptKeyboard` (ada "Ganti Judul") + `resolveProviderTitle` punya cabang kamenime |
+| q) | label provider `hokireceh`; internal dispatch key tetap `kamenime` |
 
 Fixture `tests/fixtures/kamenime/effects-episodes.html` (5.067 bytes) =
 potongan nyata `effects.html` (14 episode, termasuk anchor navigasi ep 1 & 500).
@@ -195,11 +230,14 @@ Bukti mutasi:
 | `kam_ep:` dikembalikan ke langsung-unduh | 15 pass / **1 fail** (p) |
 | hapus cek faststart di `handleKamenimeUrl` | 16 pass / **1 fail** (f) |
 | short-circuit `remuxToMp4` dikembalikan | 16 pass / **1 fail** (f2) |
+| hapus prompt judul dari `kam_ep` | 17 pass / **1 fail** (p) |
+| label provider kembali ke `extractProvider` | 17 pass / **1 fail** (q) |
+| hapus cabang kamenime di `resolveProviderTitle` | 17 pass / **1 fail** (p) |
 
 Bukti live: `listKamenimeEpisodes('.../anime/naruto-shippuden')` →
 **500 episode, 0 lubang** (min 1, max 500), 500 judul unik, tidak ada `undefined`.
 
-Suite penuh: **236 pass / 0 fail**.
+Suite penuh: **237 pass / 0 fail**.
 
 ## 6. Pelajaran
 

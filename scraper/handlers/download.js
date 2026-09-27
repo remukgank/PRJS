@@ -787,7 +787,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
       // caption manual di sini membuat caption jadi 1 baris kalau title kosong —
       // itu yang terjadi sebelum fix ini. buildCaption di-import di DALAM fungsi
       // (aman: vidoy.js tidak mengimpor download.js, jadi tak ada circular).
-      const providerLabel = kmSame ? 'samehadaku' : extractProvider(kmName);
+      const providerLabel = kmSame ? 'samehadaku' : 'hokireceh';
       const finalCap = require('./vidoy').buildCaption({
         title: titleForCap, provider: providerLabel,
         part: partN, epStart: partN, epEnd: partN, link: null,
