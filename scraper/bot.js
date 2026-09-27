@@ -18,7 +18,7 @@ const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseS
 const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
-const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime, kamenimeSourcePattern } = require('./providers/kamenime');
+const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime, kamenimeSourcePattern, kamenimeTitleFromFileName } = require('./providers/kamenime');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }

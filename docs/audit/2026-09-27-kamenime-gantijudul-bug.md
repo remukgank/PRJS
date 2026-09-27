@@ -313,3 +313,90 @@ Pelajaran tambahan: **test atas kode yang tidak dijalankan ke jalur aslinya
 hanya membuktikan replikasinya benar**, bukan aplikasi-nya. Kalau yang diuji
 adalah hasil yang dilihat user (caption), testnya harus lewat kode yang
 dipakai bot sungguhan.
+
+---
+
+## 14. ReferenceError: kamenimeTitleFromFileName is not defined
+
+**Waktu**: 27 Sep 2026, setelah commit `c7572ff` (cross-check caption vyt).
+
+### Gejala
+
+User tes ulang di Telegram. Bot crash sebelum selesai:
+
+```
+09:10:52  Callback received  · data=dl_go:vyt:3
+09:10:54  ERROR Unhandled error in callback handler  · chatId=-1004431872926
+          ReferenceError: kamenimeTitleFromFileName is not defined
+            at scraper/bot.js:4414:23
+```
+
+### Akar cause
+
+`c7572ff` memakai `kamenimeTitleFromFileName(...)` di `dl_go` (blok vyt), tapi
+**nama itu tidak pernah di-import**. Import-nya saya coba tambahkan lewat
+script Python yang menyisipkan beberapa blok sekaligus; script itu **gagal di
+tengah** pada assertion, jadi blok pertamanya pun tidak pernah tersimpan:
+
+```python
+s2 = s.replace(IMPORT_LAMA, IMPORT_BARU)   # <-apply di memori
+s3 = s2.replace(BLOK_VYT_LAMA, BLOK_VYT_BARU)
+assert s3 != s2, 'blok vyt tidak berubah'   # <- GAGAL di sini
+open(path,'w').write(s3)                     # <- tidak pernah dijalankan
+```
+
+Jadi perbaikannya setengah jadi: pemanggilan terpasang, import tidak.
+
+### Kenapa tidak ketahuan lebih awal
+
+- `node --check` **LOLOS**. Syntax check hanya memastikan token valid, bukan
+  bahwa identifier-nya terdefinisi.
+- Test caption (x) yang saya buat sebelumnya hanya memeriksa *call site*
+  (`titleForCap` dipakai atau tidak), **tidak** memeriksa apakah nama itu
+  benar-benar ter-import.
+- Suite tetap hijau: 245 pass / 0 fail.
+
+### Perbaikan
+
+`scraper/bot.js:21` — tambahkan `kamenimeTitleFromFileName` ke import
+`providers/kamenime`.
+
+### Test baru: `scraper/tests/test-internal-imports.js`
+
+Menutup kelas bug ini untuk **semua** modul internal, bukan hanya kamenime:
+
+1. Semua modul internal berhasil dipetakan (38 modul, 123 nama ter-import).
+2. Fungsi `providers/kamenime` yang dipakai bot.js ter-import dari modul itu.
+3. Nama yang dipanggil di bot.js yang bentrok dengan export modul internal
+   **harus** deklarsi lokal (wrapper) atau ter-import — kalau tidak,
+   `ReferenceError` saat runtime.
+4. Nama yang di-import dari modul internal memang ada di `module.exports`-nya.
+
+Butuh 4 lapis parser supaya tidak ada false positive. Yang sempat keliru saat
+menulis test:
+
+- Sweep `^\s{2}(\w+)[,:]` menyapu object literal → `target` dsb. ikut dianggap
+  export. → kini hanya blok `module.exports = {…}`.
+- `key: value` (`{ logger: appLogger }`) nama publiknya **key**, bukan nama
+  variabel.
+- Komentar berisi `(` tak berpasangan ("// … (lihat") merusak penghitung
+  depth → nama export palsu `tak`. → komentar dibuang sebelum analisis.
+- `(?<!:)//` agar `'https://…'` tidak ikut terpotong.
+- Teks di dalam string/template literal ikut terpindai (`upload` dari
+  `` `Ep ${ep} — upload (…)` ``) → string literal dibuang.
+- Nama yang bentrok dengan export modul tapi dipakai sebagai method
+  (`_vidoyHandlers.actionAnimeEpisode(`) harus diabaikan; nama yang punya
+  wrapper lokal (`handleKamenimeUrl` di `bot.js:1504`) juga sah.
+
+### Bukti test benar (mutasi)
+
+Cabut `kamenimeTitleFromFileName` dari import → 2 test FAIL dengan pesan
+`dipakai tapi TIDAK di-import`. Pulihkan → 4 pass / 0 fail.
+
+Sesuai aturan repo: test yang mengunci asumsi salah lebih berbahaya dari tidak
+ada test, jadi mutasi wajib dijalankan, bukan diasumsikan.
+
+### Catatan soal urutan kerja
+
+Commit `c7572ff` sudah di-push sebelum bug ini ketahuan.
+
