@@ -117,7 +117,12 @@ async function expectReject(p, label, limitMs) {
     if (!got.equals(PAYLOAD)) throw new Error('hasil resume tidak identik (file corrupt)');
   });
 
-  await t('server mengabaikan Range (balas 200) → tulis ulang, TIDAK campur', async () => {
+  // 26 Sep 2026: perilaku INI berubah. Sebelumnya server Range-ignoring
+  // (chunked, tanpa Content-Length) menyebabkan restart dari nol — dan karena
+  // stall-kill memicu retry, tiap retry membuang seluruh progres (65 MB pada
+  // Naruto ep 5). Sekarang fail-fast: error noRetry supaya ensureMp4 berhenti
+  // dan user diminta ganti server.
+  await t('server mengabaikan Range (balas 200) saat ada file parsial → fail-fast, bukan restart', async () => {
     const dest = tmpFile('nocookie.bin');
     const half = Math.floor(PAYLOAD.length / 2);
     fs.writeFileSync(dest, Buffer.alloc(half, 0xab));
@@ -125,11 +130,18 @@ async function expectReject(p, label, limitMs) {
       res.writeHead(200, { 'Content-Length': PAYLOAD.length });
       res.end(PAYLOAD);
     });
-    try { await downloadTo(`http://127.0.0.1:${port}/f`, dest); }
+    let out;
+    try { out = await expectReject(downloadTo(`http://127.0.0.1:${port}/f`, dest), 'no-resume', 8000); }
     finally { srv.close(); }
+    if (!/tidak mendukung resume/.test(out.err.message)) {
+      throw new Error('pesan harus menyebut tidak mendukung resume: ' + out.err.message);
+    }
+    if (out.err.noRetry !== true) throw new Error('error harus ditandai noRetry (retry tidak menolong)');
+    // file parsial TIDAK boleh ditimpa/dicampur — gagal sebelum menulis apa pun
     const got = fs.readFileSync(dest);
-    if (got.length !== PAYLOAD.length) throw new Error(`panjang ${got.length} ≠ ${PAYLOAD.length} (sisa file lama tertinggal)`);
-    if (!got.equals(PAYLOAD)) throw new Error('file tercampur dengan sisa lama → corrupt');
+    if (!got.equals(Buffer.alloc(half, 0xab))) {
+      throw new Error(`file parsial berubah (len ${got.length}) — jangan tulis apa pun sebelum tahu status resume`);
+    }
   });
 
   await t('HTTP 404 → tolak dengan kode status', async () => {

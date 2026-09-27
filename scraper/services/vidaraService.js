@@ -14,8 +14,19 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 function rangeLabel(a, b) { return `${pad(a)}-${pad(b)}`; }
 
-const STALL_MS = 20000;    // 0 byte selama ini → anggap mati, jangan nunggu 3 menit
-const PROGRESS_MS = 10000; // interval log progres
+// Ambang watchdog: nilai default dari lib/download-thresholds (satu sumber
+// angka). `opts.thresholds` hanya untuk test (menguji logika dengan ambang
+// kecil); jalur produksi tidak pernah mengoverride.
+const DEFAULT_THRESHOLDS = require('../lib/download-thresholds');
+const STALL_MS = DEFAULT_THRESHOLDS.STALL_MS;      // 0 byte selama ini → anggap mati, jangan nunggu 3 menit
+const PROGRESS_MS = DEFAULT_THRESHOLDS.PROGRESS_MS; // interval log progres
+
+// Galat "server tidak mendukung resume" → retry sia-sia. Ditandai agar
+// ensureMp4 tidak mengulang; retry hanya membuang bandwidth (insiden 26 Sep
+// 2026: gdriveplayer mengabaikan Range, 3x restart丢掉 ~65 MB).
+class NoResumeError extends Error {
+  constructor(msg) { super(msg); this.name = 'NoResumeError'; this.noRetry = true; }
+}
 
 /**
  * Unduh URL → destPath.
@@ -69,6 +80,18 @@ async function downloadTo(url, destPath, opts = {}) {
     let logBytes = have;
     let lastAt = Date.now();
     let lastLogAt = Date.now();
+    // Sampel (t, bytes) untuk rata-rata trailing. Retain 2× window supaya
+    // selalu ada anchor yang usianya >= SPEED_WINDOW_MS (lihat cek di bawah).
+    const th = { ...DEFAULT_THRESHOLDS, ...(opts.thresholds || {}) };
+    const downSamples = [{ t: Date.now(), bytes: have }];
+    const startedAt = Date.now();
+    const retainMs = 2 * th.SPEED_WINDOW_MS;
+    const pushSample = () => {
+      downSamples.push({ t: Date.now(), bytes: got });
+      while (downSamples.length > 2 && downSamples[1].t < Date.now() - retainMs) {
+        downSamples.shift();
+      }
+    };
 
     const stop = () => { if (watchdog) clearInterval(watchdog); };
     const fail = (e) => {
@@ -83,10 +106,30 @@ async function downloadTo(url, destPath, opts = {}) {
 
     const watchdog = setInterval(() => {
       const now = Date.now();
-      if (now - lastAt >= STALL_MS) {
+      if (now - lastAt >= th.STALL_MS) {
         return fail(new Error(`download macet — 0 byte selama ${Math.round((now - lastAt) / 1000)} dtk`));
       }
-      if (now - lastLogAt >= PROGRESS_MS) {
+      // Speed floor: rata-rata trailing di bawah ambang setelah gate terpenuhi.
+      // Anchor = sampel TERBARU yang sudah melewati jendela (t <= now-window),
+      // sehingga rentang rata-rata >= SPEED_WINDOW_MS. Kalau memakai sampel
+      // pertama SESUDAH cutoff, rentang selalu sedikit < window (selisih satu
+      // jarak sampel) dan gate tak akan pernah terpenuhi.
+      if (now - startedAt >= th.SPEED_MIN_RUN_MS && got - have >= th.SPEED_MIN_BYTES) {
+        const cutoff = now - th.SPEED_WINDOW_MS;
+        const anchor = downSamples.filter((s) => s.t <= cutoff).pop();
+        if (anchor) {
+          const spanMs = now - anchor.t;
+          const bps = ((got - anchor.bytes) / spanMs) * 1000;
+          if (bps < th.SPEED_FLOOR_BPS) {
+            return fail(new Error(
+              `server terlalu lambat — rata-rata ${(bps / 1024).toFixed(1)} KiB/s ` +
+              `di bawah ambang ${(th.SPEED_FLOOR_BPS / 1024).toFixed(0)} KiB/s ` +
+              `selama ${Math.round(spanMs / 1000)} dtk — ganti server, mengulang tidak menolong`,
+            ));
+          }
+        }
+      }
+      if (now - lastLogAt >= th.PROGRESS_MS) {
         const dt = (now - lastLogAt) / 1000;
         const speed = dt > 0 ? (got - logBytes) / dt : 0;
         lastLogAt = now;
@@ -121,8 +164,18 @@ async function downloadTo(url, destPath, opts = {}) {
       }
       // 206 = resume diterima. Selain itu server mengabaikan Range → tulis ulang
       // dari nol (kalau tetap menempel, hasilnya file campur → corrupt).
+      // Resume di sini SIA-SIA: server Range-ignoring (chunked, tanpa
+      // Content-Length) selalu mengulang dari nol, jadi retry hanya membuang
+      // bandwidth. Insiden 26 Sep 2026: 3x restart丢掉 ~65 MB. Fail cepat
+      // dengan pesan jelas supaya ensureMp4 tidak mengulang.
       const append = have > 0 && res.statusCode === 206;
-      if (have > 0 && !append) { have = 0; got = 0; logBytes = 0; }
+      if (have > 0 && !append) {
+        res.resume();
+        return fail(new NoResumeError(
+          `server tidak mendukung resume (HTTP ${res.statusCode} untuk Range) — ` +
+          `mengulang akan mengulang dari nol, ganti server`,
+        ));
+      }
 
       const cr = /bytes\s+\d+-\d+\/(\d+)/.exec(res.headers['content-range'] || '');
       if (cr) total = Number(cr[1]);
@@ -133,7 +186,7 @@ async function downloadTo(url, destPath, opts = {}) {
 
       out = fs.createWriteStream(destPath, { flags: append ? 'a' : 'w' });
       out.on('error', (e) => fail(e));
-      res.on('data', (chunk) => { lastAt = Date.now(); got += chunk.length; });
+      res.on('data', (chunk) => { lastAt = Date.now(); got += chunk.length; pushSample(); });
       res.on('error', (e) => fail(new Error(`download terputus: ${e.message}`)));
       res.on('aborted', () => fail(new Error('download terputus — koneksi dibatalkan')));
       res.on('close', () => {
@@ -386,6 +439,13 @@ async function ensureMp4(url, destPath, opts = {}) {
       return restoreTo(destPath);
     } catch (err) {
       lastErr = err;
+      // Galat "tidak mendukung resume" (atau speed floor) — retry dengan URL
+      // fresh pasti mengulang dari nol / tetap lambat. Berhenti sekarang,
+      // jangan habiskan bandwidth; user perlu ganti server.
+      if (err && err.noRetry) {
+        logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 berhenti — retry tidak menolong');
+        break;
+      }
       if (attempt > retries) break;
       logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 gagal — retry dengan URL fresh');
       await new Promise((r) => setTimeout(r, backoffMs * attempt));
