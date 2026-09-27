@@ -489,6 +489,33 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     console.log('      → simpan & cari konsisten pakai kamenimeSourcePattern');
   });
 
+
+  // ── x) caption vyt: judul BUKAN nama file, provider = hokireceh ──
+  await t('x) caption vyt: judul dari file tanpa sufiks episode; provider hokireceh', () => {
+    const { kamenimeTitleFromFileName } = require('../providers/kamenime');
+    // judul harus judul anime, bukan nama file
+    assert.strictEqual(kamenimeTitleFromFileName('Naruto Shippuden-episode-1.mp4'), 'Naruto Shippuden');
+    assert.strictEqual(kamenimeTitleFromFileName('Naruto Shippuden-episode-500.mp4'), 'Naruto Shippuden');
+    assert.strictEqual(kamenimeTitleFromFileName('Black Torch-ep-12.mp4'), 'Black Torch');
+    assert.ok(!/episode/i.test(kamenimeTitleFromFileName('Naruto Shippuden-episode-1.mp4')),
+      'judul tidak boleh ikut memuat "episode"');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    const i = src.indexOf('// target = vyt atau vv');
+    const e = src.indexOf('After upload selesai', i);
+    const block = src.slice(i, e > i ? e : undefined);
+    // judul: titleForCap dulu, baru hasil turunkan dari filename
+    assert.ok(/titleForCap \|\| detectedTitle \|\| kmTitle/.test(block),
+      'judul harus pakai titleForCap → detectedTitle → kmTitle (bukan fileName mentah)');
+    assert.ok(/kamenimeTitleFromFileName\(direct\.name \|\| fileName\)/.test(block),
+      'harus menurunkan judul dari nama file untuk kamenime');
+    // provider: sameInfo.provider, bukan default "anime"
+    assert.ok(/const sameInfo = isKamenimeUrl\(url\) \? \{ provider: 'hokireceh' \} : null;/.test(block),
+      'kamenime harus mengirim sameInfo.provider = hokireceh');
+    assert.ok(/sameInfo: null,/.test(src) === false || /sameInfo,/.test(block),
+      'harus memakai variabel sameInfo, bukan null hardcoded');
+    console.log('      → judul "Naruto Shippuden", provider "hokireceh"');
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });

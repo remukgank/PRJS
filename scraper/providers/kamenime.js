@@ -324,6 +324,21 @@ function kamenimeSourcePattern(url) {
   return null;
 }
 
+/**
+ * Judul yang bisa dibaca manusia dari nama file kamenime.
+ * "Naruto Shippuden-episode-1.mp4" → "Naruto Shippuden".
+ * Dipakai sebagai judul caption ketika judul kustom/deteksi tidak ada — kalau
+ * tidak, caption menampilkan nama file mentah, bukan judul anime.
+ */
+function kamenimeTitleFromFileName(name) {
+  const s = String(name || '')
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/[\s._-]*(?:episode|ep|eps)[\s._-]*\d+\s*$/i, '')
+    .replace(/[\s._-]+$/, '')
+    .trim();
+  return s || null;
+}
+
 module.exports = {
   isKamenimeUrl,
   isKamenimeAnimePage,
@@ -331,6 +346,7 @@ module.exports = {
   parseKamenimeAnime,
   listKamenimeEpisodes,
   kamenimeTitleFromHtml,
+  kamenimeTitleFromFileName,
   kamenimeSourcePattern,
   fileNameFromUrl,
   absolutize,

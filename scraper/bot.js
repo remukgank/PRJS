@@ -4389,10 +4389,18 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     // target = vyt atau vv → Vidoy
     const direct = await _downloadHandlers.resolveDirectUrl(url);
     if (!direct) return bot.editMessageText('⚠️ Gagal resolve link file untuk upload.', { chat_id: chatId, message_id: msgId }).catch(() => {});
-    const animeTitle = detectedTitle || fileName || 'Anime';
+      // Judul: utamakan judul kustom/terdeteksi. Untuk kamenime, kalau keduanya
+      // kosong, ambil dari nama FILE dengan sufiks episode dibuang
+      // ("Naruto Shippuden-episode-1.mp4" -> "Naruto Shippuden") — kalau tidak,
+      // caption menampilkan nama file mentah, bukan judul anime.
+      // Provider: kirim lewat sameInfo.provider supaya caption tidak generik
+      // "anime" (nilai default saat sameInfo null).
+      const kmTitle = isKamenimeUrl(url) ? kamenimeTitleFromFileName(direct.name || fileName) : null;
+      const animeTitle = titleForCap || detectedTitle || kmTitle || fileName || 'Anime';
     const animeEp = extractPartFromFilename(fileName || '') || 1;
+      const sameInfo = isKamenimeUrl(url) ? { provider: 'hokireceh' } : null;
     const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
-      target, title: animeTitle, ep: animeEp, sameInfo: null,
+      target, title: animeTitle, ep: animeEp, sameInfo,
       directUrl: direct.url, episodeUrl: url,
       resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(url))?.url || direct.url,
     });

@@ -196,3 +196,62 @@ memakainya. Ironis — aturan itu dibuat karena kesalahan serupa sebelumnya.
 Karena itu tabel Versions & tags (§3a) sekarang ditulis di AGENTS.md dengan
 **penentu eksplisit** (ada yang rusak atau tidak), bukan sekadar daftar jenis
 perubahan.
+
+---
+
+## 10. Caption target Vidoy salah (judul = nama file, provider = "anime")
+
+**Dilaporkan user:**
+
+```
+➧ Judul :- Naruto Shippuden-episode-1.mp4
+➧ Episode :- 1
+➧ Provider :- anime
+➧ Link :- vski.cc/e/wyb5t825ie3z
+```
+
+Harapan: `Naruto Shippuden` + `hokireceh`.
+
+**Kedua masalah hanya di jalur `vyt`/`vv`** — jalur `tg` sudah benar karena
+memakai `titleForCap` dan `buildCaption`.
+
+### 10.1 Judul = nama file
+
+```js
+const animeTitle = detectedTitle || fileName || 'Anime';
+```
+
+`detectedTitle` null (belum ada di DB) → jatuh ke `fileName` =
+`"Naruto Shippuden-episode-1.mp4"`. Nama file mentah, bukan judul anime.
+
+Selain itu `titleForCap` (judul kustom dari "Ganti Judul") **tidak dipakai**
+di jalur ini sama sekali — jadi judul kustom hilang begitu user memilih Vidoy.
+
+**Fix:** helper `kamenimeTitleFromFileName()` membuang sufiks episode + ekstensi:
+
+```
+"Naruto Shippuden-episode-1.mp4"   → "Naruto Shippuden"
+"Naruto Shippuden-episode-500.mp4" → "Naruto Shippuden"
+"Black Torch-ep-12.mp4"            → "Black Torch"
+```
+
+Prioritas judul di `vyt`: `titleForCap → detectedTitle → kmTitle → fileName`.
+
+### 10.2 Provider = "anime"
+
+`actionAnimeEpisode` mengambil `sameInfo?.provider || 'anime'`, dan `dl_go`
+mengoper `sameInfo: null` → caption generik `"anime"`.
+
+`sameInfo` hanya dipakai untuk season/part (vidoy.js:214) dan provider
+(vidoy.js:284) — aman diisi.
+
+**Fix:** `sameInfo = isKamenimeUrl(url) ? { provider: 'hokireceh' } : null`
+
+## 11. Verifikasi
+
+Test (x) → **25 pass / 0 fail** (dari 24). Suite penuh **244 pass / 0 fail**.
+
+| mutasi | hasil |
+|---|---|
+| judul `vyt` kembali ke `fileName` mentah | 24 pass / **1 fail** (x) |
+| `sameInfo` kembali `null` (provider "anime") | 24 pass / **1 fail** (x) |
