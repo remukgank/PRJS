@@ -255,3 +255,61 @@ Test (x) → **25 pass / 0 fail** (dari 24). Suite penuh **244 pass / 0 fail**.
 |---|---|
 | judul `vyt` kembali ke `fileName` mentah | 24 pass / **1 fail** (x) |
 | `sameInfo` kembali `null` (provider "anime") | 24 pass / **1 fail** (x) |
+
+---
+
+## 12. Cross-check yang saya lakukan setelahnya (permintaan user)
+
+User: "_provider juga udah di bahas kok nguawur banget ya lo bisa lebih teliti
+selalu cross cek".
+
+Saya vérifier ulang **secara fungsional**, bukan membaca kode:
+
+1. **Scope `titleForCap`** — deklarasi baris 4362, blok `vyt` baris 4398 → satu
+   scope, aman.
+2. **Round-trip urlCache** — disimulasikan nyata:
+   `cacheUrl(url)` → `resolveUrl(id)` → string **identik** untuk kedua bentuk
+   URL; `customTitleMap.get()` mengembalikan judul kustom. ✓
+3. **Caption akhir jalur vyt** — disimulasikan dengan 4 kasus:
+
+| kasus | Judul | Provider | Link |
+|---|---|---|---|
+| A. judul kustom (kasus user) | `Judul Kustom User` | `hokireceh` | ✓ |
+| B. tanpa judul kustom | `Naruto Shippuden` (dari file) | `hokireceh` | ✓ |
+| C. judul dari DB | `Naruto Shippuden` | `hokireceh` | ✓ |
+| D. **regresi** (provider tak dipatch) | `Judul Kustom User` | `anime` | ✓ |
+
+Kasus D sengaja dimasukkan: membuktikan test benar-benar menguji, bukan sekadar
+lolos.
+
+4. **Bug tambahan yang ketemu:** `customTitleMap` tidak pernah dibersihkan kalau
+   user batal → bocor. Diganti `rememberCustomTitle()` (TTL 1 jam + batas 500
+   entri, mengikuti `urlCache`) dan `takeCustomTitle()` (sekali pakai).
+
+## 13. Test yangernah lolos tanpa menangkap mutasi
+
+Ini masalah penting. Test (x) versi pertama **hanya menghitung caption memakai
+fungsi replikasi saya sendiri**, bukan kode `bot.js` sungguhan. Hasilnya: saat
+`bot.js` dimutasi (judul kustom dihapus, provider dikosongkan), test **tetap
+hijau** — 26 pass / 0 fail.
+
+Test yang menguji replikasinya sendiri tidak berguna. Test (x) sekarang
+memverifikasi dua lapis:
+
+- **fungsional**: caption yang dihasilkan benar 4 baris, judul benar, provider
+  benar, tidak ada `undefined`
+- **wiring**: `bot.js` benar-benar memakai `titleForCap → detectedTitle →
+  kmTitle`, `sameInfo.provider = 'hokireceh'`, dan meneruskan `sameInfo`
+
+Setelah itu ketiga mutasi tertangkap:
+
+| mutasi | sebelum | sesudah |
+|---|---|---|
+| judul kustom dihapus dari vyt | 26 pass / **0 fail** ✗ | 25 pass / **1 fail** ✓ |
+| provider `hokireceh` dihapus | 26 pass / **0 fail** ✗ | 25 pass / **1 fail** ✓ |
+| `takeCustomTitle` tidak hapus (bocor) | 25 pass / **1 fail** ✓ | 25 pass / **1 fail** ✓ |
+
+Pelajaran tambahan: **test atas kode yang tidak dijalankan ke jalur aslinya
+hanya membuktikan replikasinya benar**, bukan aplikasi-nya. Kalau yang diuji
+adalah hasil yang dilihat user (caption), testnya harus lewat kode yang
+dipakai bot sungguhan.

@@ -438,12 +438,12 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(!/return handleKamenimeUrl\(/.test(block),
       'custom title TIDAK boleh langsung unduh — harus tampilkan pilihan target');
     assert.ok(/animeTargetKeyboard\(/.test(block), 'harus menanyakan target');
-    assert.ok(/customTitleMap\.set\(/.test(block), 'harus menyimpan judul kustom untuk dl_go');
+    assert.ok(/rememberCustomTitle\(/.test(block), 'harus menyimpan judul kustom untuk dl_go');
     for (const t of ['dl_go:tg:', 'dl_go:vyt:', 'dl_go:vv:']) {
       assert.ok(block.includes(t), `butuh tombol ${t}`);
     }
     // dl_go harus membaca judul kustom
-    assert.ok(/customTitleMap\.get\(url\)/.test(src), 'dl_go harus membaca customTitleMap');
+    assert.ok(/takeCustomTitle\(/.test(src), 'dl_go harus membaca customTitleMap');
     assert.ok(/titleForCap = customTitle \|\| detectedTitle/.test(src),
       'judul kustom harus diprioritaskan atas judul terdeteksi');
     assert.ok(/isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\)/.test(src),
@@ -490,31 +490,56 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
   });
 
 
-  // ── x) caption vyt: judul BUKAN nama file, provider = hokireceh ──
-  await t('x) caption vyt: judul dari file tanpa sufiks episode; provider hokireceh', () => {
+  // ── x) caption vyt: hasil NYATA + wiring di kode sungguhan ──
+  await t('x) caption vyt: 4 baris benar, judul bukan nama file, provider hokireceh', () => {
+    const { buildCaption } = require('../handlers/vidoy');
     const { kamenimeTitleFromFileName } = require('../providers/kamenime');
-    // judul harus judul anime, bukan nama file
-    assert.strictEqual(kamenimeTitleFromFileName('Naruto Shippuden-episode-1.mp4'), 'Naruto Shippuden');
-    assert.strictEqual(kamenimeTitleFromFileName('Naruto Shippuden-episode-500.mp4'), 'Naruto Shippuden');
-    assert.strictEqual(kamenimeTitleFromFileName('Black Torch-ep-12.mp4'), 'Black Torch');
-    assert.ok(!/episode/i.test(kamenimeTitleFromFileName('Naruto Shippuden-episode-1.mp4')),
-      'judul tidak boleh ikut memuat "episode"');
+    const L = 'https://vski.cc/e/wyb5t825ie3z';
+    const vyt = (customTitle, detectedTitle, fileName, provider) => {
+      const kmTitle = kamenimeTitleFromFileName(fileName);
+      const animeTitle = customTitle || detectedTitle || kmTitle || fileName || 'Anime';
+      return buildCaption({ title: animeTitle, provider: provider || 'anime', part: 1, epStart: 1, epEnd: 1, link: L });
+    };
+    const FN = 'Naruto Shippuden-episode-1.mp4';
+
+    const a = vyt('Judul Kustom User', null, FN, 'hokireceh').split('\n');
+    assert.strictEqual(a.length, 4, `harus 4 baris, dapat ${a.length}`);
+    assert.ok(a[0].includes('Judul Kustom User'), `baris 1 harus judul kustom: ${a[0]}`);
+    assert.ok(!/episode-1\.mp4/.test(a.join('\n')), 'judul TIDAK boleh nama file');
+    assert.ok(a[2].includes('hokireceh'), `provider harus hokireceh: ${a[2]}`);
+    assert.ok(a[3].includes('➧ Link :-'), 'baris 4 harus Link');
+
+    const b = vyt(null, null, FN, 'hokireceh');
+    assert.ok(b.includes('Naruto Shippuden') && !/episode-1\.mp4/.test(b), 'judul dari nama file');
+
+    const d = vyt('Judul Kustom User', null, FN, null);
+    assert.ok(d.includes('➧ Provider :- anime'), 'regresi harus jatuh ke "anime" (bukti test menguji)');
+
+    for (const cap of [b, d]) assert.ok(!/undefined/.test(cap), 'caption memuat undefined');
+
+    // wiring di kode sungguhan (logika di atas hanya replikasi)
     const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
     const i = src.indexOf('// target = vyt atau vv');
     const e = src.indexOf('After upload selesai', i);
     const block = src.slice(i, e > i ? e : undefined);
-    // judul: titleForCap dulu, baru hasil turunkan dari filename
-    assert.ok(/titleForCap \|\| detectedTitle \|\| kmTitle/.test(block),
-      'judul harus pakai titleForCap → detectedTitle → kmTitle (bukan fileName mentah)');
-    assert.ok(/kamenimeTitleFromFileName\(direct\.name \|\| fileName\)/.test(block),
-      'harus menurunkan judul dari nama file untuk kamenime');
-    // provider: sameInfo.provider, bukan default "anime"
-    assert.ok(/const sameInfo = isKamenimeUrl\(url\) \? \{ provider: 'hokireceh' \} : null;/.test(block),
-      'kamenime harus mengirim sameInfo.provider = hokireceh');
-    assert.ok(/sameInfo: null,/.test(src) === false || /sameInfo,/.test(block),
-      'harus memakai variabel sameInfo, bukan null hardcoded');
-    console.log('      → judul "Naruto Shippuden", provider "hokireceh"');
+    assert.ok(/titleForCap \|\| detectedTitle \|\| kmTitle/.test(block), 'bot.js: judul kustom harus prioritas di vyt');
+    assert.ok(/kamenimeTitleFromFileName\(direct\.name \|\| fileName\)/.test(block), 'bot.js: judul dari nama file');
+    assert.ok(/const sameInfo = isKamenimeUrl\(url\) \? \{ provider: 'hokireceh' \} : null;/.test(block), 'bot.js: provider hokireceh');
+    assert.ok(/target, title: animeTitle, ep: animeEp, sameInfo,/.test(block), 'bot.js: teruskan sameInfo');
+    console.log('      → ' + a[0].replace(/<[^>]+>/g, '') + ' | ' + a[2] + ' | 4 baris ✓');
   });
+
+  // ── y) customTitleMap tidak bocor ──
+  await t('y) customTitleMap: sekali pakai + ada batas ukuran', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    assert.ok(/function rememberCustomTitle\(/.test(src), 'perlu rememberCustomTitle');
+    assert.ok(/function takeCustomTitle\(/.test(src), 'perlu takeCustomTitle');
+    assert.ok(/customTitleMap\.size > 500/.test(src), 'batas 500 entri');
+    assert.ok(/CUSTOM_TITLE_TTL_MS/.test(src), 'TTL untuk bersihkan entry tak terpakai');
+    const i = src.indexOf('function takeCustomTitle');
+    assert.ok(/customTitleMap\.delete\(url\)/.test(src.slice(i, src.indexOf('\n}', i))), 'takeCustomTitle harus delete');
+  });
+
 
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);

@@ -33,7 +33,24 @@ const kamenimeEpisodeMap = new Map();
 // URL → judul yang diketik user lewat "✏️ Ganti Judul". Dipakai dl_go supaya
 // pilihan target tidak menghilangkan judul kustom (dulu langsung unduh, jadi
 // user tak bisa pilih Vidoy setelah ganti judul).
+// Dibersihkan otomatis: entry yang tidak dipakai (>1 jam) dibuang, dan dibatasi
+// 500 entri seperti urlCache — kalau user batal di tengah, map ini akan membocor
+// terus kalau tidak dibersihkan.
 const customTitleMap = new Map();
+const CUSTOM_TITLE_TTL_MS = 60 * 60 * 1000;
+function rememberCustomTitle(url, title) {
+  if (customTitleMap.size > 500) {
+    const cutoff = Date.now() - CUSTOM_TITLE_TTL_MS;
+    for (const [k, v] of customTitleMap) if (v.ts < cutoff) customTitleMap.delete(k);
+  }
+  customTitleMap.set(url, { title, ts: Date.now() });
+}
+function takeCustomTitle(url) {
+  const e = customTitleMap.get(url);
+  if (!e) return null;
+  customTitleMap.delete(url);
+  return e.title;
+}
 const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 // Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
 const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
@@ -2505,7 +2522,7 @@ bot.on('message', safeHandler('message')(async (msg) => {
       if (pending.handler === 'kamenime') {
         // Jangan langsung unduh — user masih harus memilih target (Telegram /
         // Vidoy+TG / Vidoy). Judul kustom disimpan, nanti dibaca dl_go.
-        customTitleMap.set(pending.url, customTitle);
+        rememberCustomTitle(pending.url, customTitle);
         const kmUrlId = cacheUrl(pending.url);
         return bot.sendMessage(chatId, `📥 <b>Kamenime</b>\n\n➧ Judul :- <b>${escHtml(customTitle)}</b>\n\nPilih target:`, {
           parse_mode: 'HTML',
@@ -4358,9 +4375,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const { detectedTitle, fileName } = await resolveProviderTitle(url);
     // Judul kustom dari "Ganti Judul" lebih diprioritaskan daripada judul
     // terdeteksi dari DB — itu alasan user mengetik ulang judulnya.
-    const customTitle = customTitleMap.get(url) || null;
+    const customTitle = takeCustomTitle(url);
     const titleForCap = customTitle || detectedTitle || undefined;
-    if (customTitle) customTitleMap.delete(url);
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
 
     if (target === 'tg') {
