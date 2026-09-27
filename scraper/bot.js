@@ -29,6 +29,11 @@ const SAM_PAGE_EP = Number(process.env.SAM_PAGE_EP) || 20; // ep per halaman (5 
 // epId (hash 8) → URL episode kamenime. Hash, bukan cacheUrl numerik, supaya
 // tidak ada kedaluwarsa/tabrakan seperti sam_ep.
 const kamenimeEpisodeMap = new Map();
+
+// URL → judul yang diketik user lewat "✏️ Ganti Judul". Dipakai dl_go supaya
+// pilihan target tidak menghilangkan judul kustom (dulu langsung unduh, jadi
+// user tak bisa pilih Vidoy setelah ganti judul).
+const customTitleMap = new Map();
 const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 // Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
 const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
@@ -2484,7 +2489,20 @@ bot.on('message', safeHandler('message')(async (msg) => {
     if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
     if (pending.handler === 'filedon') return handleFiledonUrl(chatId, pending.url, customTitle);
-    if (pending.handler === 'kamenime') return handleKamenimeUrl(chatId, pending.url, customTitle);
+      if (pending.handler === 'kamenime') {
+        // Jangan langsung unduh — user masih harus memilih target (Telegram /
+        // Vidoy+TG / Vidoy). Judul kustom disimpan, nanti dibaca dl_go.
+        customTitleMap.set(pending.url, customTitle);
+        const kmUrlId = cacheUrl(pending.url);
+        return bot.sendMessage(chatId, `📥 <b>Kamenime</b>\n\n➧ Judul :- <b>${escHtml(customTitle)}</b>\n\nPilih target:`, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: animeTargetKeyboard(
+              `dl_go:tg:${kmUrlId}`, `dl_go:vyt:${kmUrlId}`, `dl_go:vv:${kmUrlId}`,
+            ),
+          },
+        });
+      }
     if (pending.handler === 'mega') return handleMegaUrl(chatId, pending.url, customTitle);
   }
 
@@ -4325,6 +4343,11 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!url) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
 
     const { detectedTitle, fileName } = await resolveProviderTitle(url);
+    // Judul kustom dari "Ganti Judul" lebih diprioritaskan daripada judul
+    // terdeteksi dari DB — itu alasan user mengetik ulang judulnya.
+    const customTitle = customTitleMap.get(url) || null;
+    const titleForCap = customTitle || detectedTitle || undefined;
+    if (customTitle) customTitleMap.delete(url);
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
 
     if (target === 'tg') {
@@ -4346,7 +4369,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }
       if (isPixeldrainUrl(url)) return handlePixeldrainUrl(chatId, url, detectedTitle || undefined);
         if (isFiledonUrl(url)) return handleFiledonUrl(chatId, url, detectedTitle || undefined);
-        if (isKamenimeUrl(url)) return handleKamenimeUrl(chatId, url, detectedTitle || undefined);
+        if (isKamenimeUrl(url)) return handleKamenimeUrl(chatId, url, titleForCap);
         if (isMegaUrl(url)) return handleMegaUrl(chatId, url, detectedTitle || undefined);
     }
 

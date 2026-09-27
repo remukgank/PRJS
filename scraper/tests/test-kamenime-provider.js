@@ -183,8 +183,8 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     const end = src.indexOf('// target = vyt atau vv', start);
     assert.ok(end > start, 'harus ada penanda akhir blok tg sebelum jalur vyt/vv');
     const block = src.slice(start, end);
-    assert.ok(/if \(isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, detectedTitle \|\| undefined\);/.test(block),
-      `blok tg tidak punya cabang kamenime:\n${block}`);
+      assert.ok(/if \(isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\);/.test(block),
+      `blok tg tidak punya cabang kamenime (atau tidak meneruskan titleForCap):\n${block}`);
     // Fallback ke resolveDirectUrl hanya boleh SETELAH semua cabang handler.
     const lastHandler = block.lastIndexOf('return handle');
     const resolveCall = block.indexOf('resolveDirectUrl(');
@@ -405,6 +405,49 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(/listKamenimeEpisodes\(text\.trim\(\)\);/.test(src), 'dispatcher harus memanggil listing');
     assert.ok(/title: animeTitle/.test(src), 'dispatcher harus meneruskan title ke builder');
     console.log('      → picker memakai judul asli; slug hanya fallback');
+  });
+
+
+  // ── t) REGRESI: logCtx harus terdefinisi (bug: "logCtx is not defined") ──
+  await t('t) handleKamenimeUrl: logCtx dideklarasikan, bukan IdentifierError', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+    const s = src.indexOf('async function handleKamenimeUrl');
+    const e = src.indexOf('async function handleMegaUrl', s);
+    const body = src.slice(s, e > s ? e : undefined);
+    // WAJIB ada deklarasi logCtx di dalam handleKamenimeUrl
+    assert.ok(/const logCtx = \{/.test(body),
+      'handleKamenimeUrl harus mendeklarasikan logCtx — tanpa itu ReferenceError di setiap remux');
+    // dan tidak boleh ada logger yang memakai logCtx tanpa deklarasi lokal
+    const uses = (body.match(/\.\.\.logCtx/g) || []).length;
+    const decl = (body.match(/const logCtx = \{/g) || []).length;
+    assert.ok(decl >= 1, 'deklarasi logCtx wajib ada');
+    assert.ok(uses > 0, 'logCtx harus benar-benar dipakai (bukan sisa kode mati)');
+    // logger.debug tanpa ?. — logger.debug?.()看不見 redirect
+    assert.ok(/logger\.debug\(\{/.test(body), 'pakai logger.debug({ ... }) langsung, bukan optional chaining');
+    console.log(`      → deklarasi logCtx: ${decl}, pemakaian: ${uses}`);
+  });
+
+  // ── u) Ganti Judul harus MASIH bisa pilih target ──
+  await t('u) setelah "Ganti Judul" kamenime tetap menanyakan target', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    // cabang custom-title untuk kamenime TIDAK boleh langsung unduh
+    const i = src.indexOf("if (pending.handler === 'kamenime') {");
+    assert.ok(i > 0, 'butuh cabang kamenime di jalur custom title');
+    const e = src.indexOf("if (pending.handler === 'mega')", i);
+    const block = src.slice(i, e > i ? e : undefined);
+    assert.ok(!/return handleKamenimeUrl\(/.test(block),
+      'custom title TIDAK boleh langsung unduh — harus tampilkan pilihan target');
+    assert.ok(/animeTargetKeyboard\(/.test(block), 'harus menanyakan target');
+    assert.ok(/customTitleMap\.set\(/.test(block), 'harus menyimpan judul kustom untuk dl_go');
+    for (const t of ['dl_go:tg:', 'dl_go:vyt:', 'dl_go:vv:']) {
+      assert.ok(block.includes(t), `butuh tombol ${t}`);
+    }
+    // dl_go harus membaca judul kustom
+    assert.ok(/customTitleMap\.get\(url\)/.test(src), 'dl_go harus membaca customTitleMap');
+    assert.ok(/titleForCap = customTitle \|\| detectedTitle/.test(src),
+      'judul kustom harus diprioritaskan atas judul terdeteksi');
+    assert.ok(/isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\)/.test(src),
+      'dl_go tg harus meneruskan titleForCap ke handleKamenimeUrl');
   });
 
   console.log(`\n${passed} pass / ${failed} fail`);

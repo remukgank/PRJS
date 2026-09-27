@@ -767,14 +767,19 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
       rp.updateEpisode(capWithEp, 'download');
       // .mp4 dipertahankan — JANGAN remux (sudah MP4).
       outPath = tempPath(kmName.endsWith('.mp4') ? kmName : `${kmName}.mp4`);
-      await downloadTo(km.fileUrl, outPath, { logCtx: { chatId, file: kmName } });
+      // PENTING: logCtx harus dideklarasikan di sini. Versi sebelumnya memakai
+      // `logCtx` di callback remux tanpa pernah mendeklarasikannya → ReferenceError
+      // "logCtx is not defined" pada SETIAP download kamenime (file kamenime
+      // selalu non-faststart, jadi remux selalu jalan).
+      const logCtx = { chatId, file: kmName, provider: 'kamenime' };
+      await downloadTo(km.fileUrl, outPath, { logCtx });
       // Faststart WAJIB. MP4 non-faststart menaruh atom `moov` di belakang `mdat`
       // → player/Telegram harus unduh seluruh 115 MB dulu sebelum bisa memutar,
       // artinya supports_streaming tidak berguna. remuxToMp4 pakai -c copy
       // (tanpa re-encode) jadi hanya ~1,3 detik untuk 115 MB, dan skip kalau
       // filenya sudah faststart.
       if (isFaststartMp4(outPath)) {
-        logger.debug?.({ file: kmName }, 'Kamenime: sudah faststart, lewati remux');
+        logger.debug({ ...logCtx }, 'Kamenime: sudah faststart, lewati remux');
       } else {
         const fixedPath = await remuxToMp4(outPath, (m) => logger.info({ ...logCtx, m }, 'remux faststart (kamenime)'));
         if (fixedPath && fixedPath !== outPath) outPath = fixedPath;
