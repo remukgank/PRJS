@@ -9,7 +9,7 @@ const { isFiledonUrl, resolveFiledonFile } = require('../providers/filedon');
 const { isGdriveUrl, resolveGdriveFile } = require('../providers/gdrive');
 const { isMegaUrl, resolveMegaFile, downloadMegaFile } = require('../providers/mega');
 const { isGdrivePlayerUrl, resolveGdrivePlayerFile, GPLAYER_UA, GPLAYER_REF } = require('../providers/gdriveplayer');
-const { isKamenimeUrl, resolveKamenimeFile } = require('../providers/kamenime');
+const { isKamenimeUrl, resolveKamenimeFile, kamenimeSourcePattern } = require('../providers/kamenime');
 const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive');
 const axios = require('axios');
 const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4, isFaststartMp4 } = require('../downloader');
@@ -752,7 +752,15 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
         await leafAlert(chatId, `⚠️ Kamenime utk Ep ${expectedEp} menunjuk file salah (${kmName}).\n${mismatch}`);
         return { ok: false, error: mismatch };
       }
-      const patFile = kmSame?.short ? kmSame.short : extractSourcePattern(kmName);
+      // Pola TANPA nomor episode: dari URL, bukan dari nama file. Kalau pakai
+      // extractSourcePattern(kmName) tiap episode punya pola berbeda
+      // ("...-episode-1", "...-episode-2") sehingga judul yang diketik user
+      // hanya berlaku untuk episode itu saja. Pola dari URL = satu untuk semua
+      // episode. WAJIB sama dengan yang dipakai resolveProviderTitle saat mencari.
+      // Fallback terakhir (hanya kalau URL rusak, tidak terjadi untuk URL
+      // kamenime yang valid) memakai nama file BERSIH — bukan extractSourcePattern
+      // yang akanmenggabungkan nomor episode ke dalam pola.
+      const patFile = kamenimeSourcePattern(url) || sanitizeSlug(kmName) || 'kamenime';
       let title = null;
       if (patFile) {
         const m = await findMediaByPattern(patFile).catch(() => null);

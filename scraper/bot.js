@@ -18,7 +18,7 @@ const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseS
 const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
-const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime } = require('./providers/kamenime');
+const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime, kamenimeSourcePattern } = require('./providers/kamenime');
 const { isMegaUrl, resolveMegaFile } = require('./providers/mega');
 const { isGdriveUrl, resolveGdriveFile } = require('./providers/gdrive');
 const samehadakuEpisodeMap = new Map(); // fileUrl (gofile/pixeldrain) → { title, season, episode, provider }
@@ -1231,7 +1231,20 @@ async function resolveProviderTitle(url) {
     if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
     else if (isGdriveUrl(url)) { try { fileName = (await resolveGdriveFile(url)).name; } catch {} }
     else if (isFiledonUrl(url)) { try { fileName = (await resolveFiledonFile(url)).name; } catch {} }
-      else if (isKamenimeUrl(url)) { try { fileName = (await resolveKamenimeFile(url)).fileName; } catch {} }
+      else if (isKamenimeUrl(url)) {
+        try {
+          fileName = (await resolveKamenimeFile(url)).fileName;
+          // Pola WAJIB sama dengan yang dipakai handleKamenimeUrl saat menyimpan
+          // (kamenimeSourcePattern). Kalau cari pakai extractSourcePattern
+          // (yang ikut memuat nomor episode) sementara simpan pakai pola URL,
+          // judul kustom tidak akan pernah terdeteksi.
+          const kmPat = kamenimeSourcePattern(url);
+          if (kmPat) {
+            const kmMatch = await findMediaByPattern(kmPat).catch(() => null);
+            if (kmMatch) detectedTitle = kmMatch.nama;
+          }
+        } catch {}
+      }
     else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
     else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
     if (fileName) {

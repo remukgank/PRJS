@@ -284,6 +284,46 @@ function isKamenimeAnimePage(url) {
   } catch { return false; }
 }
 
+/**
+ * Pola `source_pattern` untuk kamenime — TANPA nomor episode.
+ *
+ * Penting: `extractSourcePattern("Naruto Shippuden-episode-1.mp4")` →
+ * "Naruto Shippuden-episode-1", jadi tiap episode punya pola BERBEDA. Kalau user
+ * mengganti judul di episode 1, hanya episode 1 yang teringat; episode 2..500
+ * akan meminta ganti judul lagi.
+ *
+ * Dengan pola dari URL anime, semua episode berbagi satu pola:
+ *   /storage/anime/Naruto%20Shippuden/...-episode-1.mp4  → "naruto-shippuden"
+ *   /storage/anime/Naruto%20Shippuden/...-episode-500.mp4 → "naruto-shippuden"
+ *   /anime/naruto-shippuden/episode/1                    → "naruto-shippuden"
+ *
+ * WAJIB dipakai di DUA tempat yang sama: penyimpanan (handleKamenimeUrl) dan
+ * pencarian (resolveProviderTitle). Kalau simpan pakai pola A tapi cari pola B,
+ * judul kustom tidak akan pernah terdeteksi.
+ *
+ * NORMALISASI WAJIB: bentuk /storage/ memberi nama folder ber-spasi
+ * ("Naruto Shippuden") sedangkan bentuk /anime/ memberi slug ber-strip
+ * ("naruto-shippuden"). Tanpa normalisasi keduanya jadi pola BERBEDA, dan
+ * pencarian tidak akan menemukan yang disimpan dari bentuk URL lain.
+ */
+function kamenimeSourcePattern(url) {
+  const norm = (s) => String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')      // "naruto shippuden" → "naruto-shippuden"
+    .replace(/[^a-z0-9-]+/g, '')  // buang karakter lain
+    .replace(/-{2,}/g, '-')       // "--" → "-"
+    .replace(/^-+|-+$/g, '');      // buang strip di tepi
+  try {
+    const u = new URL(String(url));
+    const st = u.pathname.match(/\/storage\/anime\/([^/]+)\/?/i);
+    if (st) return norm(decodeURIComponent(st[1])) || null;
+    const an = u.pathname.match(/\/anime\/([^/]+)/i);
+    if (an) return norm(an[1]) || null;
+  } catch {}
+  return null;
+}
+
 module.exports = {
   isKamenimeUrl,
   isKamenimeAnimePage,
@@ -291,6 +331,7 @@ module.exports = {
   parseKamenimeAnime,
   listKamenimeEpisodes,
   kamenimeTitleFromHtml,
+  kamenimeSourcePattern,
   fileNameFromUrl,
   absolutize,
   KAMENIME_UA,

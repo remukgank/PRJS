@@ -96,3 +96,78 @@ not a result. Blok faststart saya tulis, `node --check` lulus, test `isFaststart
 dan `remuxToMp4` lulus — tapi tak ada satu pun yang menjalankan **blok itu di
 dalam alur unduh sebenarnya**. `node --check` tidak menangkap `ReferenceError`
 untuk identifier yang belum dideklarasikan di jalur yang rarely dieksekusi.
+
+---
+
+## 6. Judul kustom tidak otomatis terdeteksi (tanya user)
+
+**Pertanyaan user:** "jika aku pernah ganti Judul otomatis kedeteksi kan ya selanjutnya?"
+
+**Jawaban (terverifikasi): TIDAK** — dan itu bug.
+
+**Root cause:** `handleKamenimeUrl` menyimpan `source_pattern` dari
+`extractSourcePattern(kmName)`, yaitu dari **nama file**:
+
+```
+extractSourcePattern("Naruto Shippuden-episode-1.mp4")   → "Naruto Shippuden-episode-1"
+extractSourcePattern("Naruto Shippuden-episode-2.mp4")   → "Naruto Shippuden-episode-2"
+```
+
+Nomor episode ikut masuk pola. `findMediaByPattern` cocoknya PERSIS
+(`LOWER(source_pattern) = LOWER($1)`), jadi judul yang diketik di episode 1
+**hanya berlaku untuk episode 1**. Episode 2–500 akan meminta ganti judul lagi.
+
+Bandingkan samehadaku yang nama filenya ber-kode pendek:
+`extractSourcePattern("[samehadaku] NS 720p ep (5).mkv")` → `"ns"` — satu pola
+untuk semua episode. Itulah kenapa samehadaku jalan dan kamenime tidak.
+
+`getSetting('libsimpan')` = `on`, jadi judulnya **tersimpan**; yang bermasalah
+hanya pola pencocokannya.
+
+**Fix:** helper `kamenimeSourcePattern(url)` — pola dari **URL anime**, tanpa
+nomor episode. WAJIB dipakai di DUA tempat yang sama:
+
+| tempat | fungsi | peran |
+|---|---|---|
+| `handlers/download.js` `handleKamenimeUrl` | simpan | menulis `source_pattern` |
+| `bot.js` `resolveProviderTitle` | cari | membaca untuk judul terdeteksi |
+
+Kalau simpan pakai pola A tapi cari pola B, judul kustom tidak akan pernah
+terdeteksi.
+
+**Normalisasi (bug kedua yang ketemu saat verifikasi).** Bentuk URL dua macam
+menghasilkan pola berbeda:
+
+```
+/storage/anime/Naruto%20Shippuden/... → "naruto shippuden"  (spasi)
+/anime/naruto-shippuden/episode/1    → "naruto-shippuden"  (strip)
+```
+
+Ternyata **tidak sama**. Tanpa normalisasi, pencarian dari satu bentuk tidak
+menemukan penyimpanan dari bentuk lain. `norm()` kini: lowercase, spasi/underscore
+→ strip, buang karakter lain, rapikan strip berulang dan di tepi.
+
+Hasil — 16 URL (2 bentuk × 8 nomor) → **satu pola**:
+
+```
+/storage/ ep 1,5,500  → "naruto-shippuden"
+/anime/   ep 2,7     → "naruto-shippuden"
+= sanitizeSlug("Naruto Shippuden")  ✓   (kunci library ikut sinkron)
+```
+
+## 7. Verifikasi pola
+
+Test (v) & (w) → `test-kamenime-provider.js` **24 pass / 0 fail** (dari 22).
+Suite penuh **243 pass / 0 fail**.
+
+| mutasi | hasil |
+|---|---|
+| hapus normalisasi spasi → strip | 23 pass / **1 fail** (v) — 2 pola berbeda |
+| `/storage/` dinormalisasi单独 | 23 pass / **1 fail** (v) — "naruto shippuden" vs "naruto-shippuden" |
+| `resolveProviderTitle` kembali ke `extractSourcePattern` | 23 pass / **1 fail** (w) |
+
+## 8. Efek untuk pengguna
+
+Setelah deploy: ganti judul **sekali** di episode mana pun → episode 2, 3, 4
+sampai 500 otomatis memakai judul itu, tanpa asks ulang. Tombol "✏️ Ganti Judul"
+masnya muncul hanya kalau judul belum pernah disimpan.

@@ -450,6 +450,45 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
       'dl_go tg harus meneruskan titleForCap ke handleKamenimeUrl');
   });
 
+
+  // ── v) pola source_pattern TIDAK boleh ikut nomor episode ──
+  await t('v) kamenimeSourcePattern: satu pola untuk SEMUA episode', () => {
+    const { kamenimeSourcePattern } = require('../providers/kamenime');
+    const { sanitizeSlug } = require('../lib/parser');
+    const storage = (n) => `https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naruto%20Shippuden-episode-${n}.mp4`;
+    const page = (n) => `https://www.kamenime.com/anime/naruto-shippuden/episode/${n}`;
+    const nums = [1, 2, 5, 7, 100, 250, 251, 500];
+    const pats = [...nums.map(storage), ...nums.map(page)].map(kamenimeSourcePattern);
+    assert.ok(pats.every(Boolean), 'semua URL harus punya pola');
+    const uniq = [...new Set(pats)];
+    assert.strictEqual(uniq.length, 1,
+      `pola harus SATU untuk semua episode, dapat ${uniq.length}: ${uniq.join(' | ')}`);
+    // normalisasi: /storage/ (spasi) dan /anime/ (strip) harus sama
+    assert.strictEqual(kamenimeSourcePattern(storage(1)), kamenimeSourcePattern(page(1)),
+      'bentuk /storage/ dan /anime/ harus menghasilkan pola sama');
+    assert.ok(!/episode|-\d+\$/.test(uniq[0]), `pola tidak boleh memuat nomor episode: ${uniq[0]}`);
+    // konsisten dengan sanitizeSlug (dipakai untuk kunci library)
+    assert.strictEqual(uniq[0], sanitizeSlug('Naruto Shippuden'),
+      `pola harus = sanitizeSlug(judul) supaya library & deteksi sinkron: ${uniq[0]} vs ${sanitizeSlug('Naruto Shippuden')}`);
+    console.log(`      → ${nums.length * 2} URL → 1 pola: "${uniq[0]}" (= sanitizeSlug)`);
+  });
+
+  // ── w) simpan & cari WAJIB pakai pola yang sama ──
+  await t('w) simpan (handleKamenimeUrl) dan cari (resolveProviderTitle) pakai pola sama', () => {
+    const dl = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
+    const bot = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
+    const s = dl.indexOf('async function handleKamenimeUrl');
+    const dBody = dl.slice(s, dl.indexOf('async function handleMegaUrl', s));
+    const rpt = bot.slice(bot.indexOf('async function resolveProviderTitle'),
+                           bot.indexOf('async function', bot.indexOf('async function resolveProviderTitle') + 10));
+    // keduanya harus pakai kamenimeSourcePattern, BUKAN extractSourcePattern
+    assert.ok(/kamenimeSourcePattern\(url\)/.test(dBody), 'penyimpanan harus pakai kamenimeSourcePattern');
+    assert.ok(/kamenimeSourcePattern\(url\)/.test(rpt), 'pencarian harus pakai kamenimeSourcePattern');
+      assert.ok(!/=\s*[^;]*extractSourcePattern\(kmName\)/.test(dBody),
+      'jangan pakai extractSourcePattern(namaFile) — pola ikut nomor episode');
+    console.log('      → simpan & cari konsisten pakai kamenimeSourcePattern');
+  });
+
   console.log(`\n${passed} pass / ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('FATAL', e); process.exit(1); });
