@@ -12,7 +12,7 @@ const { isGdrivePlayerUrl, resolveGdrivePlayerFile, GPLAYER_UA, GPLAYER_REF } = 
 const { isKamenimeUrl, resolveKamenimeFile } = require('../providers/kamenime');
 const { getShareInfo, downloadShare, sanitize } = require('../providers/ucdrive');
 const axios = require('axios');
-const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4 } = require('../downloader');
+const { downloadWithAria2c, fileSizeMb, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, remuxToMp4, isFaststartMp4 } = require('../downloader');
 // downloadTo (jalur fetch/undici + speed floor + fail-fast resume) — dipakai
 // handleKamenimeUrl. Provider lain pakai aria2c, jadi tidak perlu import ini.
 const { downloadTo } = require('../services/vidaraService');
@@ -768,17 +768,32 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
       // .mp4 dipertahankan — JANGAN remux (sudah MP4).
       outPath = tempPath(kmName.endsWith('.mp4') ? kmName : `${kmName}.mp4`);
       await downloadTo(km.fileUrl, outPath, { logCtx: { chatId, file: kmName } });
+      // Faststart WAJIB. MP4 non-faststart menaruh atom `moov` di belakang `mdat`
+      // → player/Telegram harus unduh seluruh 115 MB dulu sebelum bisa memutar,
+      // artinya supports_streaming tidak berguna. remuxToMp4 pakai -c copy
+      // (tanpa re-encode) jadi hanya ~1,3 detik untuk 115 MB, dan skip kalau
+      // filenya sudah faststart.
+      if (isFaststartMp4(outPath)) {
+        logger.debug?.({ file: kmName }, 'Kamenime: sudah faststart, lewati remux');
+      } else {
+        const fixedPath = await remuxToMp4(outPath, (m) => logger.info({ ...logCtx, m }, 'remux faststart (kamenime)'));
+        if (fixedPath && fixedPath !== outPath) outPath = fixedPath;
+      }
       const finalSize = fileSizeMb(outPath);
       logger.info({ chatId, file: kmName, sizeMb: finalSize.toFixed(1) }, 'Kamenime download selesai');
       rp.updateEpisode(capWithEp, 'upload', `${finalSize.toFixed(1)} MB`);
       const info = await getVideoInfo(outPath).catch(() => ({}));
-      let finalCap = cap;
-      if (titleForCap) {
-        finalCap = [
-          `➧ Judul :- ${titleForCap}`,
-          `➧ Episode :- ${partN}`,
-          `➧ Provider :- ${kmSame ? 'samehadaku' : extractProvider(kmName)}`,
-        ].join('\n');
+      // Caption WAJIB lewat buildCaption (kontrak media AGENTS §5). Menulis
+      // caption manual di sini membuat caption jadi 1 baris kalau title kosong —
+      // itu yang terjadi sebelum fix ini. buildCaption di-import di DALAM fungsi
+      // (aman: vidoy.js tidak mengimpor download.js, jadi tak ada circular).
+      const providerLabel = kmSame ? 'samehadaku' : extractProvider(kmName);
+      const finalCap = require('./vidoy').buildCaption({
+        title: titleForCap, provider: providerLabel,
+        part: partN, epStart: partN, epEnd: partN, link: null,
+      });
+      if (/undefined/.test(finalCap)) {
+        throw new Error(`caption mengandung "undefined" — kontrak media dilanggar: ${finalCap}`);
       }
       const sendResult = await _ctx.sendAnimeMedia(chatId, outPath, {
         caption: finalCap, supports_streaming: true,

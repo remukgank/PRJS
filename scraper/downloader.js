@@ -235,14 +235,51 @@ function cleanupFiles(...files) {
  * Cepat, lossless, langsung preview/streaming di Telegram.
  * Return path mp4 hasil; jika gagal/gagal container, kembalikan input asli.
  */
-async function remuxToMp4(inputPath, onLog = null) {
+/**
+ * True bila MP4 sudah "faststart": atom `moov` ada di SEBELUM `mdat`.
+ * Atom moov di belakang membuat player harus unduh seluruh file dulu sebelum
+ * bisa mulai memutar — dan Telegram ikut menundanya saat streaming.
+ * Nada: cukup lihat beberapa atom pertama — moov faststart selalu dekat depan.
+ */
+function isFaststartMp4(filePath) {
+  let fd = null;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    let off = 0;
+    const size = fs.fstatSync(fd).size;
+    for (let i = 0; i < 12 && off < size; i++) {
+      const b = Buffer.alloc(8);
+      const n = fs.readSync(fd, b, 0, 8, off);
+      if (n < 8) break;
+      const boxSize = b.readUInt32BE(0);
+      const type = b.toString('latin1', 4, 8);
+      if (type === 'moov') return true;
+      if (type === 'mdat') return false; // mdat sebelum moov = bukan faststart
+      if (boxSize < 8) break;
+      off += boxSize;
+    }
+    return true; // tidak ada mdat/moov yang jelas → jangan paksa remux
+  } catch {
+    return true;
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch {} }
+  }
+}
+
+async function remuxToMp4(inputPath, onLog = null, opts = {}) {
   // PENTING: jangan pakai ekstensi nama untuk memutuskan. Pemanggil sering
   // menamai tujuan "…Ep 01.mp4" padahal isinya .ts/.mkv dari server. Kalau
   // skip berdasarkan ".mp4", file .ts lolos tanpa dikonversi → iOS layar hitam.
   const ob = FFMPEG;
   const outPath = tempPath(path.basename(inputPath).replace(/\.[^.]+$/, '') + '_remux.mp4');
 
-  // Kalau isinya memang sudah MP4 (magic 'ftyp' di offset 4), tidak perlu remux.
+  // Kalau isinya sudah MP4 (magic 'ftyp' di offset 4), TIDAK perlu remux —
+  // KECUALI file itu belum faststart. Tanpa faststart, atom `moov` berada di
+  // belakang `mdat`, sehingga player (termasuk Telegram saat streaming) harus
+  // mengunduh SELURUH file sebelum bisa mulai memutar. Semua jalur remux di
+  // file ini memakai -movflags +faststart, jadi remux singkat (tanpa re-encode)
+  // membuat MP4 yang "sudah bagus" ikut jadi faststart.
+  // Bug 27 Sep 2026: kamenime mengirim MP4 non-faststart → tidak bisa streaming.
   let head = Buffer.alloc(0);
   try {
     const fd = fs.openSync(inputPath, 'r');
@@ -251,7 +288,10 @@ async function remuxToMp4(inputPath, onLog = null) {
     fs.closeSync(fd);
     head = buf.slice(0, n);
   } catch {}
-  if (head.length >= 8 && head.slice(4, 8).toString('latin1') === 'ftyp') return inputPath;
+  if (!opts.force && head.length >= 8 && head.slice(4, 8).toString('latin1') === 'ftyp'
+      && isFaststartMp4(inputPath)) {
+    return inputPath;
+  }
 
   function runFfmpeg(args) {
     return new Promise((resolve) => {
@@ -546,4 +586,4 @@ function fileSizeMb(filePath) {
   try { return fs.statSync(filePath).size / 1024 / 1024; } catch { return 0; }
 }
 
-module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, fileSizeMb, remuxToMp4, TMP_DIR };
+module.exports = { downloadStream, downloadWithAria2c, mergeVideos, getVideoInfo, cleanupFiles, tempPath, tempUniquePath, safeFileName, fileSizeMb, remuxToMp4, isFaststartMp4, TMP_DIR };

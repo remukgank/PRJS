@@ -100,28 +100,63 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(iKm < iGp, `kamenime (idx ${iKm}) harus SEBELUM gdriveplayer (idx ${iGp}) — kalau tidak, .mp4 dipaksa jadi .ts`);
   });
 
-  // ── f) handleKamenimeUrl TIDAK memanggil remuxToMp4 (sudah MP4) ──
-  await t('f) handleKamenimeUrl tidak remux + mempertahankan .mp4', () => {
+  // ── f) handleKamenimeUrl: pertahankan .mp4 + pastikan FASTSTART ──
+  await t('f) handleKamenimeUrl pertahankan .mp4 dan memaksa faststart (streaming)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
     const s = src.indexOf('async function handleKamenimeUrl');
-    const e = src.indexOf('async function handleMegaUrl');
+    const e = src.indexOf('async function handleMegaUrl', s);
     assert.ok(s > 0 && e > s, 'handleKamenimeUrl harus ada sebelum handleMegaUrl');
     const body = src.slice(s, e);
-    assert.ok(!/remuxToMp4/.test(body), 'handleKamenimeUrl tidak boleh remux (file sudah MP4)');
     assert.ok(/\.endsWith\('\.mp4'\)/.test(body), 'nama file harus dipertahankan .mp4');
-    assert.ok(/sendAnimeMedia/.test(body), 'wajib lewat sendAnimeMedia (topic Anime + supports_streaming)');
+    // faststart: MP4 non-faststart tidak bisa streaming di Telegram
+    assert.ok(/isFaststartMp4\(outPath\)/.test(body), 'harus mengecek faststart');
+    assert.ok(/remuxToMp4\(outPath/.test(body), 'harus remux kalau belum faststart');
+    assert.ok(/sendAnimeMedia/.test(body), 'wajib lewat sendAnimeMedia (topic Anime)');
     assert.ok(/supports_streaming:\s*true/.test(body), 'harus supports_streaming: true (kontrak media)');
+    console.log('      → cek faststart + remux saat perlu, .mp4 dipertahankan');
   });
 
-  // ── g) caption 4 baris persis (kontrak media) ──
-  await t('g) caption anime 4 baris: Judul / Episode / Provider', () => {
+  // ── f2) remuxToMp4: MP4 non-faststart WAJIB di-remux ──
+  await t('f2) remuxToMp4 memaksa remux untuk MP4 non-faststart (bukan skip)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'downloader.js'), 'utf8');
+    const s = src.indexOf('async function remuxToMp4');
+    const e = src.indexOf('\n}', s);
+    const body = src.slice(s, e);
+    assert.ok(/isFaststartMp4\(inputPath\)/.test(body),
+      'remuxToMp4 harus mengecek faststart — MP4 non-faststart tidak boleh di-skip');
+    assert.ok(/function isFaststartMp4\(filePath\)/.test(src), 'helper isFaststartMp4 harus ada');
+    const helper = src.slice(src.indexOf('function isFaststartMp4'), src.indexOf('async function remuxToMp4'));
+    assert.ok(/type === 'moov'/.test(helper) && /type === 'mdat'/.test(helper),
+      'helper harus bedakan moov sebelum mdat');
+  });
+
+
+  // ── g) caption WAJIB lewat buildCaption (bug: caption jadi 1 baris) ──
+  await t('g) caption pakai buildCaption: 3 baris (atau 4 + link), tidak pernah 1 baris', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'handlers', 'download.js'), 'utf8');
     const s = src.indexOf('async function handleKamenimeUrl');
-    const e = src.indexOf('async function handleMegaUrl');
-    const body = src.slice(s, e);
-    for (const line of ['➧ Judul :-', '➧ Episode :-', '➧ Provider :-']) {
-      assert.ok(body.includes(line), `baris caption wajib ada: ${line}`);
+    const e = src.indexOf('async function handleMegaUrl', s);
+    const body = src.slice(s, e > s ? e : undefined);
+    assert.ok(/require\('\.\/vidoy'\)\.buildCaption\(/.test(body),
+      'handleKamenimeUrl WAJIB memakai buildCaption (kontrak media)');
+    // mustahil kembali ke caption 1 baris
+    assert.ok(!/let finalCap = cap;/.test(body), 'jangan lagi jatuh ke `cap` mentah (penyebab caption 1 baris)');
+    assert.ok(!/if \(titleForCap\)\s*\{\s*finalCap = \[/.test(body), 'caption manual kondisional = bug lama');
+
+    // bukti nyata: buildCaption untuk kasus title ada & kosong
+    const { buildCaption } = require('../handlers/vidoy');
+    for (const title of ['Naruto Shippuden', null]) {
+      const c = buildCaption({ title, provider: 'kamenime', part: 1, epStart: 1, epEnd: 1, link: null });
+      const lines = c.split('\n');
+      assert.strictEqual(lines.length, 3, `harus 3 baris tanpa link, dapat ${lines.length}: ${c}`);
+      assert.ok(lines[0].startsWith('➧ Judul :-'), `baris 1: ${lines[0]}`);
+      assert.ok(lines[1].startsWith('➧ Episode :- 1'), `baris 2: ${lines[1]}`);
+      assert.ok(lines[2].startsWith('➧ Provider :-'), `baris 3: ${lines[2]}`);
+      assert.ok(!/undefined/.test(c), 'caption tidak boleh memuat undefined');
     }
+    const c4 = buildCaption({ title: 'X', provider: 'kamenime', part: 1, epStart: 1, epEnd: 1, link: 'https://vski.cc/e/abc' });
+    assert.strictEqual(c4.split('\n').length, 4, 'dengan link harus 4 baris');
+    console.log('      → tanpa link: 3 baris | dengan link: 4 baris | undefined: tidak ada');
   });
 
   // ── h) encoding space & decode entity ──

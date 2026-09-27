@@ -92,9 +92,81 @@ Test (p) mengunci: `kam_ep` harus memuat `animeTargetKeyboard` + ketiga tombol
 `dl_go:tg/vyt/vv` + `cacheUrl`, dan **dilarang** memanggil `handleKamenimeUrl`.
 Bukti mutasi: kembalikan bug → 15 pass / **1 fail**.
 
+## 4.4 Dua bug dari report user: caption 1 baris & tidak streaming
+
+User melaporkan: caption cuma **1 baris**, dan videonya **tidak streaming**. Dua-duanya
+saya akui sebagai kesalahan saya.
+
+### Bug 1 — caption 1 baris (pelanggaran kontrak AGENTS §5)
+
+Saya mengklaim "caption 3 baris" berdasarkan **membaca kode**, bukan hasil run.
+Kenyataannya:
+
+```js
+let finalCap = cap;
+if (titleForCap) { finalCap = [ ...3 baris... ].join('\n'); }
+```
+
+Kalau `titleForCap` kosong (tidak ada di DB, tidak ada customTitle), yang terkirim
+adalah `cap` = `cleanCaption(fileName)` — **1 baris**. Klaim saya salah karena
+tidak pernah menjalankan jalurnya.
+
+**Fix:** caption WAJIB lewat `buildCaption` (`handlers/vidoy.js`) — helper yang
+sama dipakai semua provider. Fallback `—` untuk judul kosong, plus guard yang
+melemak error kalau caption memuat `undefined`.
+
+Bukti: `buildCaption` → 3 baris tanpa link, **4 baris** dengan link, judul kosong
+→ `➧ Judul :- <b>—</b>` (bukan 1 baris).
+
+### Bug 2 — tidak streaming (root cause di short-circuit remux)
+
+Probe file kamenime ep 1 (121.331.884 byte):
+
+```
+ftyp@0(32)  free@32(8)  mdat@40(120407556)  moov@120407596(924288)
+```
+
+Atom `moov` ada di **belakang** → file **tidak faststart**. Player harus
+mengunduh seluruh 115 MB sebelum bisa mulai memutar, jadi `supports_streaming:
+true` jadi tidak berguna.
+
+**Root cause — saya sendiri.** `remuxToMp4` punya short-circuit:
+
+```js
+if (head.slice(4, 8).toString('latin1') === 'ftyp') return inputPath;  // ← skip
+```
+
+Asumsi saya "sudah MP4 jadi tidak perlu remux" — tapi short-circuit itu juga
+**melewatkan `-movflags +faststart`**. Every jalur remux di project ini memakai
+`+faststart`; hanya jalur "sudah MP4" yang melewatkannya.
+
+- Samehadaku kirim `.ts` → remux → faststart ✓
+- Kamenime kirim `.mp4` → skip remux → **tidak faststart** ✗
+
+Ironisnya, test (f) yang saya tulis ("tidak boleh remux") justru **mengunci** bug
+ini. Test yang salah bukan hanya lolos — dia melarang perbaikannya.
+
+**Fix (2 tempat):**
+1. `downloader.js` — helper `isFaststartMp4()` (baca posisi atom: `moov` sebelum
+   `mdat` = faststart). `remuxToMp4` skip hanya bila MP4 **dan** faststart.
+   `downloader.js` tadinya di luar scope; diubah karena inibug yang saya buat
+   dan short-circuit-nya ada di sana.
+2. `handlers/download.js` — `handleKamenimeUrl` memanggil
+   `isFaststartMp4()` lalu `remuxToMp4()` bila perlu.
+
+Bukti fungsional (file asli 121 MB):
+
+```
+SEBELUM : faststart=false
+SESUDAH : faststart=true | 1339ms | remux? true
+info    : {"width":1280,"height":720,"duration":1387,"codec":"h264"}
+```
+
+`1339ms` — karena `-c copy` (tanpa re-encode). Codec & resolusi tetap utuh.
+
 ## 5. Verifikasi
 
-`test-kamenime-provider.js` **16 pass / 0 fail** (dari 10 → 16 lewat 2 tahap).
+`test-kamenime-provider.js` **17 pass / 0 fail** (dari 10).
 
 Kasus baru:
 
@@ -106,6 +178,9 @@ Kasus baru:
 | n) | **regresi**: `/storage/...mp4` tetap instan, 0 request |
 | o) | `bot.js` punya dispatcher + `kam_ep:` + map; anime-page **sebelum** `isKamenimeUrl` |
 | p) | `kam_ep:` menampilkan pilihan target (tg/vyt/vv) dan **tidak** langsung unduh |
+| f) | pertahankan `.mp4` + cek faststart + `supports_streaming: true` |
+| f2) | `remuxToMp4` memaksa remux untuk MP4 non-faststart |
+| g) | caption lewat `buildCaption`: 3 baris (4 + link), tidak pernah 1 baris |
 
 Fixture `tests/fixtures/kamenime/effects-episodes.html` (5.067 bytes) =
 potongan nyata `effects.html` (14 episode, termasuk anchor navigasi ep 1 & 500).
@@ -118,13 +193,31 @@ Bukti mutasi:
 | pilih komponen pertama (`offcanvas-navbar`) | 14 pass / **1 fail** (l) — "pilih komponen salah" |
 | hapus `kam_ep:` dari `bot.js` | 14 pass / **1 fail** (o) |
 | `kam_ep:` dikembalikan ke langsung-unduh | 15 pass / **1 fail** (p) |
+| hapus cek faststart di `handleKamenimeUrl` | 16 pass / **1 fail** (f) |
+| short-circuit `remuxToMp4` dikembalikan | 16 pass / **1 fail** (f2) |
 
 Bukti live: `listKamenimeEpisodes('.../anime/naruto-shippuden')` →
 **500 episode, 0 lubang** (min 1, max 500), 500 judul unik, tidak ada `undefined`.
 
-Suite penuh: **235 pass / 0 fail**.
+Suite penuh: **236 pass / 0 fail**.
 
-## 6. Catatan
+## 6. Pelajaran
+
+Dua bug di atas punya pola yang sama: **saya menyimpulkan dari membaca kode, lalu
+melaporkannya sebagai fakta tanpa menjalankannya.**
+
+- "caption 3 baris" →kenyataannya 1 baris.
+- "tidak perlu remux karena sudah MP4" → padahal itu yang mematikan streaming.
+
+Test yang saya tulis untuk "kunci perilaku" (test f: "tidak boleh remux") justru
+melarang perbaikannya sendiri. Test yang mengunci perilaku benar tapi **berdasar
+asumsi salah** lebih berbahaya daripada tidak ada test, karena ia kelihatan
+menjaga.
+
+Yang終 benar: jalankan jalur electorate sungguhan (unduh 121 MB, periksa atom,
+remux, ukur ulang) dan laporkan hasilnya — bukan klaim dari diff.
+
+## 7. Catatan
 
 - **Caption & library tidak diubah** — `handleKamenimeUrl` (`download.js`) tetap
   dipakai apa adanya, termasuk `upsertMedia` + `savePartFileId` + cek duplikat.
