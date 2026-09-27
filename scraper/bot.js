@@ -51,6 +51,13 @@ function takeCustomTitle(url) {
   customTitleMap.delete(url);
   return e.title;
 }
+// Baca judul kustom TANPA menghapusnya. Dipakai preview "Download" yang
+// dibuat sebelum callback dl_go:, jadi kalau preview memakai takeCustomTitle()
+// nilainya habis dan dl_go: dapat null — judul kustom hilang tepat di layar.
+function peekCustomTitle(url) {
+  const e = customTitleMap.get(url);
+  return e ? e.title : null;
+}
 const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 // Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
 const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
@@ -3249,7 +3256,14 @@ bot.on('message', safeHandler('message')(async (msg) => {
       const km = await resolveKamenimeFile(text.trim());
       const kmName = km.fileName;
       const detectedTitle = await findMediaByPattern(extractSourcePattern(kmName)).catch(() => null);
-      const titleShown = detectedTitle ? detectedTitle.nama : null;
+      // Prioritas: edit user > judul di library > judul asli dari nama file >
+      // nama file mentah. Judul asli cukup diekstrak dari nama file
+      // ("Naruto Shippuden-episode-2.mp4" -> "Naruto Shippuden") tanpa
+      // request tambahan — kalau tidak, prompt cuma menampilkan nama file dan
+      // user tidak punya judul yang bisa disimpan ke library.
+      const titleShown = (detectedTitle && detectedTitle.nama)
+        || kamenimeTitleFromFileName(kmName)
+        || null;
       const promptText = titleShown
         ? `📥 <b>Kamenime Download</b>\n\nFile: <code>${kmName}</code>\n➧ Judul :- <b>${titleShown}</b>\n\nPilih judul untuk caption:`
         : `📥 <b>Kamenime Download</b>\n\nFile: <code>${kmName}</code>\n\nPilih judul untuk caption:`;
@@ -3514,9 +3528,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       // Alur SAMA dengan filedon/gofile: pilih judul dulu (ada "✏️ Ganti Judul"),
       // baru pilih target. Kalau langsung ke target, judul tidak bisa diganti.
       const { detectedTitle, fileName } = await resolveProviderTitle(episodeUrl);
-      const dTitle = detectedTitle ? detectedTitle.nama : null;
+      // Sama seperti entry URL: judul asli dari nama file dipakai saat library
+      // belum punya judul ini, supaya prompt tidak cuma menampilkan nama file.
+      const dTitle = (detectedTitle && detectedTitle.nama)
+        || kamenimeTitleFromFileName(fileName)
+        || null;
       return bot.editMessageText(
-        `📥 <b>Kamenime</b>\n\nFile: <code>${escHtml(fileName || 'video.mp4')}</code>\n\nPilih judul untuk caption:`,
+        dTitle
+          ? `📥 <b>Kamenime</b>\n\nFile: <code>${escHtml(fileName || 'video.mp4')}</code>\n➧ Judul :- <b>${escHtml(dTitle)}</b>\n\nPilih judul untuk caption:`
+          : `📥 <b>Kamenime</b>\n\nFile: <code>${escHtml(fileName || 'video.mp4')}</code>\n\nPilih judul untuk caption:`,
         {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           reply_markup: titlePromptKeyboard(fileName || 'video.mp4', episodeUrl, dTitle),
@@ -4348,11 +4368,16 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
     // Teruskan judul terdeteksi dari prompt agar tidak hilang
     const { detectedTitle, fileName } = await resolveProviderTitle(url);
+    // Judul kustom user ("Ganti Judul") harus tampil di preview ini. Pakai
+    // peekCustomTitle (bukan takeCustomTitle) supaya nilainya masih ada buat
+    // callback dl_go: nanti — preview dan dl_go: butuh judul yang sama.
+    const customTitle = peekCustomTitle(url);
+    const kmTitle = isKamenimeUrl(url) ? kamenimeTitleFromFileName(fileName) : null;
 
     // Tampilkan pilihan target — konsisten dengan alur Samehadaku
     const urlId = cacheUrl(url);
     const provider = isGofileUrl(url) ? 'gofile' : isPixeldrainUrl(url) ? 'pixeldrain' : isFiledonUrl(url) ? 'filedon' : isKamenimeUrl(url) ? 'hokireceh' : isMegaUrl(url) ? 'mega' : isGdriveUrl(url) ? 'gdrive' : 'unknown';
-    const titleShown = detectedTitle || fileName || 'file';
+    const titleShown = customTitle || (detectedTitle && detectedTitle.nama) || kmTitle || fileName || 'file';
     const preview = `📥 <b>Download</b>\n\n` +
       `➧ Judul :- <b>${escHtml(titleShown)}</b>\n` +
       `➧ Provider :- ${provider}\n\nPilih target:`;
@@ -4378,7 +4403,11 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     // Judul kustom dari "Ganti Judul" lebih diprioritaskan daripada judul
     // terdeteksi dari DB — itu alasan user mengetik ulang judulnya.
     const customTitle = takeCustomTitle(url);
-    const titleForCap = customTitle || detectedTitle || undefined;
+    // Judul asli dari nama file (kamenime) ikut jadi fallback, sama seperti di
+    // preview. Tanpa ini, episode yang judulnya belum ada di library akan
+    // memakai `undefined` → caption jatuh ke nama file mentah.
+    const kmTitleFallback = isKamenimeUrl(url) ? kamenimeTitleFromFileName(fileName) : null;
+    const titleForCap = customTitle || (detectedTitle && detectedTitle.nama) || kmTitleFallback || undefined;
     await bot.editMessageText('📥 Memproses...', { chat_id: chatId, message_id: msgId }).catch(() => {});
 
     if (target === 'tg') {

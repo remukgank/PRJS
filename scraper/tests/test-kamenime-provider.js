@@ -452,7 +452,9 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     }
     // dl_go harus membaca judul kustom
     assert.ok(/takeCustomTitle\(/.test(src), 'dl_go harus membaca customTitleMap');
-    assert.ok(/titleForCap = customTitle \|\| detectedTitle/.test(src),
+    // Prioritas: kustom > terdeteksi > judul asli dari nama file. Regex sengaja
+    // longgar pada bentuk — yang diuji adalah URUTAN prioritas, bukan format.
+    assert.ok(/titleForCap = customTitle \|\| \(?[^;]*detectedTitle/.test(src),
       'judul kustom harus diprioritaskan atas judul terdeteksi');
     assert.ok(/isKamenimeUrl\(url\)\) return handleKamenimeUrl\(chatId, url, titleForCap\)/.test(src),
       'dl_go tg harus meneruskan titleForCap ke handleKamenimeUrl');
