@@ -62,6 +62,9 @@ const SAM_CACHE_MS = Number(process.env.SAM_CACHE_MS) || 10 * 60 * 1000;
 // Cache daftar episode kuronime utk navigasi picker (jangan fetch ulang tiap tap).
 const kuronimeEpisodesCache = new Map(); // animeUrl → { eps, ts }
 const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadaluarsa)
+// Cache yang sama untuk kamenime. Tanpa ini, tiap tap Prev/Next fetch ulang
+// respons Livewire ~271 KB (grid 500 episode) — lambat & boros.
+const kamenimeEpisodesCache = new Map(); // animeUrl → { eps, title, ts }
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
 const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
@@ -1991,6 +1994,12 @@ async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0, titleOverride
     page,
     pageSize: SAM_PAGE_EP,
     done,
+    // PENTING: prefix WAJIB 'kam'. Default buildPicker adalah 'sam', dan itu
+    // membuat tombol "Download Semua" + navigasi picker kamenime mengirim
+    // sam_all:/sam_page: → dijalankan sebagai perintah SAMEHADAKU dengan URL
+    // kamenime (gejala: "no FULLHD/4K servers found" untuk 500 episode).
+    // Gejala diam-diam karena tombol per-episode (kam_ep:) memang benar.
+    prefix: 'kam',
     mkEp: (e) => {
       const epId = hashUrl(e.url).slice(0, 8);
       kamenimeEpisodeMap.set(epId, e.url);
@@ -3230,6 +3239,8 @@ bot.on('message', safeHandler('message')(async (msg) => {
     try {
       const { episodes, title: animeTitle } = await listKamenimeEpisodes(text.trim());
       if (!episodes.length) throw new Error('tidak ada episode di listing');
+      // Simpan buat navigasi kam_page: — respons Livewire ~271 KB, jangan fetch ulang
+      kamenimeEpisodesCache.set(text.trim(), { eps: episodes, title: animeTitle, ts: Date.now() });
       const { keyboard, caption } = await buildKamenimeEpisodePicker(episodes, text.trim(), 0, animeTitle);
       if (statusMsg) {
         return bot.editMessageText(caption, {
@@ -3544,6 +3555,40 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       ).catch(() => {});
     }
 
+    // Navigasi halaman picker kamenime. Tombol Prev/Next di buildPicker memakai
+    // prefix picker (sekarang 'kam'), jadi tanpa handler ini callback-nya jatuh
+    // ke cabang samehadaku. Pola ditiru dari kur_page:.
+    if (data.startsWith('kam_page:')) {
+      if (!isAdmin(query.from.id)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+      }
+      const parts = data.split(':');
+      const page = Number(parts[1]) || 0;
+      const rawUrl = parts.slice(2).join(':');
+      const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
+      if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+      let eps = null;
+      let title = null;
+      const cached = kamenimeEpisodesCache.get(animeUrl);
+      if (cached && Date.now() - cached.ts < SAM_CACHE_MS) { eps = cached.eps; title = cached.title; }
+      if (!eps) {
+        await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+        try {
+          const r = await listKamenimeEpisodes(animeUrl);
+          eps = r.episodes || r;
+          title = r.title || null;
+          if (!eps?.length) return bot.editMessageText('⚠️ Gagal load episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          kamenimeEpisodesCache.set(animeUrl, { eps, title, ts: Date.now() });
+        } catch (err) {
+          return bot.editMessageText(`⚠️ Gagal: ${err.message.slice(0, 80)}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+        }
+      }
+      const { keyboard, caption } = await buildKamenimeEpisodePicker(eps, animeUrl, page, title);
+      return bot.editMessageText(caption, {
+        chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
+      }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
+    }
+
   if (data.startsWith('sam_ep:')) {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
@@ -3597,6 +3642,16 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const batchTarget = pickParsed.target;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+    // Guard: sam_all/sam_allgo hanya untuk URL Samehadaku. Kalau URL dari provider
+    // lain (kamenime/kuronime/dll) sampai ke sini, jangan parse sebagai
+    // Samehadaku — hasilnya "no FULLHD/4K servers found" yang menyesatkan.
+    if (data.startsWith('sam_all:') && !/samehadaku\.(how|site)/i.test(animeUrl)) {
+      logger.warn({ animeUrl: animeUrl.slice(0, 90) }, 'sam_all: URL bukan Samehadaku, ditolak');
+      return bot.editMessageText(
+        `⚠️ <b>Download Semua</b> hanya untuk Samehadaku.\n\nURL ini: <code>${escHtml(animeUrl.slice(0, 60))}</code>\n\nPilih episode satu per satu dari daftar.`,
+        { chat_id: chatId, message_id: msgId, parse_mode: 'HTML' },
+      ).catch(() => {});
+    }
     let animeTitle = 'Samehadaku';
     try {
       const info = parseSamehadakuAnime(animeUrl);

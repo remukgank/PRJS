@@ -36,6 +36,16 @@ function done(name, err) {
 function block(startLine, endLine) {
   return LINES.slice(startLine - 1, endLine).join('\n');
 }
+/** Cari blok yang mengandung pola, mulai dari baris tertentu. */
+function blockFrom(fromLine, len = 26) {
+  return LINES.slice(fromLine - 1, fromLine - 1 + len).join('\n');
+}
+/** Nomor baris yang berisi pola (pertama setelah from). */
+function lineOf(re, from = 0) {
+  for (let i = from; i < LINES.length; i++) if (re.test(LINES[i])) return i + 1;
+  return -1;
+}
+
 /** Cari nomor baris yangmatch regex, mulai dari offset tertentu. */
 function findLine(re, from = 0) {
   for (let i = from; i < LINES.length; i++) if (re.test(LINES[i])) return i + 1;
@@ -55,8 +65,10 @@ function resolveTitle({ customTitle, detected, fileName, isKamenime }) {
 
 // ══════════════════════════════════════════════════════════════════════════
 t('a) entry URL kamenime, judul TIDAK ada di library → judul dari nama file', () => {
-  // bot.js ~3249-3260
-  const src = block(3249, 3268);
+  // Cari blok entry URL kamenime (bukan nomor baris hardcode — fragile)
+  const L = lineOf(/const km = await resolveKamenimeFile/);
+  assert.ok(L > 0, 'blok entry URL kamenime tidak ditemukan');
+  const src = blockFrom(L, 24);
   assert.ok(/kamenimeTitleFromFileName\(kmName\)/.test(src),
     'entry URL harus memakai kamenimeTitleFromFileName(kmName)');
   const out = resolveTitle({ customTitle: null, detected: null, fileName: 'Naruto Shippuden-episode-2.mp4', isKamenime: true });
@@ -66,8 +78,10 @@ t('a) entry URL kamenime, judul TIDAK ada di library → judul dari nama file', 
 });
 
 t('b) entry URL kamenime, judul ADA di library → judul library yang tampil', () => {
-  const src = block(3249, 3268);
-  // detectedTitle harusDicek SEBELUM judul dari nama file
+  const L = lineOf(/const km = await resolveKamenimeFile/);
+  assert.ok(L > 0, 'blok entry URL kamenime tidak ditemukan');
+  const src = blockFrom(L, 24);
+  // detectedTitle harus Dicek SEBELUM judul dari nama file
   const iDet = src.indexOf('detectedTitle && detectedTitle.nama');
   const iKm = src.indexOf('kamenimeTitleFromFileName(kmName)');
   assert.ok(iDet > -1 && iKm > -1, 'dua sumber judul harus ada');
