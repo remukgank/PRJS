@@ -9,7 +9,8 @@
 // tapi dikirim lewat jalur Vidoy tetap terlihat "belum ada" di menu.
 //   lib = ada di library · tg = ada di Telegram (pointer pesan tersimpan)
 // vidoyTitle = kunci vidoy_uploads (judul), slug = kunci library (media_parts).
-const { listPartsWithFile, listVidoyUploads } = require('../db');
+const { listPartsWithFile, listVidoyUploads, findMediaByPattern } = require('../db');
+const { kamenimeSourcePattern } = require('../providers/kamenime');
 const { withSeasonSuffix } = require('./caption');
 
 /**
@@ -88,4 +89,58 @@ function vidoyKeysFromEpisodes(eps, parseEpisode) {
   return keys;
 }
 
-module.exports = { episodeStatusMap, vidoyKeysFromEpisodes };
+/**
+ * Cari slug baris `media` untuk satu anime, memakai source_pattern (dari URL)
+ * sebagai kunci utama dan slug tebakan sebagai cadangan.
+ *
+ * Kenapa perlu: slug library Historical diturunkan dari judul yang diketik/ditemukan
+ * saat episode pertama disimpan. Ejaan judul bisa berubah (kamenime kirim
+ * "Re-Zero" dari nama file, situsnya "Re:Zero"), jadi slug-nya bisa
+ * "anime:re-zero-.." atau "anime:rezero-..". Picker yang memakai slug tebakan
+ * akan MISS dan menampilkan semua episode sebagai belum ada.
+ * source_pattern tidak terpengaruh ejaan.
+ *
+ * @param {string} animeUrl  URL halaman anime (https://kamenime.com/anime/<slug>)
+ * @param {string} fallback  slug tebakan, dipakai kalau DB tidak punya polanya
+ * @returns {Promise<string>} slug yang benar-benar ada di DB, atau `fallback`
+ */
+async function resolveLibrarySlugByPattern(animeUrl, fallback) {
+  const fb = String(fallback || '');
+  try {
+    const pat = kamenimeSourcePattern(animeUrl);
+    if (!pat) return fb;
+    const row = await findMediaByPattern(pat);
+    if (row && row.slug) return row.slug;
+  } catch { /* DB tidak bisa dibaca -> pakai tebakan, picker tetap tampil */ }
+  return fb;
+}
+
+/**
+ * Parser episode kamenime, bentuk sama dengan parseSamehadakuEpisode supaya
+ * bisa dipakai vidoyKeysFromEpisodes. Menghasilkan KUNCI media_key yang sama
+ * dengan yang dipakai batch (judul dari <title> situs), bukan judul dari nama
+ * file.
+ *
+ * Bentuk URL: https://www.kamenime.com/anime/<slug>/episode/<n>
+ */
+function parseKamenimeEpisode(episodeUrl) {
+  const u = String(episodeUrl || '');
+  const m = u.match(/\/anime\/([^/]+)\/episode\/(\d+)/i);
+  if (!m) return null;
+  return {
+    slug: m[1],
+    episode: Number(m[2]),
+    season: null,
+    part: null,
+    movie: false,
+    provider: 'hokireceh',
+    // Judul belum diketahui dari URL saja; pemanggil boleh mengisinya.
+    title: null,
+  };
+}
+
+module.exports = { episodeStatusMap, vidoyKeysFromEpisodes,
+  resolveLibrarySlugByPattern,
+  parseKamenimeEpisode,
+};
+;

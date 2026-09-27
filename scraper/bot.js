@@ -15,7 +15,10 @@ const { cleanupStaleSessions } = require('./providers/dramafren');
 const { isGofileUrl, isGofileDirectUrl, filenameFromGofileUrl, resolveGofileFiles } = require('./providers/gofile');
 const { isPixeldrainUrl, extractPixeldrainId, getPixeldrainInfo } = require('./providers/pixeldrain');
 const { isSamehadakuUrl, resolveSamehadakuFullhd, parseSamehadakuEpisode, parseSamehadakuAnime } = require('./providers/samehadaku');
-const { episodeStatusMap, vidoyKeysFromEpisodes } = require('./lib/episode-status');
+const {
+  episodeStatusMap, vidoyKeysFromEpisodes,
+  resolveLibrarySlugByPattern, parseKamenimeEpisode,
+} = require('./lib/episode-status');
 const { isKuronimeUrl, parseKuronimeEpisode, parseKuronimeAnime, listKuronimeEpisodes, resolveKuronimeMirrors, resolveKuronimeBest, pickKuronimeBest, KURONIME_SERVER_PRIORITY } = require('./providers/kuronime');
 const { isFiledonUrl, resolveFiledonFile } = require('./providers/filedon');
 const { isKamenimeUrl, resolveKamenimeFile, isKamenimeAnimePage, listKamenimeEpisodes, parseKamenimeAnime, kamenimeSourcePattern, kamenimeTitleFromFileName } = require('./providers/kamenime');
@@ -1984,7 +1987,16 @@ async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0, titleOverride
   const done = new Set();
   let statusMap = new Map();
   try {
-    statusMap = await episodeStatusMap(`anime:${sanitizeSlug(title)}`, title);
+    // Kunci library TIDAK diturunkan dari judul: sanitizeSlug("Re:Zero ...")
+    // menghasilkan "re-zero-..", tapi slug yang tersimpan bisa "re-zero-.."
+    // atau "rezero-.." tergantung ejaan judul saat pertama disimpan. Episode 1-25
+    // satu anime bisa terpecah jadi 2 kunci hanya karena beda titik dua vs
+    // hyphen (terbukti 27 Sep 2026: 23 part terlihat, 2 sisanya tidak).
+    // source_pattern berasal dari URL dan tidak terpengaruh ejaan.
+    const libSlug = await resolveLibrarySlugByPattern(animeUrl, `anime:${sanitizeSlug(title)}`);
+    statusMap = await episodeStatusMap(
+      libSlug, title, vidoyKeysFromEpisodes(eps, parseKamenimeEpisode));
+    for (const [ep, st] of statusMap) if (st.tg) done.add(ep);
   } catch (err) {
     logger.warn({ err: err.message }, 'kamenime picker done-state gagal, tampil tanpa centang');
   }

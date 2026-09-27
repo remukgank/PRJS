@@ -534,7 +534,20 @@ async function upsertMedia(slug, nama, totalEps, sourceUrl, sourcePattern = null
     await pool.query(
       `INSERT INTO media (slug, nama, total_eps, source_url, created_by, source_pattern, poster_url, poster_file_id, synopsis) VALUES ($1, $2, $3, $4, 'bot', $5, $6, $7, $8)
        ON CONFLICT (slug) DO UPDATE SET
-         nama = $2,
+         -- nama TIDAK ditimpa tanpa syarat. Single episode sering memberi judul
+         -- dari NAMA FILE (kamenimeTitleFromFileName), yang ejaannya bisa berbeda
+         -- dari judul situs: "Re-Zero ..." (hyphen) vs "Re:Zero ..." (titik dua).
+         -- Kalau ditimpa, media.nama ikut berubah → picker mencari media_key yang
+         -- salah → semua episode terlihat "perlu dikirim" padahal sudah ada
+         -- (terbukti 27 Sep 2026, Re:Zero: 23 part jadi tidak terlihat).
+         -- Yang ditulis ulang hanya kalau judul BARU lebih panjang/pelengkap,
+         -- mis. nama di DB masih kosong atau baru dapat suffix season.
+         nama = CASE
+           WHEN media.nama IS NULL OR btrim(media.nama) = '' THEN EXCLUDED.nama
+           WHEN EXCLUDED.nama IS NULL OR btrim(EXCLUDED.nama) = '' THEN media.nama
+           WHEN length(EXCLUDED.nama) > length(media.nama) THEN EXCLUDED.nama
+           ELSE media.nama
+         END,
          total_eps = GREATEST(COALESCE(media.total_eps, 0), COALESCE($3, 0)),
          source_url = COALESCE(media.source_url, $4),
          source_pattern = COALESCE($5, media.source_pattern),
