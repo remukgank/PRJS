@@ -1,5 +1,6 @@
 const pino = require('pino');
-const pretty = require('pino-pretty');
+// pino-pretty tidak dipakai lagi: output terminal sekarang satu baris ringkas
+// (lihat terminalFormat) — pretty + ringkas = dobel output yang bikin ribet.
 const path = require('path');
 const fs = require('fs');
 
@@ -31,22 +32,42 @@ const baseOpts = {
   },
 };
 
-const consoleStream = pretty({
-  colorize: true,
-  translateTime: 'HH:MM:ss',
-  ignore: 'pid,hostname',
-  destination: 1,
-});
+// Terminal-friendly: SATU BARIS per event, field penting saja, tanpa JSON.
+// Dipakai kalau bot jalan di pm2 — output pm2 menumpuk di
+// ~/.pm2/logs/prjs-bot-out.log, jauh dari terminal, sehingga trace jadi ribet.
+// Format: HH:MM:SS LEVEL  pesan  ·  key=value
+// Matikan dengan LOG_TERMINAL=off.
+const TERMINAL_ON = (process.env.LOG_TERMINAL || 'on').toLowerCase() !== 'off';
+const terminalKeys = ['mb', 'totalMb', 'kbps', 'etaSec', 'ep', 'target', 'title', 'file',
+  'chatId', 'server', 'quality', 'container', 'sizeMb', 'source', 'attempt', 'err'];
+function terminalFormat(obj) {
+  const o = obj || {};
+  const time = o.time ? new Date(o.time).toTimeString().slice(0, 8)
+    : new Date().toTimeString().slice(0, 8);
+  const lvl = String(o.level || 'info').toUpperCase().padEnd(5);
+  const msg = o.msg ? String(o.msg) : (o.err ? String(o.err) : '');
+  const rest = [];
+  for (const k of terminalKeys) {
+    if (o[k] !== undefined && o[k] !== null && k !== 'err') rest.push(`${k}=${o[k]}`);
+  }
+  const err = o.err && o.err !== o.msg ? `  ! ${o.err}` : '';
+  const tail = rest.length ? '  ·  ' + rest.join(' ') : '';
+  return `${time} ${lvl} ${msg}${err}${tail}\n`;
+}
 
 const appLogFile = pino.transport({
   target: 'pino/file',
   options: { destination: path.join(LOG_DIR, 'app.log') },
 });
 
-const appLogger = pino(baseOpts, pino.multistream([
-  { stream: appLogFile },
-  { stream: consoleStream },
-]));
+const streams = [{ stream: appLogFile }];
+if (TERMINAL_ON) {
+  streams.push({
+    stream: { write: (line) => { try { process.stdout.write(terminalFormat(JSON.parse(line))); } catch {} } },
+  });
+}
+
+const appLogger = pino(baseOpts, pino.multistream(streams));
 
 const ffmpegLogger = pino(
   { ...baseOpts, level: 'info' },
