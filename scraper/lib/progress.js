@@ -108,8 +108,13 @@ class Progress {
         message_id: this.msgId,
         parse_mode: 'HTML',
       });
-    } catch {}
-    this.editing = false;
+    } catch {
+    } finally {
+      // WAJIB finally: tanpa ini, kalau render() melempar di luar catch, flag
+      // editing menggantung true PERMANEN → tick() berikutnya selalu return di
+      // baris awal → progres beku diam-diam sampai bot di-restart.
+      this.editing = false;
+    }
   }
 
   update(text) {
@@ -352,8 +357,13 @@ async start() {
           parse_mode: 'HTML',
         });
       } catch {}
+    } finally {
+      // WAJIB finally: tanpa ini, kalau renderRichMessage() atau _postJsonRetry
+      // melempar error DI LUAR catch di atas, this.editing menggantung `true`
+      // permanen → tick() berikutnya selalu return di baris awal → progres
+      // beku diam-diam sampai bot di-restart. (ditemukan 27 Sep 2026)
+      this.editing = false;
     }
-    this.editing = false;
   }
 
   updateEpisode(ep, status, detail = '', size = 0) {

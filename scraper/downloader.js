@@ -347,9 +347,18 @@ const ARIA2C_WATCHDOG_MS = 15000;               // interval cek progres
 const ARIA2C_STALL_MIN_RUN_MS = 30000;          // abaikan stall sebelum 30s jalan
 const ARIA2C_STALL_FREEZE_MS = 90000;           // nol pertumbuhan downloaded => stuck
 const ARIA2C_SPEED_MIN_RUN_MS = 90000;          // evaluasi speed floor setelah 90s
-const ARIA2C_SPEED_MIN_BYTES = 5 * 1024 * 1024; // minimal downloaded sebelum eval
+// Sengaja 0 (dulu 5 MiB). Gate byte membuat guard mustahil menyala saat
+// unduhan paling lambat justru saat paling dibutuhkan — lihat catatan panjang
+// di lib/download-thresholds.js. Harus tetap sama dengan SPEED_MIN_BYTES di
+// sana; test-downloadto-speed-floor.js mengunci anti-drift kedua angka ini.
+const ARIA2C_SPEED_MIN_BYTES = 0;                // tidak ada gate byte
 const ARIA2C_SPEED_WINDOW_MS = 90000;           // jendela trailing rata-rata
 const ARIA2C_SPEED_FLOOR_BPS = 70 * 1024;       // 70 KiB/s
+// Batas absolut per unduhan. Speed floor menilai "lambat"; ini menilai
+// "hampir tidak jalan" — kelas yang lolos dari stall (byte masih merangkak)
+// maupun dari speed floor (rata-rata masih di atas ambang). Tanpa ini satu
+// episode bisa menahan seluruh batch. 20 menit = MAX_TIMEOUT aria2c.
+const ARIA2C_MAX_RUN_MS = 20 * 60 * 1000;
 
 function aria2SizeToBytes(numStr, unitStr) {
   const units = { '': 1, K: 1024, M: 1024 * 1024, G: 1024 ** 3, T: 1024 ** 4 };
@@ -421,13 +430,20 @@ function downloadWithAria2c(url, outPath, onLog, extraHeaders = {}, fileSizeOrOp
       while (downSamples.length > 1 && now - downSamples[0].at > ARIA2C_SPEED_WINDOW_MS) downSamples.shift();
       const runMs = now - startAt;
 
-      // 1) Stall: nol pertumbuhan downloaded (selalu aktif, termasuk paid).
+      // 1) Batas absolut: satu unduhan tidak boleh menahan batch selamanya.
+      if (runMs > ARIA2C_MAX_RUN_MS) {
+        killReason = `melebihi batas waktu ${Math.round(ARIA2C_MAX_RUN_MS / 60000)} menit `
+          + `(${Math.round(downloaded / 1048576)} MB terkumpul) — ganti server`;
+        proc.kill('SIGTERM');
+        return;
+      }
+      // 2) Stall: nol pertumbuhan downloaded (selalu aktif, termasuk paid).
       if (runMs > ARIA2C_STALL_MIN_RUN_MS && now - lastDownAt > ARIA2C_STALL_FREEZE_MS) {
         killReason = `server stuck — nol progres ${Math.round(ARIA2C_STALL_FREEZE_MS / 1000)} detik (host mati/gantung)`;
         proc.kill('SIGTERM');
         return;
       }
-      // 2) Speed floor: rata-rata trailing < 70 KiB/s (dimatikan utk paid).
+      // 3) Speed floor: rata-rata trailing < 70 KiB/s (dimatikan utk paid).
       if (!disableSpeedFloor && runMs > ARIA2C_SPEED_MIN_RUN_MS && downloaded >= ARIA2C_SPEED_MIN_BYTES) {
         const oldest = downSamples[0];
         const windowMs = now - oldest.at;

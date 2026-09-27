@@ -23,7 +23,7 @@ const PROGRESS_MS = DEFAULT_THRESHOLDS.PROGRESS_MS; // interval log progres
 
 // Galat "server tidak mendukung resume" → retry sia-sia. Ditandai agar
 // ensureMp4 tidak mengulang; retry hanya membuang bandwidth (insiden 26 Sep
-// 2026: gdriveplayer mengabaikan Range, 3x restart丢掉 ~65 MB).
+// 2026: gdriveplayer mengabaikan Range, 3x restart membuang ~65 MB).
 class NoResumeError extends Error {
   constructor(msg) { super(msg); this.name = 'NoResumeError'; this.noRetry = true; }
 }
@@ -106,6 +106,16 @@ async function downloadTo(url, destPath, opts = {}) {
 
     const watchdog = setInterval(() => {
       const now = Date.now();
+      // Batas absolut: menutup kelas "hampir tidak jalan" — stall tidak menyala
+      // (byte merangkak) dan speed floor tidak menyala (rata-rata masih di atas
+      // ambang), tapi unduhan tetap tidak akan selesai. Tanpa ini satu episode
+      // menahan seluruh batch. Bukti: Re:Zero Ep 7 = 11 menit untuk 3,3 MB.
+      if (now - startedAt >= th.MAX_RUN_MS) {
+        return fail(new Error(
+          `melebihi batas waktu ${Math.round(th.MAX_RUN_MS / 60000)} menit `
+          + `(${(got / 1048576).toFixed(1)} MB terkumpul) — ganti server`,
+        ));
+      }
       if (now - lastAt >= th.STALL_MS) {
         return fail(new Error(`download macet — 0 byte selama ${Math.round((now - lastAt) / 1000)} dtk`));
       }
@@ -171,7 +181,7 @@ async function downloadTo(url, destPath, opts = {}) {
       // dari nol (kalau tetap menempel, hasilnya file campur → corrupt).
       // Resume di sini SIA-SIA: server Range-ignoring (chunked, tanpa
       // Content-Length) selalu mengulang dari nol, jadi retry hanya membuang
-      // bandwidth. Insiden 26 Sep 2026: 3x restart丢掉 ~65 MB. Fail cepat
+      // bandwidth. Insiden 26 Sep 2026: 3x restart membuang ~65 MB. Fail cepat
       // dengan pesan jelas supaya ensureMp4 tidak mengulang.
       const append = have > 0 && res.statusCode === 206;
       if (have > 0 && !append) {

@@ -31,10 +31,34 @@ module.exports = {
   SPEED_WINDOW_MS: 90000,
   /** Evaluasi speed floor baru setelah unduhan berjalan 90 dtk. */
   SPEED_MIN_RUN_MS: 90000,
-  /** Minimal bytes terkumpul sebelum speed floor bolehmenvonis: 5 MiB. */
-  SPEED_MIN_BYTES: 5 * 1024 * 1024,
+  /**
+   * Minimal bytes terkumpul sebelum speed floor boleh menilai. Sengaja 0.
+   *
+   * Dulu 5 MiB, dan itu membuat guard mustahil menyala justru saat paling
+   * dibutuhkan: unduhan nge-drip 1-14 KiB/s hanya mencapai 3,3 MB dalam 11
+   * menit, jadi `got - have >= 5 MiB` tidak pernah terpenuhi dan speed floor
+   * tidak pernah dievaluasi (terbukti nyata di Re:Zero Ep 7, 27 Sep 2026).
+   * Yang menyelamatkan hanya STALL_MS 20 detik -- dan itu hanya menyala kalau
+   * byte benar-benar 0. Server yang nge-drip terus tanpa pernah 0 byte =
+   * menggantung selamanya, dan 18 episode berikutnya ikut tertunda karena loop
+   * berurutan.
+   *
+   * Peninggalnya adalah SPEED_MIN_RUN_MS (90 detik). Cukup untuk menghindari
+   * vonis false-positive di detik-detik awal. Bytes bukan ukuran kecepatan.
+   */
+  SPEED_MIN_BYTES: 0,
   /** 0 byte selama ini → anggap mati (TIDAK sama dengan aria2c, lihat catatan). */
   STALL_MS: 20000,
+  /**
+   * Batas absolut per unduhan, milidetik. Menutup kelas "hampir tidak jalan":
+   * stall tidak menyala (byte masih merangkak) dan speed floor juga tidak
+   * (rata-rata masih di atas ambang) — tapi episode tetap tidak akan selesai.
+   * Terbukti di Re:Zero Ep 7 (11 menit untuk 3,3 MB) dan Ep 16.
+   * 25 menit: episode sehat selesai dalam 10-20 detik, jadi ini hanya menyala
+   * untuk unduhan yang memang rusak. Batas atas agar tidak membuat satu
+   * unduhan besar yang sah ikut terpotong.
+   */
+  MAX_RUN_MS: 25 * 60 * 1000,
   /** Interval log progres. */
   PROGRESS_MS: 10000,
   /** Interval cek watchdog. */
