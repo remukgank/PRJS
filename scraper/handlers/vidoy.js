@@ -6,6 +6,9 @@ const { getVideoUrl } = require('../index');
 const { getVideoUrlReelFren } = require('../providers/reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const db = require('../db');
+const { getSetting, getPartFileId, savePartFileId, upsertMedia } = require('../db');
+const { sanitizeSlug } = require('../lib/parser');
+const { kamenimeSourcePattern } = require('../providers/kamenime');
 const { ensureMp4 } = require('../services/vidaraService');
 const vidoyService = require('../services/vidoyService');
 const { TMP_DIR, getVideoInfo } = require('../downloader');
@@ -310,6 +313,44 @@ async function actionAnimeEpisode(chatId, opts) {
           dashboard: out.vidoy.dashboard, tgChatId: chatId, tgMessageId: msgId,
           provider: animeProvider, caption,
         }).catch(() => {});
+      }
+      // ── Simpan library (kamenime saja) ────────────────────────────────────
+      // handleKamenimeUrl (jalur tg) sudah menyimpan di download.js:817-824,
+      // tapi actionAnimeEpisode TIDAK — sehingga episode yang hanya dikirim ke
+      // Vidoy tidak pernah mengisi media/media_parts, dan akibatnya:
+      //   - !dell tidak menemukan (cari di media.nama)
+      //   - status picker tidak pernah hijau (baca media_parts)
+      // Dicatat setelah setVidoyTelegramPointer karena butuh msgId/file_id.
+      // Syarat provider WAJIB: actionAnimeEpisode dipakai 5 pemanggil
+      // (samehadaku batch/single, kuronime single/batch, dl_go generik) dan
+      // tanpa syarat ini Samehadaku+Kuronime ikut mengisi library — perubahan
+      // perilaku besar yang di luar scope. Kamenime identifiable lewat
+      // sameInfo.provider === 'hokireceh' (bot.js:4521).
+      if (animeProvider === 'hokireceh' && title && sent && sent.video
+          && sent.video.file_id && episodeUrl) {
+        try {
+          const libOn = (await getSetting('libsimpan')) === 'on';
+          if (libOn) {
+            const libSlug = `anime:${sanitizeSlug(title)}`;
+            // source_pattern WAJIB dari URL (/anime/<slug>), bukan nama file —
+            // kalau dari nama file, tiap episode punya pola berbeda
+            // ("...-episode-1", "...-episode-2") sehingga judul tidak pernah
+            // connect antar episode. Sama dengan download.js:763.
+            const libPat = kamenimeSourcePattern(episodeUrl) || sanitizeSlug(title) || 'kamenime';
+            const num = Number(ep) || 0;
+            const existing = await getPartFileId(libSlug, num);
+            if (!existing) {
+              // fs sudah dipakai di file ini (statSync di log download selesai).
+              let libBytes = 0;
+              try { libBytes = fs.statSync(destPath).size; } catch {}
+              await upsertMedia(libSlug, String(title), 0, episodeUrl, libPat);
+              await savePartFileId(libSlug, num, sent.video.file_id, libBytes, path.basename(destPath) || '');
+            }
+          }
+        } catch (libErr) {
+          // Jangan gagalkan upload karena catat library gagal.
+          logger.warn({ chatId, err: libErr.message }, 'kamenime: simpan library gagal');
+        }
       }
     }
     const parts = [];

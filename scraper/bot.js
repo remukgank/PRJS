@@ -3589,19 +3589,150 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       }).catch(() => bot.sendMessage(chatId, caption, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
     }
 
-    // Download Semua untuk kamenime: BELUM diimplementasikan (juga untuk kuronime).
-    // Tombolnya tetap dibuat oleh buildPicker, jadi tanpa handler di sini user
-    // akan menekan tombol mati tanpa balasan apa pun — persis "kegagalan diam-diam"
-    // yang dilarang AGENTS.md §4. Tolak dengan jelas supaya tidak disalahartikan
-    // sebagai "sedang berjalan".
-    if (data.startsWith('kam_all:')) {
-      logger.info({ data: data.slice(0, 30) }, 'kam_all: ditolak — fitur download-all kamenime belum ada');
-      return bot.answerCallbackQuery(query.id, {
-        text: '⬇️ Download Semua untuk Kamenime belum tersedia. Pilih episode satu per satu.',
-        show_alert: true,
-      }).catch(() => {}).then(() => bot.sendMessage(chatId,
-        '⬇️ <b>Download Semua</b> untuk Kamenime belum tersedia.\n\nPilih episode satu per satu dari daftar — tiap episode punya tombol sendiri di bawah.\n\nKalau kamu butuh ini untuk 500 episode, bilang saja: fiturnya butuh antrean + batas upload agar tidak kena limit Telegram.',
-        { parse_mode: 'HTML' })).catch(() => {});
+    // ─── Download Semua Kamenime (batch) ──────────────────────────────────
+    // Pola ditiru sam_all: (bot.js:3644-3847): pilih target dulu → kunci anime
+    // → filter episode yang sudah lengkap → SATU RichProgress untuk semua
+    // episode → loop per episode dengan pace.
+    //
+    // BEDA dari sam_all: (a) tidak ada pre-scan server — kamenime URL langsung;
+    // (b) silent:true per-panggilan, bukan lewat _samQuiet global, supaya
+    // 500 episode tidak jadi 500 pesan progres dan tidak bocor ke download manual.
+    if (data.startsWith('kam_all:') || data.startsWith('kam_allgo:') || data.startsWith('kam_fix:')) {
+      if (!isAdmin(query.from.id)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
+      }
+      const isKmFix = data.startsWith('kam_fix:');
+      const kmPick = isKmFix
+        ? { target: 'tg', urlId: data.slice('kam_fix:'.length) }
+        : parseBatchPick(data, 'kam');
+      const kmTarget = kmPick.target;
+      const kmRawUrl = kmPick.urlId;
+      const animeUrlKm = resolveUrl(kmRawUrl) || decodeURIComponent(kmRawUrl);
+      if (!animeUrlKm) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
+      if (!isKmFix && !/kamenime\.com/i.test(animeUrlKm)) {
+        logger.warn({ animeUrl: animeUrlKm.slice(0, 90) }, 'kam_all: URL bukan Kamenime, ditolak');
+        return bot.editMessageText(
+          `⚠️ <b>Download Semua</b> hanya untuk Kamenime.\n\nURL ini: <code>${escHtml(animeUrlKm.slice(0, 60))}</code>`,
+          { chat_id: chatId, message_id: msgId, parse_mode: 'HTML' },
+        ).catch(() => {});
+      }
+      // Judul dari cache listing (sudah diketahui sejak picker dibuka).
+      const kmCached = kamenimeEpisodesCache.get(animeUrlKm);
+      const kmTitle = (kmCached && kmCached.title) || 'Kamenime';
+      // Tanpa target → tanyakan target dulu.
+      if (!isKmFix && !kmTarget) {
+        const kmBid = cacheUrl(animeUrlKm);
+        return bot.editMessageText(
+          `📦 <b>Download Semua — ${escHtml(kmTitle)}</b>\n\nPilih target upload untuk semua episode:`,
+          {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [
+              ...animeTargetKeyboard(`kam_allgo:tg:${kmBid}`, `kam_allgo:vyt:${kmBid}`, `kam_allgo:vv:${kmBid}`),
+              [BTN.btn('⟳ Lengkapi yang hilang', `kam_fix:${kmBid}`, 'success')],
+              [{ text: '⬅️ Kembali ke list episode', callback_data: `kam_page:0:${kmBid}` }],
+            ] },
+          },
+        ).catch(() => {});
+      }
+      if (!['tg', 'vyt', 'vv'].includes(kmTarget)) {
+        return bot.answerCallbackQuery(query.id, { text: '⚠️ Target tidak dikenal' }).catch(() => {});
+      }
+      const kmBusyKey = `${chatId}:${kmTitle}`;
+      if (samAllBusy.has(kmBusyKey)) {
+        return bot.editMessageText('⏳ Batch utk anime ini sedang berjalan. Tunggu selesai.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+      }
+      samAllBusy.add(kmBusyKey);
+      try {
+        let kmEps = kmCached && Date.now() - kmCached.ts < SAM_CACHE_MS ? kmCached.eps : null;
+        if (!kmEps) {
+          await bot.editMessageText('📦 Menyiapkan batch download...', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          const r = await listKamenimeEpisodes(animeUrlKm);
+          kmEps = r.episodes || r;
+          if (!kmEps?.length) {
+            return bot.editMessageText('⚠️ Gagal load daftar episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          }
+          kamenimeEpisodesCache.set(animeUrlKm, { eps: kmEps, title: r.title || kmTitle, ts: Date.now() });
+        }
+        // Episode yang link+Telegram-nya sudah lengkap DILEWATI (AGENTS.md §6).
+        // kam_fix: kebalikannya — hanya yang Telegram-nya hilang.
+        const kmDone = await animeDoneMap(kmTitle);
+        let kmQueue = kmEps;
+        if (isKmFix) {
+          kmQueue = kmQueue.filter((e) => {
+            const st = kmDone.get(Number(e.ep));
+            return !!(st && st.link && !st.hasTg);
+          });
+          if (!kmQueue.length) {
+            return bot.editMessageText('✅ Tidak ada episode yang perlu dilengkapi.', { chat_id: chatId, message_id: msgId }).catch(() => {});
+          }
+        }
+        const kmRp = await new RichProgress(chatId, `${isKmFix ? '⟳ Lengkapi' : '📥 Batch'} ${kmTitle} — ${batchTargetLabel(kmTarget)}`,
+          kmQueue.map((e) => ({ ep: `Ep ${e.ep}` }))).start();
+        const kmLinks = [];
+        const kmFailed = [];
+        let kmOk = 0, kmSkipped = 0;
+        for (const e of kmQueue) {
+          const kmKey = `Ep ${e.ep}`;
+          if (!isKmFix) {
+            const st = kmDone.get(Number(e.ep));
+            if (st && st.link && st.hasTg) { kmRp.updateEpisode(kmKey, 'skip', '⏭️ sudah lengkap'); kmSkipped++; continue; }
+          }
+          try {
+            let kmRes;
+            if (kmTarget === 'tg') {
+              kmRp.updateEpisode(kmKey, 'download', 'kamenime');
+              // customTitle DIKIRIM DI SETIAP episode (bukan hanya ep 1): kalau
+              // ep 1 gagal di savePartFileId, 499 episode berikutnya akan jatuh
+              // ke nama file. Urutan resolusi di handleKamenimeUrl sudah
+              // mengutamakan library, jadi ini murni fallback.
+              kmRes = await _downloadHandlers.handleKamenimeUrl(chatId, e.url, kmTitle, Number(e.ep), { silent: true });
+            } else {
+              kmRp.updateEpisode(kmKey, 'download', 'ambil link');
+              const kmDirect = await _downloadHandlers.resolveDirectUrl(e.url);
+              if (!kmDirect) throw new Error('gagal resolve link file');
+              const kmRes2 = await _vidoyHandlers.actionAnimeEpisode(chatId, {
+                target: kmTarget, title: kmTitle, ep: e.ep,
+                sameInfo: { provider: 'hokireceh' },
+                directUrl: kmDirect.url, episodeUrl: e.url, silent: true,
+                resolveFreshDirectUrl: async () => (await _downloadHandlers.resolveDirectUrl(e.url))?.url || kmDirect.url,
+              });
+              if (kmRes2 && kmRes2.error) throw new Error(kmRes2.error);
+              kmRes = { ok: true, link: kmRes2 && kmRes2.vidoy && kmRes2.vidoy.link };
+            }
+            if (kmRes && kmRes.ok) {
+              if (kmRes.link) kmLinks.push(`Ep ${e.ep} → ${kmRes.link}`);
+              kmRp.updateEpisode(kmKey, 'done', kmRes.link ? String(kmRes.link).slice(0, 90) : (kmRes.sizeMb ? `${Number(kmRes.sizeMb).toFixed(1)} MB` : 'ok'));
+              kmOk++;
+            } else { kmRp.updateEpisode(kmKey, 'fail', String((kmRes && kmRes.error) || 'gagal').slice(0, 50)); kmFailed.push(e.ep); }
+          } catch (kmErr) {
+            logger.error({ chatId, ep: e.ep, err: kmErr.message }, 'kam_all item gagal');
+            kmRp.updateEpisode(kmKey, 'fail', kmErr.message.slice(0, 50));
+            kmFailed.push(e.ep);
+          }
+          // Pace: sama seperti sam_all (bot.js:3834). Mencegah flood ke TG.
+          await sleep(_downloadHandlers.SAM_BATCH_PACE_MS || 1000);
+        }
+        await kmRp.done();
+        const kmLinkBlock = kmLinks.length
+          ? `\n\n🔗 <b>Link Vidoy:</b>\n${kmLinks.map((l) => escHtml(l)).join('\n')}`
+          : '';
+        // silent mematikan leafAlert (download.js:77), jadi daftar episode gagal
+        // WAJIB ikut di rekap — kalau hanya jumlahnya, user tidak tahu mana.
+        const kmFailBlock = kmFailed.length
+          ? `\n\n❌ <b>Gagal (${kmFailed.length}):</b> ${kmFailed.map((n) => `Ep ${n}`).join(', ')}`
+          : '';
+        await bot.sendMessage(chatId, `✅ ${isKmFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(kmTitle)}</b> — ${batchTargetLabel(kmTarget)}\n\n`
+          + `📥 Sukses: <b>${kmOk}</b>${kmSkipped ? ` · ⏭️ Sudah ada: <b>${kmSkipped}</b>` : ''}`
+          + `${kmFailed.length ? ` · ❌ Gagal: <b>${kmFailed.length}</b>` : ''}`
+          + `${kmLinkBlock}${kmFailBlock}`, { parse_mode: 'HTML' }).catch(() => {});
+        logger.info({ chatId, title: kmTitle, target: kmTarget, ok: kmOk, fail: kmFailed.length, skip: kmSkipped }, 'kam_all batch selesai');
+      } catch (kmOuter) {
+        logger.error({ chatId, err: kmOuter.message }, 'kam_all gagal');
+        await bot.editMessageText(`⚠️ Batch gagal: ${escHtml(String(kmOuter.message).slice(0, 120))}`, { chat_id: chatId, message_id: msgId }).catch(() => {});
+      } finally {
+        samAllBusy.delete(kmBusyKey);
+      }
+      return;
     }
 
     if (data.startsWith('sam_ep:')) {

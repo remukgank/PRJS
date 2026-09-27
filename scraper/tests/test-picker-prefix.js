@@ -110,13 +110,17 @@ t('6b) TIDAK ADA callback tanpa handler (tombol mati = kesalahan diam-diam)', ()
   console.log(`      tombol dicek: ${[...datas].map((d) => d.split(':')[0]).filter((v,i,a)=>a.indexOf(v)===i).join(', ')}`);
 });
 
-t('6c) kam_all: menjawab dengan jelas (bukan diam, bukan Unhandled error)', () => {
+t('6c) kam_all: ada handler & merespons user (tidak diam, tidak Unhandled error)', () => {
   const i = SRC.indexOf("data.startsWith('kam_all:')");
   assert.ok(i > 0, 'handler kam_all: tidak ada — tombol akan mati diam-diam');
-  const blk = SRC.slice(i, i + 900);
-  assert.ok(blk.includes('answerCallbackQuery'), 'harus membalas lewat answerCallbackQuery (popup)');
-  assert.ok(blk.includes('show_alert'), 'popup harus show_alert agar terlihat');
-  assert.ok(/belum tersedia/i.test(blk), 'pesan harus menyebutkan fitur belum tersedia');
+  const blk = SRC.slice(i, i + 4000);
+  // Minimal harus salah satu: popup (answerCallbackQuery) ATAU edit pesan
+  // dengan keyboard target. Dua-duanya sah; yang TIDAK sah = tidak merespons.
+  const viaPopup = blk.includes('answerCallbackQuery');
+  const viaKeyboard = blk.includes('editMessageText') && blk.includes('animeTargetKeyboard');
+  assert.ok(viaPopup || viaKeyboard,
+    'harus merespons: popup (answerCallbackQuery) atau keyboard target (animeTargetKeyboard)');
+  console.log(`      kam_all: merespons lewat ${viaKeyboard ? 'keyboard target' : 'popup'}`);
 });
 
 t('7) handler kam_page: ada, dan memakai listKamenimeEpisodes + buildKamenimeEpisodePicker', () => {

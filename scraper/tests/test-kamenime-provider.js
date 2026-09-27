@@ -344,7 +344,9 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
     const i = src.indexOf("if (data.startsWith('kam_ep:')) {");
     assert.ok(i > 0, 'butuh handler kam_ep:');
-    const e = src.indexOf("if (data.startsWith('sam_ep:')) {", i);
+    // Potong pada handler SETELAH kam_ep: (bukan sam_ep: — jaraknya sudah jauh
+    // karena kam_all:/kam_allgo:/kam_fix: disisipkan di antaranya).
+    const e = src.indexOf("if (data.startsWith('kam_all:')", i);
     const block = src.slice(i, e > i ? e : undefined);
     // prompt judul → ada tombol Ganti Judul
     assert.ok(/titlePromptKeyboard\(/.test(block), 'kam_ep harus pakai titlePromptKeyboard (prompt judul)');

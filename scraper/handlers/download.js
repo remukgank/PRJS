@@ -736,7 +736,7 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
   // dulu oleh resolveKamenimeFile (1 GET). File MP4 sudah jadi, jadi TIDAK ada
   // remuxToMp4 di sini —namun extensi .mp4 WAJIB dipertahankan (kalau dipaksa
   // .ts oleh jalur gdriveplayer, remux jalan dan file salah tipe).
-  async function handleKamenimeUrl(chatId, url, customTitle = null, expectedEp = null) {
+  async function handleKamenimeUrl(chatId, url, customTitle = null, expectedEp = null, opts = {}) {
     ensureCtx('handleKamenimeUrl');
     let outPath = null;
     let cap = '';
@@ -771,7 +771,13 @@ async function handleFiledonUrl(chatId, url, customTitle = null, expectedEp = nu
       cap = titleForCap || cleanCaption(kmName);
       capWithEp = epCapLabel(cap, !!titleForCap, null, partN);
       const cacheInfo = { urlHash: hashUrl(url), source: 'kamenime', fileName: kmName };
-      rp = _samQuiet ? noopRp() : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
+      // opts.silent = dipanggil dari batch (kam_all:) yang sudah punya RichProgress
+      // sendiri. Tanpa ini, 500 episode = 500 pesan progres di grup. Sengaja
+      // per-panggilan, BUKAN lewat _samQuiet global: global itu bocor ke download
+      // manual yang jalan bersamaan (try/finally tidak menutup interleaving).
+      rp = (opts.silent || _samQuiet)
+        ? noopRp()
+        : await new _ctx.RichProgress(chatId, cap, [{ ep: capWithEp }]).start();
       rp.updateEpisode(capWithEp, 'download');
       // .mp4 dipertahankan — JANGAN remux (sudah MP4).
       outPath = tempPath(kmName.endsWith('.mp4') ? kmName : `${kmName}.mp4`);
