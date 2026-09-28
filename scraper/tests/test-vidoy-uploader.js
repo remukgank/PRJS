@@ -416,6 +416,80 @@ t('shortLinkLabel: ringkas tapi tetap klik-buka penuh', () => {
   assert.strictEqual(vidoyHandlers.shortLinkLabel('bukan-url'), 'bukan-url');
 });
 
+// ─── "File sudah ada" = LAYAK upload, bukan sekadar ada (insiden Ep 733) ─────
+// 28 Sep 2026: One Piece Ep 733. Proses di-SIGTERM di tengah unduhan menyisakan
+// parsial 0,8 MB di downloads/anime/One_Piece/ep733/. Setelah restart,
+// `fs.existsSync(destPath)` → true → "skip download — file sudah ada" → parsial
+// dikirim ke Vidoy → ditolak "Vidoy CDN status invalid … hash_file(thumbnail/…):
+// No such file or directory". existsSync hanya membuktikan ADA, bukan UTUH.
+(function reusableVideoTests() {
+  const fsv = require('fs');
+  const osv = require('os');
+  const pathv = require('path');
+  const dir = pathv.join(osv.tmpdir(), `reusable-${process.pid}`);
+  fsv.mkdirSync(dir, { recursive: true });
+  const write = (name, buf) => { const p = pathv.join(dir, name); fsv.writeFileSync(p, buf); return p; };
+  // MP4 sungguhan > 5 MB supaya "layak" (signature + ukuran), hasil reuse nyata
+  // dari unduhan yang sudah berhasil (semua episode One Piece 51–190 MB).
+  // Durasi 20 dtk @ 6 Mbit/s ≈ 15 MB — jauh di atas ambang 5 MB, supaya test
+  // "layak" benar-benar menguji ukuran, bukan hanya signature.
+  const realMp4 = (() => {
+    const p = pathv.join(dir, 'real.mp4');
+    if (fsv.existsSync(p) && fsv.statSync(p).size > 10 * 1024 * 1024) return fsv.readFileSync(p);
+    require('child_process').execFileSync('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=25:duration=20',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '6000k',
+      '-pix_fmt', 'yuv420p', '-movflags', '+faststart', p,
+    ], { timeout: 180000 });
+    return fsv.readFileSync(p);
+  })();
+  const check = vidoyHandlers.isReusableVideo;
+
+  t('isReusableVideo: MP4 penuh > 5 MB → LAYAK (jangan unduh ulang)', () => {
+    const r = check(write('ok.mp4', realMp4));
+    assert.strictEqual(r.ok, true, `harus layak: ${JSON.stringify(r)}`);
+  });
+  t('isReusableVideo: parsial 0,8 MB (sisa SIGTERM) → TIDAK layak', () => {
+    // Ukuran dari insiden Ep 733: ~0,8 MB.
+    const r = check(write('partial.mp4', realMp4.subarray(0, 800 * 1024)));
+    assert.strictEqual(r.ok, false, `parsial harus ditolak: ${JSON.stringify(r)}`);
+    assert.ok(/parsial/.test(r.why), `alasan harus menyebut parsial: ${r.why}`);
+  });
+  t('isReusableVideo: 0 byte → TIDAK layak (bukan "hanya belum ada")', () => {
+    const r = check(write('empty.mp4', Buffer.alloc(0)));
+    assert.strictEqual(r.ok, false, 'file kosong harus ditolak');
+  });
+  t('isReusableVideo: HTML > 5 MB (halaman error provider) → TIDAK layak', () => {
+    // Provider balas HTTP 200 dengan halaman error → file > ambang ukuran tapi
+    // bukan video. Signature/ukuran saja TIDAK cukup untuk menolak yang ini;
+    // assertLooksLikeVideo yang menangkapnya.
+    const html = Buffer.from('<!doctype html><html><body>'.padEnd(6 * 1024 * 1024, 'x') + '</body></html>');
+    const r = check(write('html.mp4', html));
+    assert.strictEqual(r.ok, false, `HTML harus ditolak: ${JSON.stringify(r)}`);
+    assert.ok(/HTML|bukan video|unduhan/i.test(r.why), `alasan harus menyebut HTML: ${r.why}`);
+  });
+  t('isReusableVideo: file tidak ada → why="tidak ada" (bukan "parsial")', () => {
+    const r = check(pathv.join(dir, 'nope.mp4'));
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.why, 'tidak ada', 'file absen harus dibedakan dari parsial');
+  });
+  t('isReusableVideo: MKV > 5 MB (kontainer lain) → LAYAK (signature, bukan ekstensi)', () => {
+    // ensureMp4 sudah me-remux .ts/.mkv → .mp4 sebelum titik ini, tapi jangan
+    // kunci perilaku hanya ke mp4: bukti yang dipakai adalah signature container.
+    const mkv = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(6 * 1024 * 1024)]);
+    const r = check(write('x.mkv', mkv));
+    assert.strictEqual(r.ok, true, `MKV sah harus layak: ${JSON.stringify(r)}`);
+  });
+  t('isReusableVideo: ambang 5 MB jauh di bawah episode terkecil yang tercatat', () => {
+    // Kalau ambang naik keatas ukuran episode sah, reuse yang sah ikut gagal.
+    // One Piece episode terkecil di DB = 51,2 MB; p1 seluruh library = 61,9 MB.
+    assert.ok(vidoyHandlers.REUSABLE_MIN_BYTES <= 5 * 1024 * 1024, 'ambang tak boleh > 5 MB');
+    assert.ok(realMp4.length > vidoyHandlers.REUSABLE_MIN_BYTES * 2, 'payload test harus jauh di atas ambang');
+  });
+  process.on('exit', () => { try { fsv.rmSync(dir, { recursive: true, force: true }); } catch {} });
+})();
+
 t('anti-drift: admin panel punya tombol Vidoy Links & refreshVidoyLink ada', () => {
   const fsx = require('fs');
   const botSrc = fsx.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
@@ -757,9 +831,11 @@ t('setelah download single-episode, semua target tampilkan episode picker', () =
     throw new Error('harus dipanggil di 2 jalur (tg & vidoy), ditemukan: ' + calls);
   }
   // helper wajib memakai picker yang sama dengan sam_back
+  // 28 Sep 2026: picker menerima argumen page (halaman asal), jadi pola
+  // "animeUrl)" menjadi "animeUrl, <page>)" — regex harus menerima keduanya.
   const i = B.indexOf('async function showEpisodePickerAfterDownload');
   const body = B.slice(i, B.indexOf('\n  }', i));
-  if (!/buildSamehadakuEpisodePicker\(res\.episodes, animeUrl\)/.test(body)) {
+  if (!/buildSamehadakuEpisodePicker\(res\.episodes, animeUrl, \w+\)/.test(body)) {
     throw new Error('harus memakai buildSamehadakuEpisodePicker yang sama dengan sam_back');
   }
   if (!/editMessageText\(caption/.test(body)) {
@@ -1477,7 +1553,12 @@ t('KRITIS: parseBatchPick memecah callback dengan benar', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   const i = BOT.indexOf('function parseBatchPick');
   const code = BOT.slice(i, BOT.indexOf('\n}', i) + 2);
-  const f = new Function(code + '\nreturn parseBatchPick;')();
+  // 28 Sep 2026: parseBatchPick memanggil splitUrlAndPage (page picker), jadi
+  // kedua definisi harus diekstrak bersama — kalau tidak, test gagal dengan
+  // "splitUrlAndPage is not defined" yang tidak menjelaskan apa pun.
+  const j = BOT.indexOf('function splitUrlAndPage');
+  const code2 = BOT.slice(j, BOT.indexOf('\n}', j) + 2);
+  const f = new Function(code2 + '\n' + code + '\nreturn parseBatchPick;')();
   const cases = [
     ['sam_all:2', 'sam', { target: '', urlId: '2' }],
     ['sam_allgo:tg:2', 'sam', { target: 'tg', urlId: '2' }],
@@ -1810,7 +1891,7 @@ t('KRITIS: track.jsonTgSent=true tanpa pointer → tetap dianggap terkirim', () 
   if (plan[0].known.tgSent !== true) throw new Error('tgSent track tidak dihormati');
 });
 
-t('KRITIS: record DB tanpa pointer → boleh dikirim (mis.僅 Vidoy-only sebelumnya)', () => {
+t('KRITIS: record DB tanpa pointer → boleh dikirim (mis. Vidoy-only sebelumnya)', () => {
   const chunks = [Array.from({ length: 10 }, (_, i) => ({ ep: i + 1 }))];
   const plan = VS.planBatchWork(chunks, [{ part: 1, link: 'https://vski.cc/e/aaa', tg_chat_id: null, tg_message_id: null }], {}, 10);
   if (!plan[0].skip) throw new Error('vidoy tetap skip');

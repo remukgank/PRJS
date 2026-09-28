@@ -66,6 +66,16 @@ async function downloadTo(url, destPath, opts = {}) {
       headers.Referer = 'https://gofile.io/';
       if (gofileTok) headers.Authorization = `Bearer ${gofileTok}`;
     }
+    // KONEKSI BARUS tiap percobaan unduhan. Bukti 28 Sep 2026 (kamenime):
+    // file yang sama, host yang sama — 7 dari 11 probe tembus 4–220 MB/s,
+    // 4 sisanya nge-drip 34–85 KiB/s. Socket yang dipakai ulang oleh keep-alive
+    // (https.globalAgent, default keepAlive=true sejak Node 19) ikut berperan:
+    // agent BARU tiap request → 3 dari 4 percobaan tembus >100 MB/s. Jadi yang
+    // menentukan bukan server, melainkan koneksi TCP-nya — speed floor tidak
+    // boleh berarti "ganti server", dan retry HARUS memakai koneksi baru.
+    // Catatan: agent custom (= bukan globalAgent) tidak ikut HTTP(S)_PROXY, dan
+    // env Replit tidak menyetel proxy, jadi tidak ada regresi jaringan di sini.
+    const reqAgent = new (lib === https ? https.Agent : http.Agent)({ keepAlive: false });
 
     // Resume: file parsial dari percobaan sebelumnya → minta sisanya saja.
     let have = 0;
@@ -98,11 +108,12 @@ async function downloadTo(url, destPath, opts = {}) {
       if (settled) return;
       settled = true;
       stop();
+      try { reqAgent.destroy(); } catch {}
       try { req && req.destroy(); } catch {}
       try { out && out.destroy(); } catch {}
       reject(e);
     };
-    const ok = () => { if (settled) return; settled = true; stop(); resolve(destPath); };
+    const ok = () => { if (settled) return; settled = true; stop(); try { reqAgent.destroy(); } catch {} resolve(destPath); };
 
     const watchdog = setInterval(() => {
       const now = Date.now();
@@ -131,11 +142,17 @@ async function downloadTo(url, destPath, opts = {}) {
           const spanMs = now - anchor.t;
           const bps = ((got - anchor.bytes) / spanMs) * 1000;
           if (bps < th.SPEED_FLOOR_BPS) {
-            return fail(new Error(
+            // Tandai noRetry: BUKAN "ganti server" (kamenime tidak punya mirror
+            // lain). Bukti 28 Sep 2026: 11 probe ke file yang sama dari host yang
+            // sama → 7× tembus 4–220 MB/s, 4× nge-drip 34–85 KiB/s, tanpa pola
+            // per-file. Yang menentukan adalah KONEKSI TCP baru, bukan server.
+            // ensureMp4_then mencoba koneksi baru (lihat opts.freshConnection).
+            return fail(Object.assign(new Error(
               `server terlalu lambat — rata-rata ${(bps / 1024).toFixed(1)} KiB/s ` +
               `di bawah ambang ${(th.SPEED_FLOOR_BPS / 1024).toFixed(0)} KiB/s ` +
-              `selama ${Math.round(spanMs / 1000)} dtk — ganti server, mengulang tidak menolong`,
-            ));
+              `selama ${Math.round(spanMs / 1000)} dtk — koneksi ini lambat, ` +
+              `coba koneksi baru (${(got / 1048576).toFixed(1)} MB terkumpul)`,
+            ), { noRetry: true, slow: true }));
           }
         }
       }
@@ -155,7 +172,7 @@ async function downloadTo(url, destPath, opts = {}) {
       }
     }, 1000);
 
-    req = lib.get(url, { headers }, (res) => {
+    req = lib.get(url, { headers, agent: reqAgent }, (res) => {
       lastAt = Date.now();
 
       // 416 = "Range Not Satisfiable" = berkas yang diminta SUDAH UTUH di sisi
@@ -432,7 +449,12 @@ async function ensureMp4(url, destPath, opts = {}) {
           });
         });
       } else {
-        await downloadTo(url, destPath, { logCtx });
+        // `thresholds` WAJIB diteruskan: tanpa ini test tidak bisa menguji
+        // ensureMp4 dengan ambang kecil (window 90 dtk produksi = test 2 menit),
+        // dan yang menyalakan jadi STALL_MS produksi 20 dtk, bukan speed floor —
+        // test jadi lulus untuk alasan yang salah. Produksi tidak mengirim
+        // `thresholds` (undefined), jadi perilaku produksi tidak berubah.
+        await downloadTo(url, destPath, { logCtx, ...(opts.thresholds ? { thresholds: opts.thresholds } : {}) });
       }
       assertLooksLikeVideo(destPath);
 
@@ -454,12 +476,21 @@ async function ensureMp4(url, destPath, opts = {}) {
       return restoreTo(destPath);
     } catch (err) {
       lastErr = err;
-      // Galat "tidak mendukung resume" (atau speed floor) — retry dengan URL
-      // fresh pasti mengulang dari nol / tetap lambat. Berhenti sekarang,
-      // jangan habiskan bandwidth; user perlu ganti server.
-      if (err && err.noRetry) {
+      // Galat "koneksi lambat" (speed floor) — retry dengan KONEKSI BARU berguna,
+      // karena yang lambat adalah socket-nya, bukan file-nya (bukti 28 Sep 2026:
+      // probe berulang ke file yang sama → 7 dari 11 tembus 4–220 MB/s, sisanya
+      // nge-drip; koneksi baru = undian baru). Tapi file parsial harus dihapus
+      // dulu: host yang mengabaikan Range (balas 200) tidak bisa melanjutkan, dan
+      // menyambung parsial ke unduhan dari nol menghasilkan file campur.
+      // `noRetry` tanpa `slow` ("tidak mendukung resume", "melebihi batas waktu")
+      // tetap berhenti total — retry sudah terbukti tidak menolong.
+      if (err && err.noRetry && !err.slow) {
         logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 berhenti — retry tidak menolong');
         break;
+      }
+      if (err && err.slow) {
+        try { if (fs.existsSync(wanted)) fs.unlinkSync(wanted); } catch {}
+        logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 koneksi lambat — mulai dari nol dengan koneksi baru');
       }
       if (attempt > retries) break;
       logger.warn({ ...logCtx, attempt, err: err.message }, 'ensureMp4 gagal — retry dengan URL fresh');

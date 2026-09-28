@@ -9,7 +9,7 @@ const db = require('../db');
 const { getSetting, getPartFileId, savePartFileId, upsertMedia } = require('../db');
 const { sanitizeSlug } = require('../lib/parser');
 const { kamenimeSourcePattern } = require('../providers/kamenime');
-const { ensureMp4 } = require('../services/vidaraService');
+const { ensureMp4, assertLooksLikeVideo, detectVideoContainer } = require('../services/vidaraService');
 const vidoyService = require('../services/vidoyService');
 const { TMP_DIR, getVideoInfo } = require('../downloader');
 const { safeHtml } = require('../lib/html');
@@ -28,6 +28,47 @@ function initVidoy(ctx) {
   /** Hostname aman untuk log — URL bisa berisi token, jangan dicetak utuh. */
   function hostOf(u) {
     try { return new URL(u).hostname; } catch { return String(u || '').slice(0, 40); }
+  }
+
+  /**
+   * Apakah file di `destPath` REALLY bisa dipakai (bukan cuma ada)?
+   *
+   * Insiden 28 Sep 2026, One Piece Ep 733: proses di-SIGTERM di tengah unduhan
+   * menyisakan parsial 0,8 MB di `downloads/anime/…/ep733/`. Setelah restart,
+   * `fs.existsSync(destPath)` benar → "skip download — file sudah ada" → parsial
+   * itu langsung dikirim ke Vidoy, yang menolaknya dengan pesan tak berguna
+   * ("Vidoy CDN status invalid … hash_file(thumbnail/…): No such file").
+   *
+   * `fs.existsSync` hanya membuktikan ada file, BUKAN bahwa file itu utuh. Yang
+   * dipakai sebagai bukti kesahihan: signature container (ftyp/Matroska/MPEG-TS)
+   * — sama seperti `assertLooksLikeVideo` — ditambah ambang ukuran konservatif.
+   * Kombinasi ini yang membuat "sudah ada" berarti "layak upload", bukan
+   * "sisa kegagalan yang lalu".
+   *
+   * Konservatif yang disengaja: MP4 sah boleh kecil (fragmen/clip), tapi DI SINI
+   * konteksnya episode penuh dari provider — ambang 5 MB jauh di bawah ukuran
+   * episode terkecil yang tercatat (One Piece 51,2 MB; p1 library 61,9 MB),
+   * jadi tidak mungkin menunda file yang sah. Kembalikan alasan supaya log
+   * bisa menjelaskan kenapa unduhan diulang.
+   */
+  const REUSABLE_MIN_BYTES = 5 * 1024 * 1024;
+  function isReusableVideo(destPath) {
+    let st;
+    try { st = fs.statSync(destPath); } catch { return { ok: false, why: 'tidak ada' }; }
+    if (st.size < REUSABLE_MIN_BYTES) {
+      return { ok: false, why: `parsial ${(st.size / 1048576).toFixed(1)} MB`, bytes: st.size };
+    }
+    try {
+      assertLooksLikeVideo(destPath);
+    } catch (e) {
+      return { ok: false, why: e.message.slice(0, 120), bytes: st.size };
+    }
+    // Signature ada (tidak lempar) tapi kontainer tak dikenal/bermasalah → tolak.
+    const container = detectVideoContainer(destPath);
+    if (container === 'unknown') {
+      return { ok: false, why: `signature bukan video (${(st.size / 1048576).toFixed(1)} MB)`, bytes: st.size };
+    }
+    return { ok: true, why: `${(st.size / 1048576).toFixed(1)} MB`, bytes: st.size };
   }
 
 function buildResolveVideoUrl(session) {
@@ -243,10 +284,20 @@ async function actionAnimeEpisode(chatId, opts) {
     fs.mkdirSync(outDir, { recursive: true });
       const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
       const logCtx = { chatId, target, ep, title: vidoyTitle };
-      if (fs.existsSync(destPath)) {
-        // File sudah ada → jangan unduh ulang (Vidoy: dilarang duplikat).
-        logger.info({ ...logCtx, mb: +(fs.statSync(destPath).size / 1048576).toFixed(1) }, 'skip download — file sudah ada');
+      // "File sudah ada" harus berarti "layak upload", bukan sekadar ada di disk.
+      // `existsSync` saja membuat parsial sisa proses mati (SIGTERM / speed
+      // floor) lolos dan ditolak Vidoy dengan pesan tak berguna — insiden
+      // Ep 733, 28 Sep 2026. Kalau tidak layak, hapus dulu supaya downloadTo
+      // tidak salah resume dari parsial itu, baru unduh ulang dari nol.
+      const reusable = isReusableVideo(destPath);
+      if (reusable.ok) {
+        // Sudah ada & utuh → jangan unduh ulang (Vidoy: dilarang keras duplikat).
+        logger.info({ ...logCtx, mb: +(reusable.bytes / 1048576).toFixed(1) }, 'skip download — file sudah ada');
       } else {
+        if (reusable.why !== 'tidak ada') {
+          logger.warn({ ...logCtx, why: reusable.why }, 'file ada tapi tidak layak pakai — unduh ulang dari nol');
+          try { fs.rmSync(destPath, { force: true }); } catch {}
+        }
         p.update('⬇️ download');
         logger.info({ ...logCtx, host: hostOf(directUrl), resolveFresh: typeof opts.resolveFreshDirectUrl === 'function' }, 'mulai download episode');
         // resolveFresh WAJIB re-resolve, bukan memakai ulang directUrl: beberapa
@@ -416,4 +467,6 @@ module.exports = {
   actionAnimeEpisode,
   buildResolveVideoUrl,
   targetLabel,
+  isReusableVideo,
+  REUSABLE_MIN_BYTES,
 };
