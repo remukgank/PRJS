@@ -32,11 +32,15 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const V_PATH = path.join(ROOT, 'vidoy-uploader.js');
 const S_PATH = path.join(ROOT, 'services', 'vidoyService.js');
+const TEST_COOKIE_JAR = path.join(os.tmpdir(), `prjs-vidoy-listing-${process.pid}.cookie`);
+const PREVIOUS_COOKIE_JAR = process.env.VIDOY_COOKIE_JAR;
+process.env.VIDOY_COOKIE_JAR = TEST_COOKIE_JAR;
 
 let passed = 0;
 let failed = 0;
@@ -59,6 +63,7 @@ function fakeCurl(responses) {
   const impl = (cmd, args, opts, cb) => {
     calls.push(Array.isArray(args) ? args : [args]);
     const flat = (Array.isArray(args) ? args : [args]).join(' ');
+    if (flat.includes('/signin')) fs.writeFileSync(TEST_COOKIE_JAR, 'test-session');
     let body = '';
     let code = 200;
     for (const [pat, val] of responses) {
@@ -397,6 +402,9 @@ function loadService(over) {
   });
 
   // Ringkasan dicetak di AKHIR file, bukan di tengah.
+  fs.rmSync(TEST_COOKIE_JAR, { force: true });
+  if (PREVIOUS_COOKIE_JAR === undefined) delete process.env.VIDOY_COOKIE_JAR;
+  else process.env.VIDOY_COOKIE_JAR = PREVIOUS_COOKIE_JAR;
   console.log(`RESULT: ${passed} pass, ${failed} fail`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => {
