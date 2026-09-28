@@ -92,7 +92,7 @@ async function uploadBatches(opts) {
   fs.mkdirSync(workDir, { recursive: true });
   let folder = null;
   try {
-    folder = await resolveFolder(kind, title);
+    folder = await (__testHooks.resolveFolder || resolveFolder)(kind, title);
     if (onFolder) onFolder(folder);
   } catch (err) {
     logger.warn({ err: err.message, title, kind }, 'Vidoy: folder gagal disiapkan — upload ke root');
@@ -245,13 +245,53 @@ async function uploadSingle(opts) {
   } catch (err) {
     logger.warn({ err: err.message, title, kind }, 'Vidoy: folder gagal disiapkan — upload ke root');
   }
-  const filePath = path.join(outDir, `${Vidoy.sanitizeFolderName(title || mediaKey)} — Ep ${pad(num)}.mp4`);
+  const fileName = `${Vidoy.sanitizeFolderName(title || mediaKey)} — Ep ${pad(num)}.mp4`;
+  const filePath = path.join(outDir, fileName);
+  // §6: satu episode = satu file di Vidoy. Verifikasi ke sumber (listing folder),
+  // bukan hanya ke DB — file yang sudah ada di Vidoy tapi belum tercatat di DB
+  // (proses mati antara upload dan simpan) akan ditemukan di sini.
+  if (folder && folder.id) {
+    try {
+      const index = await Vidoy.folderFileIndex(folder.id);
+      const hit = index.byTitle.get(fileName);
+      if (hit) {
+        const filecode = String(hit.id || '');
+        const link = await Vidoy.fetchPublicLink(filecode).catch(() => null);
+        logger.info({ mediaKey, kind, part: num, file: fileName, filecode },
+          'Vidoy: file sudah ada di folder — skip upload');
+        // Self-healing: file ini ada di Vidoy tapi DB tidak punya (proses pernah mati
+        // di antara upload dan simpan). Catat sekarang supaya DB tidak buta selamanya.
+        if (db && db.saveVidoyUpload) {
+          await db.saveVidoyUpload({
+            mediaKey, kind, part: num, epStart: num, epEnd: num, title,
+            folderId: folder.id, folderUrl: folder.url || '', link: link || '', dashboard: '',
+          }).catch((err) => {
+            logger.warn({ err: err.message, mediaKey, kind, part: num },
+              'Vidoy: gagal menyimpan record dari listing (file tetap aman di Vidoy)');
+          });
+        }
+        return {
+          ok: true, skipped: true, fromListing: true,
+          link: link || '', dashboard: '', filecode,
+          epStart: num, epEnd: num, part: num, folderId: folder.id, folderUrl: folder.url || '',
+          filePath,
+        };
+      }
+    } catch (err) {
+      // Listing tidak boleh jadi titik gagal baru: jatuh ke perilaku lama (cek DB saja).
+      logger.warn({ err: err.message, mediaKey, kind, folder: folder.id },
+        'Vidoy: listing folder gagal — lanjut cek DB saja');
+    }
+  }
   if (!fs.existsSync(filePath)) {
-    const ok = await ensureMp4(episodeUrl, filePath);
+    const ok = await (__testHooks.ensureMp4 || ensureMp4)(episodeUrl, filePath);
     if (!ok) return { ok: false, error: 'gagal menyiapkan video (ensureMp4)' };
   }
-  const up = await uploadFile(filePath, onProgress, folder);
+  const up = await (__testHooks.uploadFile || uploadFile)(filePath, onProgress, folder);
   if (!up.ok) return up;
+  if (folder && folder.id && Vidoy.invalidateFolderFileCache) {
+    Vidoy.invalidateFolderFileCache(folder.id);
+  }
   const item = {
     epStart: num, epEnd: num, part: num, filecode: up.filecode, link: up.link,
     dashboard: up.dashboardLink, folderId: up.folderId,
@@ -266,4 +306,10 @@ async function uploadSingle(opts) {
   return { ok: true, ...item };
 }
 
-module.exports = { uploadBatches, uploadSingle, resolveFolder, chunkEpisodes, rangeLabel, planBatchWork, trackFileFor, loadTrack, saveTrack, normalizeTrackEntry };
+// Test hooks: hanya dipakai oleh scraper/tests/. Mengganti fungsi internal
+// (uploadFile / ensureMp4 / resolveFolder) supaya jalur upload bisa diuji
+// tanpa menyentuh Vidoy sungguhan.
+const __testHooks = { uploadFile: null, ensureMp4: null, resolveFolder: null };
+function __setTestHooks(h) { Object.assign(__testHooks, h || {}); }
+
+module.exports = { __testHooks, __setTestHooks, uploadBatches, uploadSingle, resolveFolder, chunkEpisodes, rangeLabel, planBatchWork, trackFileFor, loadTrack, saveTrack, normalizeTrackEntry };
