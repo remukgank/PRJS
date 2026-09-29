@@ -1162,12 +1162,30 @@ function parseBatchPick(data, prefix) {
   if (String(data).startsWith(head)) {
     const rest = String(data).slice(head.length);
     const i = rest.indexOf(':');
-    return i < 0
-      ? { target: '', urlId: rest }
-      : { target: rest.slice(0, i), urlId: rest.slice(i + 1) };
+    if (i < 0) return { target: '', urlId: rest, page: 0 };
+    const tail = splitUrlAndPage(`${prefix}_p:${rest.slice(i + 1)}`, `${prefix}_p`);
+    return { target: rest.slice(0, i), urlId: tail.urlId, page: tail.page };
   }
   const base = `${prefix}_all:`;
-  return { target: '', urlId: String(data).startsWith(base) ? String(data).slice(base.length) : '' };
+  const body = String(data).startsWith(base) ? String(data).slice(base.length) : '';
+  const tail = splitUrlAndPage(`${prefix}_p:${body}`, `${prefix}_p`);
+  return { target: '', urlId: tail.urlId, page: tail.page };
+}
+
+
+// Pecah callback_data picker: urlId TANPA page di akhir.
+//   "sam_back:12:58" → { urlId: "12", page: 58 }
+//   "sam_back:12"    → { urlId: "12", page: 0 }
+//   "sam_back:12:x"  → { urlId: "12", page: 0 }  ("x" bukan angka = format lama)
+function splitUrlAndPage(data, prefix) {
+  const s = String(data == null ? '' : data);
+  const head = `${prefix}:`;
+  const rest = s.startsWith(head) ? s.slice(head.length) : s;
+  const i = rest.lastIndexOf(':');
+  if (i < 0) return { urlId: rest, page: 0 };
+  const tail = Number(rest.slice(i + 1));
+  if (!Number.isFinite(tail) || tail < 0) return { urlId: rest, page: 0 };
+  return { urlId: rest.slice(0, i), page: Math.floor(tail) };
 }
 
 function animeTargetKeyboard(tgData, vytData, vvData) {
@@ -1178,6 +1196,19 @@ function animeTargetKeyboard(tgData, vytData, vvData) {
     [targetBtn('📥 Vidoy + TG', vytData, vidoyOk, 'primary'), targetBtn('📥 Vidoy', vvData, vidoyOk)],
   ]);
 }
+
+// Label provider untuk pesan "Pilih target" setelah Ganti Judul.
+// Dipakai blok custom title. Sengaja tidak disatukan dengan label
+// provider di dl_title_use: (baris ~4653) — nilai kamenime di sana 'hokireceh'
+// dan itu bagian dari kontrak caption §5 AGENTS.md, jadi tidak boleh diubah.
+const PENDING_HANDLER_LABEL = {
+  gofile: 'Gofile',
+  pixeldrain: 'Pixeldrain',
+  gdrive: 'Google Drive',
+  filedon: 'Filedon',
+  mega: 'Mega',
+  kamenime: 'Kamenime',
+};
 
 function mainActionKeyboard(kind = 'drama') {
   const Vidoy = require('./vidoy-uploader');
@@ -1256,6 +1287,7 @@ function titlePromptKeyboard(fileName, url, detectedTitle = null) {
 async function resolveProviderTitle(url) {
   let detectedTitle = null;
   let fileName = null;
+  let gds = null;
   try {
     if (isGofileUrl(url)) fileName = filenameFromGofileUrl(url);
     if (isGofileDirectUrl(url)) fileName = resolveFileName(url) || filenameFromGofileUrl(url);
@@ -1277,14 +1309,14 @@ async function resolveProviderTitle(url) {
       }
     else if (isMegaUrl(url)) { try { fileName = (await resolveMegaFile(url)).name; } catch {} }
     else fileName = (await getPixeldrainInfo(url).catch(() => null))?.name;
-    if (fileName) {
-      const pat = extractSourcePattern(fileName);
-      if (pat) {
-        const m = await findMediaByPattern(pat);
-        if (m) detectedTitle = m.nama;
-      }
-      if (!detectedTitle) {
-        const gds = parseSamehadakuFilename(fileName);
+      if (fileName) {
+        const pat = extractSourcePattern(fileName);
+        if (pat) {
+          const m = await findMediaByPattern(pat);
+          if (m) detectedTitle = m.nama;
+        }
+        if (!detectedTitle) {
+          gds = parseSamehadakuFilename(fileName);
         if (gds?.short) {
           for (const prov of ['kuronime', 'samehadaku']) {
             const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
@@ -1294,7 +1326,7 @@ async function resolveProviderTitle(url) {
       }
     }
   } catch {}
-  return { detectedTitle, fileName };
+  return { detectedTitle, fileName, gds };
 }
 
 function aiKeyboard() {
@@ -2012,11 +2044,11 @@ async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0, titleOverride
     // kamenime (gejala: "no FULLHD/4K servers found" untuk 500 episode).
     // Gejala diam-diam karena tombol per-episode (kam_ep:) memang benar.
     prefix: 'kam',
-    mkEp: (e) => {
+    mkEp: (e, pg = 0) => {
       const epId = hashUrl(e.url).slice(0, 8);
       kamenimeEpisodeMap.set(epId, e.url);
       const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
-      return { text: b.text, callback_data: `kam_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
+      return { text: b.text, callback_data: `kam_ep:${epId}:${pg}`, ...(b.style ? { style: b.style } : {}) };
     },
   });
   const { first, last, doneCount } = meta;
@@ -2060,11 +2092,11 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
     page,
     pageSize: SAM_PAGE_EP,
     done,
-    mkEp: (e) => {
+    mkEp: (e, pg = 0) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
       const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
-      return { text: b.text, callback_data: `sam_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
+      return { text: b.text, callback_data: `sam_ep:${epId}:${pg}`, ...(b.style ? { style: b.style } : {}) };
     },
   });
   const { first, last, doneCount } = meta;
@@ -2119,11 +2151,11 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
     pageSize: SAM_PAGE_EP,
     done,
     prefix: 'kur',
-    mkEp: (e) => {
+    mkEp: (e, pg = 0) => {
       const epId = hashUrl(e.url).slice(0, 8);
       kuronimeEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
       const b = episodeButton(statusMap.get(Number(e.ep)), e.ep, done.has(Number(e.ep)));
-      return { text: b.text, callback_data: `kur_ep:${epId}`, ...(b.style ? { style: b.style } : {}) };
+      return { text: b.text, callback_data: `kur_ep:${epId}:${pg}`, ...(b.style ? { style: b.style } : {}) };
     },
   });
   const { first, last, doneCount } = meta;
@@ -2543,26 +2575,31 @@ bot.on('message', safeHandler('message')(async (msg) => {
     pendingDownloads.delete(pendingKey);
     const customTitle = text.trim();
     await bot.sendMessage(chatId, `📥 Download dengan judul: <b>${customTitle}</b>`, { parse_mode: 'HTML' });
-    if (pending.handler === 'gofile') return handleGofileUrl(chatId, pending.url, customTitle);
-    if (pending.handler === 'pixeldrain') return handlePixeldrainUrl(chatId, pending.url, customTitle);
-    if (pending.handler === 'gdrive') return handleGdriveUrl(chatId, pending.url, customTitle);
-    if (pending.handler === 'filedon') return handleFiledonUrl(chatId, pending.url, customTitle);
-      if (pending.handler === 'kamenime') {
-        // Jangan langsung unduh — user masih harus memilih target (Telegram /
-        // Vidoy+TG / Vidoy). Judul kustom disimpan, nanti dibaca dl_go.
-        rememberCustomTitle(pending.url, customTitle);
-        const kmUrlId = cacheUrl(pending.url);
-        return bot.sendMessage(chatId, `📥 <b>Kamenime</b>\n\n➧ Judul :- <b>${escHtml(customTitle)}</b>\n\nPilih target:`, {
+    // SEMUA provider wajib lewat target picker dulu — jangan langsung unduh.
+    // 28 Sep 2026: lima provider (gofile/pixeldrain/gdrive/filedon/mega)
+    // langsung handle*Url, jadi "Ganti Judul" tidak pernah menanyakan target.
+    // Yang benar sudah ada di kamenime; sekarang jadi satu jalur untuk semua.
+    {
+      rememberCustomTitle(pending.url, customTitle);
+      const urlId = cacheUrl(pending.url);
+      // Catatan: resolveDirectUrl() mengembalikan null untuk mega (mega.File
+      // untuk streaming, bukan URL HTTP) dan jalur vyt/vv butuh URL. Itu
+      // KETERBATASAN jalur, bukan alasan menyembunyikan tombol — kalau tidak
+      // bisa, errornya harus muncul, bukan pilihannya hilang.
+      const label = PENDING_HANDLER_LABEL[pending.handler] || pending.handler;
+      return bot.sendMessage(chatId,
+        `📥 <b>${label}</b>\n\n➧ Judul :- <b>${escHtml(customTitle)}</b>\n\nPilih target:`,
+        {
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: animeTargetKeyboard(
-              `dl_go:tg:${kmUrlId}`, `dl_go:vyt:${kmUrlId}`, `dl_go:vv:${kmUrlId}`,
+              `dl_go:tg:${urlId}`, `dl_go:vyt:${urlId}`, `dl_go:vv:${urlId}`,
             ),
           },
-        });
-      }
-    if (pending.handler === 'mega') return handleMegaUrl(chatId, pending.url, customTitle);
-  }
+        },
+      );
+    }
+    }
 
   if (text === '/status') {
     const http = require('http');
@@ -3313,13 +3350,13 @@ bot.on('message', safeHandler('message')(async (msg) => {
       const fileName = gd.name;
       let detectedTitle = null;
       try {
-        const pattern = extractSourcePattern(fileName);
-        if (pattern) {
-          const matched = await findMediaByPattern(pattern);
-          if (matched) detectedTitle = matched.nama;
-        }
-        if (!detectedTitle) {
-          const gds = parseSamehadakuFilename(fileName);
+          const pattern = extractSourcePattern(fileName);
+          if (pattern) {
+            const matched = await findMediaByPattern(pattern);
+            if (matched) detectedTitle = matched.nama;
+          }
+          if (!detectedTitle) {
+            const gds = parseSamehadakuFilename(fileName);
           if (gds?.short) {
             for (const prov of ['kuronime', 'samehadaku']) {
               const m = await findMediaByPattern(`${prov}-${gds.short}`).catch(() => null);
@@ -3543,7 +3580,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (!isAdmin(query.from.id)) {
         return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {});
       }
-      const epId = data.slice(7);
+      const epId = splitUrlAndPage(data, 'kam_ep').urlId;
       const episodeUrl = kamenimeEpisodeMap.get(epId);
       if (!episodeUrl) {
         return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang', show_alert: true }).catch(() => {});
@@ -3641,7 +3678,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
             reply_markup: { inline_keyboard: [
               ...animeTargetKeyboard(`kam_allgo:tg:${kmBid}`, `kam_allgo:vyt:${kmBid}`, `kam_allgo:vv:${kmBid}`),
               [BTN.btn('⟳ Lengkapi yang hilang', `kam_fix:${kmBid}`, 'success')],
-              [{ text: '⬅️ Kembali ke list episode', callback_data: `kam_page:0:${kmBid}` }],
+              [{ text: '⬅️ Kembali ke list episode', callback_data: `kam_page:${kmPick.page}:${kmBid}` }],
             ] },
           },
         ).catch(() => {});
@@ -3751,7 +3788,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const rawUrl = data.slice(7);
+    const se = splitUrlAndPage(data, 'sam_ep');
+    const rawUrl = se.urlId;
     const episodeUrl = samehadakuEpisodeMap.get(rawUrl) && samehadakuEpisodeMap.get(rawUrl).includes('samehadaku')
       ? samehadakuEpisodeMap.get(rawUrl)
       : (resolveUrl(rawUrl) || decodeURIComponent(rawUrl));
@@ -3773,7 +3811,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       const epInfoBack = parseSamehadakuEpisode(episodeUrl);
       const animeUrlBack = epInfoBack?.slug ? `https://v2.samehadaku.how/anime/${epInfoBack.slug}/` : episodeUrl.split('/episode-')[0] + '/';
-      keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(animeUrlBack)}` }]);
+      keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `sam_back:${cacheUrl(animeUrlBack)}:0` }]);
       return bot.editMessageText(`📺 <b>Samehadaku ${quality}</b>\n\nPilih server untuk download:`, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => bot.sendMessage(chatId, `📺 <b>Samehadaku ${quality}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
@@ -3825,7 +3863,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           reply_markup: { inline_keyboard: [
             ...animeTargetKeyboard(`sam_allgo:tg:${bid}`, `sam_allgo:vyt:${bid}`, `sam_allgo:vv:${bid}`),
             [BTN.btn('⟳ Lengkapi yang hilang', `sam_fix:${bid}`, 'success')],
-            [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}` }],
+            [{ text: '⬅️ Kembali ke list episode', callback_data: `sam_back:${bid}:0` }],
           ] },
         },
       ).catch(async (err) => {
@@ -4020,7 +4058,9 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   }
 
   if (data.startsWith('sam_back:')) {
-    const rawUrl = data.slice(9);
+    const sb = splitUrlAndPage(data, 'sam_back');
+    const backPage = sb.page;
+    const rawUrl = sb.urlId;
     let animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa' }).catch(() => {});
     // fallback: jika sam_back dari episode, reconstruct anime base
@@ -4035,7 +4075,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       const res = await resolveSamehadakuFullhd(animeUrl);
       if (res.type !== 'anime' || !res.episodes?.length) return bot.editMessageText('⚠️ Gagal load episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
       const eps = res.episodes;
-      const { keyboard, caption } = await buildSamehadakuEpisodePicker(eps, animeUrl);
+      const { keyboard, caption } = await buildSamehadakuEpisodePicker(eps, animeUrl, backPage);
       return bot.editMessageText(caption, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => {});
@@ -4052,7 +4092,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (res.type !== 'anime' || !res.episodes?.length) {
         return bot.editMessageText('⚠️ Gagal load daftar episode.', { chat_id: chatId, message_id: msgId }).catch(() => {});
       }
-      const { keyboard, caption } = await buildSamehadakuEpisodePicker(res.episodes, animeUrl);
+      const { keyboard, caption } = await buildSamehadakuEpisodePicker(res.episodes, animeUrl, backPage);
       return bot.editMessageText(caption, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: keyboard },
@@ -4179,7 +4219,8 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (!isAdmin(query.from.id)) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' }).catch(() => {}) || bot.sendMessage(chatId, '⚠️ Scraper khusus admin.');
     }
-    const rawUrl = data.slice(7);
+    const ke = splitUrlAndPage(data, 'kur_ep');
+    const rawUrl = ke.urlId;
     const episodeUrl = kuronimeEpisodeMap.get(rawUrl) || resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!episodeUrl) {
       return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
@@ -4197,7 +4238,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       if (!keyboard.length) return bot.editMessageText(`⚠️ Gagal: no servers — coba episode lain.`, { chat_id: chatId, message_id: msgId }).catch(() => {});
       const kurInfoBack = parseKuronimeEpisode(episodeUrl);
       const animeUrlBack = kurInfoBack?.slug ? `https://kuronime.sbs/anime/${kurInfoBack.slug}/` : null;
-      if (animeUrlBack) keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}` }]);
+      if (animeUrlBack) keyboard.push([{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}:0` }]);
       return bot.editMessageText(`📺 <b>Kuronime ${best.quality}</b>\n\nPilih server untuk download:`, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => bot.sendMessage(chatId, `📺 <b>Kuronime ${best.quality}</b>`, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } }));
@@ -4287,7 +4328,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     if (kurInfoG?.slug) {
       const animeUrlBack = `https://kuronime.sbs/anime/${kurInfoG.slug}/`;
       await bot.sendMessage(chatId, `⬅️ Kembali ke list episode?`, {
-        reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}` }]] },
+        reply_markup: { inline_keyboard: [[{ text: `⬅️ Kembali ke list episode`, callback_data: `kur_back:${cacheUrl(animeUrlBack)}:0` }]] },
       }).catch(() => {});
     }
     return;
@@ -4321,7 +4362,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           reply_markup: { inline_keyboard: [
             ...animeTargetKeyboard(`kur_allgo:tg:${bid}`, `kur_allgo:vyt:${bid}`, `kur_allgo:vv:${bid}`),
             [BTN.btn('⟳ Lengkapi yang hilang', `kur_fix:${bid}`, 'success')],
-            [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}` }],
+            [{ text: '⬅️ Kembali ke list episode', callback_data: `kur_back:${bid}:0` }],
           ] },
         },
       ).catch(async (err) => {
@@ -4496,14 +4537,16 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
 
   // ─── Kuronime: kembali ke list episode ────────────────────────────────────
   if (data.startsWith('kur_back:')) {
-    const rawUrl = data.slice(9);
+    const kb = splitUrlAndPage(data, 'kur_back');
+    const backPage = kb.page;
+    const rawUrl = kb.urlId;
     const animeUrl = resolveUrl(rawUrl) || decodeURIComponent(rawUrl);
     if (!animeUrl) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa' }).catch(() => {});
     await bot.editMessageText('🔍 Memuat daftar episode...', { chat_id: chatId, message_id: msgId }).catch(() => {});
     try {
       const cached = kuronimeEpisodesCache.get(animeUrl);
       const eps = (cached && Date.now() - cached.ts < SAM_CACHE_MS) ? cached.eps : await listKuronimeEpisodes(animeUrl);
-      const { keyboard, caption } = await buildKuronimeEpisodePicker(eps, animeUrl);
+      const { keyboard, caption } = await buildKuronimeEpisodePicker(eps, animeUrl, backPage);
       return bot.editMessageText(caption, {
         chat_id: chatId, message_id: msgId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard },
       }).catch(() => {});
@@ -4612,7 +4655,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     const url = resolveUrl(urlId) || decodeURIComponent(urlId);
     if (!url) return bot.answerCallbackQuery(query.id, { text: '⚠️ Link kadaluarsa, kirim ulang' }).catch(() => {});
 
-    const { detectedTitle, fileName } = await resolveProviderTitle(url);
+    const { detectedTitle, fileName, gds } = await resolveProviderTitle(url);
     // Judul kustom dari "Ganti Judul" lebih diprioritaskan daripada judul
     // terdeteksi dari DB — itu alasan user mengetik ulang judulnya.
     const customTitle = takeCustomTitle(url);
@@ -4660,7 +4703,11 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       // "anime" (nilai default saat sameInfo null).
       const kmTitle = isKamenimeUrl(url) ? kamenimeTitleFromFileName(direct.name || fileName) : null;
       const animeTitle = titleForCap || detectedTitle || kmTitle || fileName || 'Anime';
-    const animeEp = extractPartFromFilename(fileName || '') || 1;
+    // Episodenya sedapat mungkin dari parser Samehadaku (sudah tahu format
+    // "...-EPISODE-SAMEHADAKU..." dan angka 4 digit), bukan dari tebakan nama
+    // file yang memotong 1180 jadi 180. Fallback extractPartFromFilename
+    // dipertahankan untuk nama file yang bukan format Samehadaku.
+    const animeEp = (gds && gds.episode) || extractPartFromFilename(fileName || '') || 1;
       const sameInfo = isKamenimeUrl(url) ? { provider: 'hokireceh' } : null;
     const res = await _vidoyHandlers.actionAnimeEpisode(chatId, {
       target, title: animeTitle, ep: animeEp, sameInfo,

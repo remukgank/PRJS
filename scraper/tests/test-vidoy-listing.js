@@ -286,10 +286,19 @@ function loadService(over) {
   await t('file BELUM ada di listing -> upload normal', async () => {
     const { S, calls } = loadService({
       V: {
-        folderFileIndex: async () => ({
-          byTitle: new Map([['Demo — Ep 04.mp4', { id: 'other', title: 'Demo — Ep 04.mp4' }]]),
-          byId: new Map(), total: 1,
-        }),
+        // Pra-upload (tanpa force): file belum ada → lanjut upload (maksud asli test).
+        // Pasca-upload (force:true dari verifikasi pendaratan): file sudah mendarat
+        // → verifikasi lolos. Tanpa pembedaan ini, stub mengembalikan listing basi
+        // dan verifikasi baru selalu gagal — padahal di produksi force refetch.
+        folderFileIndex: async (id, opts) => {
+          if (opts && opts.force) {
+            return { byTitle: new Map(), byId: new Map([['new1', {}]]), total: 1 };
+          }
+          return {
+            byTitle: new Map([['Demo — Ep 04.mp4', { id: 'other', title: 'Demo — Ep 04.mp4' }]]),
+            byId: new Map(), total: 1,
+          };
+        },
       },
     });
     const r = await S.uploadSingle({

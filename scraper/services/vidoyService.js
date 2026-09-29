@@ -292,6 +292,26 @@ async function uploadSingle(opts) {
   if (folder && folder.id && Vidoy.invalidateFolderFileCache) {
     Vidoy.invalidateFolderFileCache(folder.id);
   }
+  // Verifikasi pasca-upload: filecode HARUS ada di folder SEBELUM DB ditulis.
+  // Insiden 27-28 Sep 2026: 91 + 8 record menunjuk file yang tidak pernah
+  // mendarat (server balas sukses tapi file hilang). Tanpa cek ini, record
+  // phantom memblokir upload ulang via dedup link+part — dan tidak ketahuan
+  // sampai dihitung manual.
+  if (up.filecode && up.folderId && up.folderId !== '0' && Vidoy.folderFileIndex) {
+    try {
+      const idx = await Vidoy.folderFileIndex(up.folderId, { force: true });
+      if (!idx.byId.has(String(up.filecode))) {
+        logger.warn({ mediaKey, kind, part: num, filecode: up.filecode, folderId: up.folderId },
+          'Vidoy: file tidak mendarat di folder — DB tidak ditulis, akan di-retry');
+        return { ok: false, error: 'file tidak mendarat di folder Vidoy (teregistrasi tapi hilang)', filecode: up.filecode };
+      }
+    } catch (e) {
+      // Verifikasi gagal (network) BUKAN bukti file hilang. Fail-open: catat
+      // saja dan lanjut tulis DB. Lebih baik record ditulis daripada upload
+      // sukses tapi tidak tercatat (itu justru membuat duplikat).
+      logger.warn({ err: e.message, filecode: up.filecode }, 'Vidoy: verifikasi folder gagal — lanjut tulis DB');
+    }
+  }
   const item = {
     epStart: num, epEnd: num, part: num, filecode: up.filecode, link: up.link,
     dashboard: up.dashboardLink, folderId: up.folderId,
