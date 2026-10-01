@@ -48,7 +48,10 @@ const eps = Array.from({ length: 500 }, (_, i) => ({ ep: i + 1, url: `https://x/
 t('1) buildPicker default prefix = "sam" (dokumentasi defaultnya)', () => {
   const { keyboard: kb } = buildPicker(eps, { urlId: 'u', mkEp });
   const all = kb[0][0];
-  assert.strictEqual(all.callback_data, 'sam_all:u');
+  // 28 Sep 2026: buildPicker menyisipkan page di akhir callback_data.
+// Format lama 'sam_all:u' (page 0 eksplisit) kini menjadi 'sam_all:u:0'.
+// Lihat test-picker-halaman.js untuk uji kompatibilitas dua arah.
+assert.strictEqual(all.callback_data, 'sam_all:u:0');
 });
 
 t('2) picker KAMENIME memakai prefix "kam" — bukan default', () => {

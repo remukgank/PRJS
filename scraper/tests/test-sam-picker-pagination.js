@@ -34,7 +34,9 @@ t('paginate 220 ep → 11 halaman', () => {
 t('page 0: batch pertama + ep 1-20 + nav Next', () => {
   const { keyboard, meta } = buildPicker(eps, { urlId: 'a42', page: 0, mkEp });
   assert.strictEqual(keyboard[0][0].text, '⬇️ Download Semua (220)');
-  assert.strictEqual(keyboard[0][0].callback_data, 'sam_all:a42');
+  // 28 Sep 2026: picker menyisipkan page di akhir callback_data (lihat
+  // docs/proposals/2026-09-28-picker-halaman.md). Page 0 eksplisit = ':0'.
+  assert.strictEqual(keyboard[0][0].callback_data, 'sam_all:a42:0');
   assert.strictEqual(meta.first, 1);
   assert.strictEqual(meta.last, 20);
   assert.ok(totalButtons(keyboard) <= 100, `too many buttons: ${totalButtons(keyboard)}`);

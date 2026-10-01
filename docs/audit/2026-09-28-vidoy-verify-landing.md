@@ -80,3 +80,33 @@ koreksi #3 yang belum diimplementasikan. Diff ini menyebut library 0 kali.
 
 Dicualikan (butuh network/aria2c): `test-rich.js`, `test-rich-direct.js`,
 `test-all-subdomains.js`, `test-watchdog-aria2c.js`.
+
+---
+
+## Addendum 30 Sep — kuota dua akun, bukti per-akun definitif
+
+Error mentah dari akun 2 (disampaikan user):
+
+```json
+{"status":413,"code":"quota_exceeded","views":166,"used":363005929494,
+ "limit":10737418240,"limit_label":"10 GB","remaining":0,"percent":100,
+ "next_tier":{"views_needed":1000,"label":"100 GB"},"reset_at":"2026-10-01"}
+```
+
+Perbandingan:
+
+```
+            akun 1              akun 2
+views       4                   166
+used        345.420.706.848     363.005.929.494
+limit       5 GB                10 GB
+next        10 GB (100 views)   100 GB (1000 views)
+reset       2026-10-01          2026-10-01
+```
+
+Semua angka beda → counter per-akun, bukan global. Dugaan "sesi nyangkut"
+gugur untuk data ini. Akun 2 di tier 10 GB (2× akun 1) — batch lanjutan
+sebaiknya jalan di akun 2 setelah reset.
+
+Registrasi akun baru dipastikan mati (curl 404 + browser manual 404) —
+bukan proteksi bot. Tidak ada jalan tambah akun.
