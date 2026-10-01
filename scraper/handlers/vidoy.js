@@ -5,9 +5,9 @@ const { logger } = require('../logger');
 const { getVideoUrl } = require('../index');
 const { getVideoUrlReelFren } = require('../providers/reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
-const { isQuotaExceededError, quotaResetDate } = require('../lib/quota');
+const { isQuotaExceededError, quotaResetDate, vidaraDailyLimitError, nextUtcMidnightMs } = require('../lib/quota');
 const db = require('../db');
-const { getSetting, getPartFileId, savePartFileId, upsertMedia } = require('../db');
+const { getSetting, setSetting, getPartFileId, savePartFileId, upsertMedia } = require('../db');
 const { sanitizeSlug } = require('../lib/parser');
 const { kamenimeSourcePattern } = require('../providers/kamenime');
 const { ensureMp4, assertLooksLikeVideo, detectVideoContainer } = require('../services/vidaraService');
@@ -304,6 +304,24 @@ async function actionAnimeEpisode(chatId, opts) {
       ? { vidoy: null, vidara: null, tg: false, error: 'VIDARA_API belum diset' }
       : _ctx.bot.sendMessage(chatId, '⚠️ <code>VIDARA_API</code> belum diset.');
   }
+  // ── Pre-check batas harian Vidara (200 file/hari) ───────────────────────
+  // Bukti 1 Okt 2026: batch vt ep 130–153 mengunduh ~1,7 GB lalu semuanya
+  // gagal — limit sudah penuh sejak episode pertama. Vidara TIDAK punya
+  // endpoint kuota (semua 404, lihat proposal dual-host §2), jadi tidak ada
+  // yang bisa dicek dari API; satu-satunya cara adalah mencatat sendiri saat
+  // limit kena, lalu berhenti SEBELUM download episode berikutnya.
+  // Flag disimpan sebagai epoch ms sampai 00:00 UTC berikutnya.
+  if (needVidara) {
+    const until = Number(await getSetting('vidara_limit_reset_at').catch(() => 0)) || 0;
+    if (until > Date.now()) {
+      const resetAt = `${new Date(until).toISOString().slice(11, 16)} UTC`;
+      const msg = `Vidara limit harian penuh (200 file/hari) — reset ${resetAt}`;
+      logger.warn({ chatId, target, ep, resetAt }, 'skip — limit harian Vidara belum reset');
+      return silent
+        ? { vidoy: null, vidara: null, tg: false, error: msg }
+        : _ctx.bot.sendMessage(chatId, `⚠️ <b>${safeHtml(msg)}</b>\nJalankan lagi setelah reset; episode yang sudah ada tidak akan diulang.`);
+    }
+  }
   const busyKey = String(chatId);
   // Mode batch (silent) tidak mengambil lock: lock dipegang runner batch agar
   // RichProgress tetap bisaupdate dan tidak bentrok dengan dirinya sendiri.
@@ -557,6 +575,14 @@ async function actionAnimeEpisode(chatId, opts) {
   } catch (err) {
     out.error = err.message;
     logger.error({ chatId, ep, target, err: err.message }, 'Anime episode upload gagal');
+    // Limit harian Vidara kena → catat sampai resetnya, supaya episode
+    // berikutnya berhenti di pre-check ATAS, bukan setelah mengorbankan satu
+    // file unduhan penuh. Flag dibaca di pre-check (lihat atas fungsi ini).
+    if (vidaraDailyLimitError(err.message)) {
+      const until = nextUtcMidnightMs();
+      await setSetting('vidara_limit_reset_at', String(until)).catch(() => {});
+      logger.warn({ chatId, ep, target, resetAt: new Date(until).toISOString() }, 'limit harian Vidara dicatat');
+    }
     if (!silent) await p.fail(`Error: ${safeHtml(String(err.message).slice(0, 120))}`);
   } finally {
     _ctx.vidaraBusy.delete(busyKey);

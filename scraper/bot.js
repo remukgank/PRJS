@@ -1086,7 +1086,7 @@ function targetBtn(text, data, enabled, style = 'success') {
   // (~250MB each) lalu semuanya gagal di register — ~15 episode ≈ 4GB terbuang.
   // Deteksi dari pesan error (berisi "quota_exceeded"), bukan HTTP code, karena
   // error sudah dibungkus jadi string saat sampai ke loop batch.
-  const { isQuotaExceededError, quotaResetDate } = require('./lib/quota');
+  const { isQuotaExceededError, quotaStopInfo } = require('./lib/quota');
 
 // Hapus pesan Telegram dari daftar pointer (bentuk kolom DB: tg_chat_id/tg_message_id)
 // lalu laporkan jumlah berhasil / sudah tidak ada.
@@ -3819,19 +3819,19 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           const kmFailBlock = kmFailed.length
             ? `\n\n❌ <b>Gagal (${kmFailed.length}):</b> ${kmFailed.map((n) => `Ep ${n}`).join(', ')}`
             : '';
-          // Kuota habis di tengah jalan → pesan khusus, bukan rekap biasa.
+          // Kuota/limit habis di tengah jalan → pesan khusus, bukan rekap biasa.
           // Episode yang sudah sukses tetap tercatat; yang belum dicoba tidak
           // dihitung gagal (mereka tidak pernah dicoba, bukan gagal).
           if (kmQuotaHit) {
-            const kmReset = quotaResetDate(kmQuotaHit);
+            const stop = quotaStopInfo(kmQuotaHit);
             await bot.sendMessage(chatId,
-              `🛑 <b>Batch dihentikan — Vidoy penuh.</b>\n\n`
+              `🛑 <b>Batch dihentikan — ${stop.headline}.</b>\n\n`
               + `📥 Sukses: <b>${kmOk}</b>${kmSkipped ? ` · ⏭️ Sudah ada: <b>${kmSkipped}</b>` : ''}\n`
               + `❌ Gagal: <b>${kmFailed.length}</b> (termasuk Ep yang kena kuota)\n`
-              + `💾 Kuota Vidoy habis${kmReset ? ` — reset <b>${escHtml(kmReset)}</b>` : ''}.\n`
+              + `💾 ${escHtml(stop.detail)}${stop.reset ? ` — reset <b>${escHtml(stop.reset)}</b>` : ''}.\n`
               + `Jalankan lagi setelah kuota pulih; episode yang sukses tidak akan diulang.`
               + `${kmLinkBlock}${kmFailBlock}`, { parse_mode: 'HTML' }).catch(() => {});
-            logger.info({ chatId, title: kmTitle, target: kmTarget, ok: kmOk, fail: kmFailed.length, skip: kmSkipped }, 'kam_all batch dihentikan (kuota Vidoy)');
+            logger.info({ chatId, title: kmTitle, target: kmTarget, ok: kmOk, fail: kmFailed.length, skip: kmSkipped, host: stop.host }, 'kam_all batch dihentikan');
           } else {
           await bot.sendMessage(chatId, `✅ ${isKmFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(kmTitle)}</b> — ${batchTargetLabel(kmTarget)}\n\n`
             + `📥 Sukses: <b>${kmOk}</b>${kmSkipped ? ` · ⏭️ Sudah ada: <b>${kmSkipped}</b>` : ''}`
@@ -4088,14 +4088,14 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${vidoyLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
       if (quotaHit) {
-        const reset = quotaResetDate(quotaHit);
+        const stop = quotaStopInfo(quotaHit);
         await bot.sendMessage(chatId,
-          `🛑 <b>Batch dihentikan — Vidoy penuh.</b>\n\n`
+          `🛑 <b>Batch dihentikan — ${stop.headline}.</b>\n\n`
           + `📥 Sukses: <b>${ok}</b> · ❌ Gagal: <b>${fail}</b> (termasuk Ep yang kena kuota)\n`
-          + `💾 Kuota Vidoy habis${reset ? ` — reset <b>${escHtml(reset)}</b>` : ''}.\n`
+          + `💾 ${escHtml(stop.detail)}${stop.reset ? ` — reset <b>${escHtml(stop.reset)}</b>` : ''}.\n`
           + `Jalankan lagi setelah kuota pulih; episode yang sukses tidak akan diulang.`
           + `${linkBlock}`, { parse_mode: 'HTML' }).catch(() => {});
-        logger.info({ chatId, title, target, ok, fail }, 'sam_all batch dihentikan (kuota Vidoy)');
+        logger.info({ chatId, title, target, ok, fail, host: stop.host }, 'sam_all batch dihentikan');
       } else
       await bot.sendMessage(chatId, `✅ ${isFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${skippedDone ? ` · sudah lengkap ${skippedDone}` : ''}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
@@ -4634,14 +4634,14 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         ? `\n\n🔗 <b>Link Vidoy:</b>\n${kurLinks.map((l) => escHtml(l)).join('\n')}`
         : '';
       if (quotaHit) {
-        const reset = quotaResetDate(quotaHit);
+        const stop = quotaStopInfo(quotaHit);
         await bot.sendMessage(chatId,
-          `🛑 <b>Batch dihentikan — Vidoy penuh.</b>\n\n`
+          `🛑 <b>Batch dihentikan — ${stop.headline}.</b>\n\n`
           + `📥 Sukses: <b>${ok}</b> · ❌ Gagal: <b>${fail}</b> (termasuk Ep yang kena kuota)\n`
-          + `💾 Kuota Vidoy habis${reset ? ` — reset <b>${escHtml(reset)}</b>` : ''}.\n`
+          + `💾 ${escHtml(stop.detail)}${stop.reset ? ` — reset <b>${escHtml(stop.reset)}</b>` : ''}.\n`
           + `Jalankan lagi setelah kuota pulih; episode yang sukses tidak akan diulang.`
           + `${linkBlock}`, { parse_mode: 'HTML' }).catch(() => {});
-        logger.info({ chatId, title, target, ok, fail }, 'kur_all batch dihentikan (kuota Vidoy)');
+        logger.info({ chatId, title, target, ok, fail, host: stop.host }, 'kur_all batch dihentikan');
       } else {
       await bot.sendMessage(chatId, `✅ ${isFix ? 'Lengkapi' : 'Batch'} <b>${escHtml(title)}</b> — ${batchTargetLabel(target)}\nBerhasil ${ok} · gagal ${fail} · dilewati ${skip}${skippedDone ? ` · sudah lengkap ${skippedDone}` : ''}${linkBlock}`,
         { parse_mode: 'HTML' }).catch(() => {});
