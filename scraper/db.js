@@ -276,6 +276,23 @@ async function listVidaraUploads(dramaKey) {
   }
 }
 
+// Hapus record Vidara setelah file-nya dihapus di server (auto-hapus begitu
+// episode-nya berhasil masuk Vidoy). Dipanggil HANYA setelah deleteVideo
+// sukses: menghapus baris lebih dulu membuat file yatim yang tidak pernah
+// dilacak lagi, persis kelas bug "phantom record" yang sudah pernah terjadi.
+async function deleteVidaraUpload(dramaKey, ep) {
+  try {
+    const r = await pool.query(
+      'DELETE FROM vidara_uploads WHERE drama_key = $1 AND ep = $2 RETURNING filecode',
+      [dramaKey, ep]
+    );
+    return r.rows.length > 0;
+  } catch (err) {
+    logger.error({ err: err.message, dramaKey, ep }, 'Failed to delete vidara upload');
+    return false;
+  }
+}
+
 // ─── Vidoy uploads (link per batch / per episode) ───────────────────────────
 
 async function saveVidoyUpload(rec) {
@@ -705,6 +722,7 @@ module.exports = {
   listRecentVidoyUploads,
   getVidaraUpload,
   listVidaraUploads,
+  deleteVidaraUpload,
   getVidaraDomains,
   setVidaraDomains,
   getVidaraActiveDomain,

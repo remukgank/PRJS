@@ -791,8 +791,18 @@ t('provider langsung: setelah judul, tampilkan pilihan target (bukan langsung TG
   if (!/async function resolveProviderTitle/.test(B)) throw new Error('resolveProviderTitle tidak ada');
   const i = B.indexOf("if (data.startsWith('dl_title_use:')");
   const body = B.slice(i, B.indexOf("if (data.startsWith('dl_go:')", i));
-  if (!/animeTargetKeyboard\(`dl_go:tg:\$\{urlId\}`, `dl_go:vyt:\$\{urlId\}`, `dl_go:vv:\$\{urlId\}`\)/.test(body)) {
-    throw new Error('provider langsung tidak menampilkan pilihan target');
+  // 1 Okt 2026: pola ini sebelumnya mengunci 3 target. Sekarang 5 (vt/v = Vidara),
+  // jadi POLANYA yang harus ikut berubah — bukan karena regresi, tapi karena
+  // kontrak target memang bertambah. Yang tetap dijaga: pilihan target
+  // WAJIB muncul, dan tidak ada jalur langsung ke Telegram.
+  for (const [tg, n] of [['tg', 1], ['vyt', 2], ['vv', 3], ['vt', 4], ['v', 5]]) {
+    if (!body.includes('`dl_go:' + tg + ':${urlId}`')) {
+      throw new Error(`provider langsung tidak menampilkan target ${tg}`);
+    }
+    void n;
+  }
+  if (!/animeTargetKeyboard\(\s*`dl_go:tg:/.test(body)) {
+    throw new Error('pilihan target tidak memakai animeTargetKeyboard');
   }
   if (/handleGofileUrl\(chatId, url, detectedTitle/.test(body)) {
     throw new Error('provider langsung masih langsung ke Telegram tanpa tanya target');
@@ -807,16 +817,39 @@ t('provider langsung: handler dl_go menangani tg & Vidoy', () => {
   if (!/target === 'tg'/.test(body)) throw new Error('tidak ada cabang target tg');
   if (!/actionAnimeEpisode/.test(body)) throw new Error('tidak ada cabang Vidoy');
   if (!/resolveDirectUrl/.test(body)) throw new Error('cabang Vidoy tidak resolve direct URL');
-  if (/vt/.test(body)) throw new Error('target vt (Vidara) tidak boleh ada');
+  // 1 Okt 2026: asumsi lama "vt tidak boleh ada" dibalik — Vidara kini host
+  // kedua yang disengaja (proposal 2026-10-01-vidara-vidoy-dual-host).
+  // Tombol vt/v dibangun di blok SEBELUMNYA (dl_title_use, tempat picker
+  // dibuat), bukan di dalam handler dl_go — jadi yang dijaga di sini adalah
+  // target diteruskan apa adanya ke actionAnimeEpisode tanpa whitelist yang
+  // membuang vt.
+  if (!/target, title: animeTitle, ep: animeEp, sameInfo,/.test(body)) {
+    throw new Error('target tidak diteruskan ke actionAnimeEpisode');
+  }
+  if (/\[(?:'tg'|'vyt'|'vv')[^]]*\]\.includes\(target\)/.test(body)) {
+    throw new Error('handler dl_go menyaring target — vt/v akan ikut terbuang');
+  }
+  const picker = B.slice(
+    B.indexOf("if (data.startsWith('dl_title_use:')"),
+    B.indexOf("if (data.startsWith('dl_go:')")
+  );
+  if (!picker.includes('`dl_go:vt:${urlId}`') || !picker.includes('`dl_go:v:${urlId}`')) {
+    throw new Error('picker harus menawarkan vt dan v (Vidara)');
+  }
 });
 
-t('target vv = Vidoy saja (bukan Vidara+Vidoy)', () => {
+t('target vt/v = Vidara, vv tetap Vidoy saja', () => {
   const V = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
   const i = V.indexOf('const needVidoy');
   const body = V.slice(i, V.indexOf('\n', i + 200));
   if (!/needVidoy = target === 'vyt' \|\| target === 'vv'/.test(body)) throw new Error('vv harus tetap butuh Vidoy');
-  if (!/needVidara = false/.test(body)) throw new Error('Vidara tidak boleh dipakai lagi');
-  if (!/needTg = target === 'tg' \|\| target === 'vyt'/.test(body)) throw new Error('vv tidak butuh Telegram');
+  // needVidara bukan lagi `false` — hanya aktif untuk target vt/v.
+  if (!/needVidara = target === 'vt' \|\| target === 'v'/.test(body)) {
+    throw new Error('Vidara hanya boleh untuk target vt/v');
+  }
+  if (!/needTg = target === 'tg' \|\| target === 'vyt' \|\| target === 'vt'/.test(body)) {
+    throw new Error('hanya tg/vyt/vt yang butuh Telegram — v = Vidara saja');
+  }
 });
 
 
@@ -1174,7 +1207,9 @@ t('episodeButton: warna sesuai status, hanya satu per tombol', () => {
   assert.strictEqual(vo.style, 'danger', 'Vidoy saja harus merah');
   const none = f(null, 8, false);
   assert.strictEqual(none.style, null, 'belum ada tanpa warna');
-  assert.ok(none.text.startsWith('Ep '), 'label polos: ' + none.text);
+  // Label polos = angka saja (tanpa "Ep ") — bukti screenshot 28 Sep: "Ep 1161"
+  // terpotong jadi "Ep ..." di tombol 1/5 lebar. Callback tidak berubah.
+  assert.ok(/^\d+$/.test(none.text), 'label polos harus angka saja: ' + none.text);
   const fb = f(null, 9, true);
   assert.strictEqual(fb.style, 'success', 'fallback done harus hijau');
   for (const o of [lib, tg, vo, none, fb]) {
@@ -1263,8 +1298,9 @@ t('KRITIS: picker memakai status gabungan (bukan hanya library)', () => {
   const doneRule = (BOT.match(/if \(st\.tg\) done\.add\(ep\)/g) || []).length;
   if (doneRule < 2) throw new Error('kedua picker: done hanya dari pointer Telegram: ' + doneRule);
   if (/if \(st\.lib \|\| st\.tg\) done\.add\(ep\)/.test(BOT)) throw new Error('masih ada aturan done = lib ∪ tg');
-  // label 📨 kini dibuat di dalam episodeButton (dipakai kedua picker)
-  if (!/\\ud83d\\udce8 \$\{ep\}/.test(BOT)) throw new Error('label Telegram harus dibuat di episodeButton');
+  // label 📨 kini dibuat di dalam episodeButton (dipakai kedua picker).
+  // Tanpa spasi sejak 28 Sep (label pendek anti-truncate) — regex menerima keduanya.
+  if (!/\\ud83d\\udce8 ?\$\{ep\}/.test(BOT)) throw new Error('label Telegram harus dibuat di episodeButton');
   if ((BOT.match(/episodeButton\(/g) || []).length < 3) throw new Error('episodeButton dipakai di kedua picker + definisi');
   // picker lama (hanya listPartsWithFile) tidak boleh lagi jadi sumber tunggal
   const oldStyle = (BOT.match(/const rows = await listPartsWithFile\(slug\);\s*\n\s*for \(const r of rows \|\| \[\]\) done\.add/g) || []).length;
@@ -1377,7 +1413,7 @@ t('KRITIS: tidak ada identifier tak-terdefinisi di jalur batch anime', () => {
     'Number', 'String', 'Boolean', 'Object', 'Array', 'JSON', 'Math', 'Date', 'Promise', 'Set', 'Map', 'RegExp',
     'decodeURIComponent', 'encodeURIComponent', 'parseInt', 'parseFloat', 'isNaN', 'Error',
     // kata kunci dari teks pesan Indonesia yang mengandung "("
-    'dilewati', 'didukung', 'layak', 'terdaftar', 'async']);
+    'dilewati', 'didukung', 'layak', 'terdaftar', 'dihentikan', 'async']);
   const missingFns = [...called].filter((n) => !known.has(n) && !METHODS.has(n));
   if (missingFns.length) throw new Error('fungsi tak terdefinisi: ' + missingFns.join(', '));
   // Alias modul yang dipakai sebagai `X.yyy` di jalur ini WAJIB terdefinisi.
@@ -1520,7 +1556,11 @@ t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () 
     'toFixed', 'includes', 'split', 'trim', 'replace', 'match', 'test', 'then', 'catch', 'finally',
     'log', 'error', 'warn', 'info', 'sendMessage', 'editMessageText', 'start', 'updateEpisode', 'update',
     'done', 'fail', 'resolve', 'reject', 'stringify', 'parse', 'floor', 'ceil', 'round', 'min', 'max',
-    'get', 'set', 'has', 'padStart', 'flat', 'flatMap', 'at', 'find', 'some', 'every', 'reduce', 'call', 'apply']);
+    'get', 'set', 'has', 'padStart', 'flat', 'flatMap', 'at', 'find', 'some', 'every', 'reduce', 'call', 'apply',
+    // kata Indonesia dari teks pesan/log yang mengandung "(" (mis. 'dihentikan (kuota…').
+    // Test ini memindai string literal sebagai kode — allowlist ini menutupnya,
+    // sama seperti di test identifier di atas.
+    'dilewati', 'didukung', 'layak', 'terdaftar', 'dihentikan']);
   const start = BOT.indexOf('const rows2 = viable.map');
   const end = BOT.indexOf("logger.info({ chatId, title, target, ok, fail, skip }", start);
   const body = BOT.slice(start, end > start ? end : start + 3000)
@@ -1537,13 +1577,26 @@ t('KRITIS: tidak ada panggilan fungsi tak-terdefinisi di jalur batch anime', () 
   if (/(^|[^.\w])targetLabel\(/.test(BOT)) throw new Error('masih memanggil targetLabel yang tidak di-import');
 });
 
-t('KRITIS: batchTargetLabel memetakan 3 target dengan benar (tanpa Vidara)', () => {
+t('KRITIS: batchTargetLabel memetakan 5 target dengan benar (termasuk Vidara)', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
   const i = BOT.indexOf('function batchTargetLabel');
-  const f = new Function(BOT.slice(i, BOT.indexOf('\n}', i) + 2) + '\nreturn batchTargetLabel;')();
+  // 1 Okt 2026: pakai hitung kurung, bukan `indexOf('\n}')`. batchTargetLabel
+  // berada DI DALAM fungsi lain (ada indentasi), jadi `\n}` tidak pernah
+  // ketemu dan potongan yang diambil jadi_proc_include baris lain —
+  // gejalanya "require is not defined" yang sama sekali tidak menjelaskan.
+  const start = BOT.indexOf('{', i);
+  let d = 0, end = -1;
+  for (let k = start; k < BOT.length; k++) {
+    if (BOT[k] === '{') d++;
+    else if (BOT[k] === '}') { d--; if (!d) { end = k + 1; break; } }
+  }
+  assert.ok(end > 0, 'tidak bisa menemukan akhir fungsi batchTargetLabel');
+  const f = new Function(BOT.slice(i, end) + '\nreturn batchTargetLabel;')();
   assert.strictEqual(f('tg'), 'Telegram');
   assert.strictEqual(f('vyt'), 'Vidoy + Telegram');
   assert.strictEqual(f('vv'), 'Vidoy');
+  assert.strictEqual(f('vt'), 'Vidara + Telegram');
+  assert.strictEqual(f('v'), 'Vidara');
   assert.ok(f(''), 'target kosong tidak boleh crash');
 });
 
@@ -1819,11 +1872,12 @@ t('KRITIS: "Download Semua" WAJIB menanyakan target dulu (tidak langsung ke Tele
     if (!BOT.includes(`data.startsWith('${prefix}_all:') || data.startsWith('${pick}:')`)) {
       throw new Error(`${prefix}_all tidak punya langkah pilih target`);
     }
-    for (const t of ['tg', 'vyt', 'vv']) {
+    // 1 Okt 2026: 5 target, bukan 3 — vt/v (Vidara) ditambahkan sebagai host
+    // kedua. Yang dijaga: semua target selectable DAN tervalidasi.
+    for (const t of ['tg', 'vyt', 'vv', 'vt', 'v']) {
       if (!BOT.includes(`${pick}:${t}:\${bid}`)) throw new Error(`${prefix}: target ${t} tidak bisa dipilih`);
     }
-    if (BOT.includes(`${pick}:vt:`)) throw new Error(`${prefix}: target vt (Vidara) tidak boleh ditawarkan`);
-    if (!BOT.includes(`if (!['tg', 'vyt', 'vv'].includes(batchTarget))`)) {
+    if (!BOT.includes(`if (!['tg', 'vyt', 'vv', 'vt', 'v'].includes(batchTarget)`)) {
       throw new Error(`${prefix}: target tidak divalidasi`);
     }
   }

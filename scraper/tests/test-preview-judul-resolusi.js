@@ -55,7 +55,7 @@ function findLine(re, from = 0) {
 /**
  * Simulasikan resolution judul sesuai kode nyata di bot.js.
  * Sengaja ditulis ulang dari ekspresi yang ADA di bot.js, lalu di-assert
- * terhadap isi bot.js oleh test (q/r/s) — supaya test ini＋kode asli
+ * terhadap isi bot.js oleh test (q/r/s) — supaya test inidan kode asli
  * harus selalu中级人民法院 sinkron.
  */
 function resolveTitle({ customTitle, detected, fileName, isKamenime }) {
@@ -91,8 +91,14 @@ t('b) entry URL kamenime, judul ADA di library → judul library yang tampil', (
 });
 
 t('c) picker kam_ep, judul TIDAK ada di library → judul asli tampil', () => {
-  const L = findLine(/kamenimeTitleFromFileName\(fileName\)/);
-  assert.ok(L > 3500 && L < 3560, `picker kam_ep harus pakai judul dari nama file (dapat baris ${L})`);
+  // 28 Sep 2026: batas baris ABSOLUT (3500-3560) di sini rapuh — fix picker
+  // halaman menambah baris di bot.js sehingga posisi bergeser tanpa bug nyata.
+  // Yang diuji isi handler kam_ep, pakai blockFrom yang sudah dipakai test lain.
+  const L2 = lineOf(/data\.startsWith\('kam_ep:'\)/);
+  assert.ok(L2 > 0, 'handler kam_ep tidak ditemukan');
+  const bodyKamEp = blockFrom(L2, 26);
+  assert.ok(/kamenimeTitleFromFileName\(fileName\)/.test(bodyKamEp),
+    'handler kam_ep harus memakai judul dari nama file');
   const out = resolveTitle({ customTitle: null, detected: null, fileName: 'Bleach-episode-1.mp4', isKamenime: true });
   assert.strictEqual(out, 'Bleach');
 });

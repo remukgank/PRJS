@@ -75,20 +75,69 @@ async function getUploadServer() {
 }
 
 function extractFilecode(raw) {
+  return extractUploadRef(raw).code;
+}
+
+// Respons upload server Vidara mengembalikan filecode DALAM BENTUK URL LENGKAP
+// (terverifikasi 1 Okt 2026: {"filecode":"https://vidara.to/e/0ijmPKLZqPCMr"}),
+// sedangkan /video/info mengembalikan link tanpa "/e" (https://vidara.to/<code>).
+// Karena itu host TIDAK boleh dipatok di kode: ia diambil dari respons API.
+// Hardcode 'vidara.so' menghasilkan link mati begitu Vidara ganti domain —
+// aturan domain di AGENTS.md ("jangan pernah mempatok domain di teks link").
+function extractUploadRef(raw) {
   let parsed = raw;
   if (typeof raw === 'string') {
     try { parsed = JSON.parse(raw); } catch { parsed = { filecode: raw }; }
   }
-  const root = parsed.result || parsed.data || parsed;
+  const root = (parsed && (parsed.result || parsed.data)) || parsed || {};
   const fc = root.filecode || parsed.filecode;
-  if (!fc) return '';
-  return String(fc).startsWith('http') ? String(fc).split('/').pop() : String(fc);
+  if (!fc) return { code: '', url: '', host: '' };
+  const s = String(fc).trim();
+  if (/^https?:\/\//i.test(s)) {
+    let host = '';
+    let pathPart = s;
+    try {
+      const u = new URL(s);
+      host = u.hostname;
+      pathPart = u.pathname;
+    } catch { /* bukan URL valid → pakai potongan terakhir */ }
+    const code = String(pathPart).replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+    return { code, url: s.replace(/\/+$/, ''), host };
+  }
+  return { code: s, url: '', host: '' };
+}
+
+// Link publik kanonik. Urutan: link dari /video/info (dipakai server sendiri)
+// → bentuk host+code → URL respons upload. Bentuk host+code dipilih lebih dulu
+// daripada URL upload (/e/<code>) supaya link yang baruupload sama persis dengan
+// link yang direkonstruksi dari record DB (vidaraLinkFromRecord) — dua bentuk
+// link berbeda untuk file yang sama bikin caption dan tabel DB tidak sinkron.
+function buildVideoLink(ref, apiLink) {
+  if (apiLink && /^https?:\/\//i.test(String(apiLink))) return String(apiLink);
+  if (ref && ref.code && ref.host) return `https://${ref.host}/${ref.code}`;
+  if (ref && ref.url) return ref.url;
+  return '';
+}
+
+async function videoInfo(filecode) {
+  const data = await vidaraCall('/video/info', { filecode });
+  return data?.result?.[0] || null;
+}
+
+// Hapus file di server. WAJIB sukses dulu baru record DB dihapus (lihat
+// deleteVidaraUpload di db.js) — kalau dibalik, file yatim tak terlacak.
+async function deleteVideo(filecode) {
+  if (!filecode) return false;
+  const data = await vidaraCall('/video/delete', { filecode });
+  return data?.result?.deleted === true || data?.status === 200;
 }
 
 // POST {upload_server} multipart(api_key, file) via curl subprocess.
 // Alasan curl (bukan node http): server upload Vidara tidak menutup koneksi
 // secara reliable ke http.request node (hang) — divergen dengan metode VDL.
-async function uploadFileViaCurl(filePath, onProgress = null) {
+// Mengembalikan { code, url, host } supaya pemanggil bisa menyimpan host ASLI
+// dari respons API (lihat extractUploadRef).
+async function uploadFileRef(filePath, onProgress = null) {
   if (!VIDARA_KEY) throw new Error('VIDARA_API kosong');
   const server = await getUploadServer();
   if (!server) throw new Error('upload_server tidak didapat');
@@ -96,9 +145,9 @@ async function uploadFileViaCurl(filePath, onProgress = null) {
     const args = ['-sS', '-L', '-F', `api_key=${VIDARA_KEY}`, '-F', `file=@"${filePath}"`, server];
     const child = execFile('curl', args, { maxBuffer: 32 * 1024 * 1024, timeout: VIDARA_UPLOAD_TIMEOUT_MS }, (err, stdout) => {
       if (err && !stdout) return reject(new Error(`Vidara curl error: ${err.message}`));
-      const fc = extractFilecode(stdout);
-      if (!fc) return reject(new Error(`Vidara upload: filecode kosong — ${String(stdout).slice(0, 200)}`));
-      resolve(fc);
+      const ref = extractUploadRef(stdout);
+      if (!ref.code) return reject(new Error(`Vidara upload: filecode kosong — ${String(stdout).slice(0, 200)}`));
+      resolve(ref);
     });
     if (onProgress && child.stderr) {
       let lastPct = -1;
@@ -111,6 +160,12 @@ async function uploadFileViaCurl(filePath, onProgress = null) {
       });
     }
   });
+}
+
+// Versi lama: pemanggil drama hanya butuh kode.
+async function uploadFileViaCurl(filePath, onProgress = null) {
+  const ref = await uploadFileRef(filePath, onProgress);
+  return ref.code;
 }
 
 async function waitForEncoding(filecode, maxMs = 300000) {
@@ -299,6 +354,7 @@ async function main() {
 module.exports = {
   readEnv, vidaraCall, getFolderList, createFolder, moveToFolder, renameVideo,
   uploadUrlToVidara, getUploadServer, uploadFileViaCurl, extractFilecode,
+  uploadFileRef, extractUploadRef, buildVideoLink, videoInfo, deleteVideo,
   waitForEncoding, ensureFolder, vidaraFolderName, setDownloadsDir,
   loadGlobal, saveGlobal, loadPerDrama, savePerDrama, sanitizeDir,
   VIDARA_KEY, VIDARA_DOMAIN, VIDARA_API_BASE,

@@ -120,12 +120,23 @@ const LINK        = 'https://vski.cc/e/ujikuncimenu';
     });
 
     // ── wiring di bot.js ─────────────────────────────────────────────────
-    await t('kedua picker (samehadaku & kuronime) memakai vidoyKeysFromEpisodes', () => {
+    await t('semua picker memakai vidoyKeysFromEpisodes (kandidat Vidoy)', () => {
       const src = fs.readFileSync(`${__dirname}/../bot.js`, 'utf8');
       assert.ok(/episodeStatusMap\(\s*slug,\s*title,\s*vidoyKeysFromEpisodes\(/.test(src),
         'bot.js tidak memanggil episodeStatusMap dengan kandidat kunci');
-      const count = (src.match(/vidoyKeysFromEpisodes\(eps, parse/g) || []).length;
-      assert.strictEqual(count, 2, `harus 2 picker (samehadaku+kuronime), dapat ${count}`);
+      // Dulu assertion-nya `strictEqual(count, 2)` — hanya menghitung. Itu basi
+      // begitu commit c14c7a9 menambah picker kamenime (jadi 3), dan akan basi
+      // lagi saat picker ke-4 datang. Sekarang daftar parser-nya disebut
+      // EKSPLISIT, jadi dua arah tertangkap: picker yang hilang ATAU picker baru
+      // yang diam-diam tidak memakai kandidat Vidoy.
+      const WAJIB = ['parseSamehadakuEpisode', 'parseKuronimeEpisode', 'parseKamenimeEpisode'];
+      const dipakai = [...src.matchAll(/vidoyKeysFromEpisodes\(eps,\s*(parse\w+)/g)].map((m) => m[1]);
+      for (const w of WAJIB) {
+        assert.ok(dipakai.includes(w), `picker ${w} tidak memakai vidoyKeysFromEpisodes`);
+      }
+      assert.deepStrictEqual(dipakai.slice().sort(), WAJIB.slice().sort(),
+        `daftar picker tidak sesuai:\n  dipakai: ${dipakai.join(', ')}\n  wajib  : ${WAJIB.join(', ')}`);
+      console.log(`      → ${dipakai.length} picker memakai kandidat: ${dipakai.join(', ')}`);
       assert.ok(!/async function episodeStatusMap\s*\(/.test(src),
         'episodeStatusMap harus diimport dari lib/episode-status, bukan didefinisikan lagi di bot.js');
     });

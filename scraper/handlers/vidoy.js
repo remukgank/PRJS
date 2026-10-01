@@ -5,6 +5,7 @@ const { logger } = require('../logger');
 const { getVideoUrl } = require('../index');
 const { getVideoUrlReelFren } = require('../providers/reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
+const { isQuotaExceededError, quotaResetDate } = require('../lib/quota');
 const db = require('../db');
 const { getSetting, getPartFileId, savePartFileId, upsertMedia } = require('../db');
 const { sanitizeSlug } = require('../lib/parser');
@@ -229,31 +230,68 @@ async function actionVidoyAndTelegramMerge10(chatId, session) {
   }
 }
 
+// Upload satu episode ke Vidara: file lokal → kode, rename, pindah ke folder
+// Judul+musim. Mengembalikan { code, url, host, folderId } — `host` diambil
+// dari respons API (lihat extractUploadRef) supaya caption tidak pernah
+// mempatok domain.
 async function uploadToVidaraFolder(destPath, title) {
-  const filecode = await Vdara.uploadFileViaCurl(destPath);
+  const ref = await Vdara.uploadFileRef(destPath);
+  const filecode = ref.code;
   await Vdara.renameVideo(filecode, `${title}`).catch(() => {});
   let folderUrl = '';
+  let folderId = '';
   try {
     const folderName = Vdara.vidaraFolderName(title, 'anime');
     const fldId = await Vdara.ensureFolder(folderName);
     if (fldId) {
       await Vdara.moveToFolder(filecode, fldId).catch(() => {});
       folderUrl = `${fldId}`;
+      folderId = `${fldId}`;
     }
   } catch (err) {
     logger.warn({ err: err.message }, 'Vidara folder gagal — file tetap di root');
   }
-  return { filecode, folderUrl };
+  // Link final: preferensi link dari /video/info (dipakai server sendiri),
+  // fallback ke URL respons upload. Penting untuk crop: kode bisa belum aktif
+  // beberapa detik setelah upload, dan /video/info adalah bukti sahnya.
+  let link = '';
+  try {
+    const info = await Vdara.videoInfo(filecode);
+    if (info && info.status === 'active') link = Vdara.buildVideoLink(ref, info.link);
+    if (info && info.status === 'error') throw new Error('Vidara encoding error');
+  } catch (err) {
+    if (err && /encoding error/i.test(String(err.message || ''))) throw err;
+    logger.warn({ err: String((err && err.message) || err) }, 'Vidara info gagal — pakai link dari respons upload');
+  }
+  return { filecode, folderUrl, folderId, link: link || Vdara.buildVideoLink(ref), host: ref.host, url: ref.url };
+}
+
+// Rekonstruksi link publik dari record DB (dipakai saat episode dilewati:
+// file sudah ada di Vidara, jadi tidak ada respons API baru).
+function vidaraLinkFromRecord(rec) {
+  if (!rec) return '';
+  const code = String(rec.filecode || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
+  const host = String(rec.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  if (!code) return '';
+  if (!host || !/[.]/.test(host)) return '';
+  return `https://${host}/${code}`;
 }
 
 async function actionAnimeEpisode(chatId, opts) {
   ensureCtx('actionAnimeEpisode');
-  const { target, title, ep, sameInfo, directUrl, episodeUrl, silent } = opts || {};
-  // Target: tg=Telegram, vyt=Vidoy+Telegram, vv=Vidoy saja. Vidara tidak
-  // ditawarkan sebagai target (kecuali jalur Vidara terpisah).
+  const { target, title, ep, sameInfo, directUrl, episodeUrl, silent, localPath } = opts || {};
+  // Target: tg=Telegram, vyt=Vidoy+Telegram, vv=Vidoy saja,
+  //         vt=Vidara+Telegram, v=Vidara saja.
+  // Vidara = host CADANGAN SEMENTARA. Vidoy tetap kanonik: kalau episode sudah
+  // ada di Vidoy, tidak perlu (dan tidak boleh) diunggah ke Vidara lagi.
   const needVidoy = target === 'vyt' || target === 'vv';
-  const needVidara = false;
-  const needTg = target === 'tg' || target === 'vyt';
+  const needVidara = target === 'vt' || target === 'v';
+  const needTg = target === 'tg' || target === 'vyt' || target === 'vt';
+  // Fallback hanya boleh kalau Vidara benar-benar siap dipakai. Tanpa ini,
+  // batch yang tadinya berhenti bersih di 413 akan berubah jadi gagal dengan
+  // pesan "VIDARA_API belum diset" — lebih sulit diagnosa, dan quota failure
+  // yang tadinya jadi sinyal penting jadi tertutup.
+  const canFallbackToVidara = !!(needVidoy && Vdara.VIDARA_KEY);
   // Judul Vidoy (folder + nama file + mediaKey) memakai suffix season/part.
   const vidoyTitle = withSeasonSuffix(title, sameInfo && sameInfo.season, sameInfo && sameInfo.part);
   if (needVidoy && !V.isConfigured()) {
@@ -279,7 +317,42 @@ async function actionAnimeEpisode(chatId, opts) {
   const p = silent
     ? { update() {}, done: async () => {}, fail: async () => {} }
     : await new _ctx.Progress(chatId, `Anime Ep ${ep} — ${targetLabel(target)}`).start();
-  const out = { vidoy: null, vidara: null, tg: false, error: null };
+  const out = { vidoy: null, vidara: null, tg: false, error: null, skipped: false };
+  // ── Pre-check dedupe (hanya jalur Vidara) ────────────────────────────────
+  // Aturan yang diminta user:
+  //   ada di Vidoy  → jangan sentuh Vidara (skip total kalau TG sudah ada)
+  //   ada di Vidara → TIDAK menghalangi Vidoy; hanya mencegah upload ulang ke
+  //                   Vidara (file di sana sudah ada).
+  // Dicek SEBELUM download karena kalau baru dicepatkan di dalam upload, unduhan
+  // 250 MB sudah terlanjur terjadi sebelum ketahuan "sudah ada" — pemborosan
+  // bandwidth yang persis dilarang aturan §6.
+  let preVidoy = null;
+  let preVidara = null;
+  if (needVidara) {
+    const numEp = Number(ep) || 0;
+    preVidara = await db.getVidaraUpload(String(vidoyTitle), numEp).catch(() => null);
+    const rows = await db.listVidoyUploads(String(vidoyTitle), 'anime').catch(() => []);
+    preVidoy = (rows || []).find((r) => Number(r.part) === numEp) || null;
+    const hasTg = !!(preVidoy && preVidoy.tg_chat_id && preVidoy.tg_message_id);
+    if (preVidoy && (!needTg || hasTg)) {
+      logger.info({ chatId, target, ep, title: vidoyTitle }, 'skip — episode sudah ada di Vidoy');
+      out.vidoy = { link: preVidoy.link || '', skipped: true };
+      out.skipped = true;
+      return silent
+        ? out
+        : p.done('⏭️ sudah ada di Vidoy — dilewati').then(() => out);
+    }
+    if (!preVidoy && preVidara && !needTg) {
+      // Vidara-only: file sudah ada di sana, tidak ada pekerjaan lain.
+      logger.info({ chatId, target, ep, title: vidoyTitle }, 'skip — episode sudah ada di Vidara');
+      out.vidara = String(preVidara.filecode || '');
+      out.vidaraLink = vidaraLinkFromRecord(preVidara);
+      out.skipped = true;
+      return silent
+        ? out
+        : p.done(`⏭️ sudah ada di Vidara — dilewati`).then(() => out);
+    }
+  }
   try {
     fs.mkdirSync(outDir, { recursive: true });
       const destPath = path.join(outDir, `${V.sanitizeFolderName(vidoyTitle || 'Anime')} — Ep ${String(ep).padStart(2, '0')}.mp4`);
@@ -293,6 +366,16 @@ async function actionAnimeEpisode(chatId, opts) {
       if (reusable.ok) {
         // Sudah ada & utuh → jangan unduh ulang (Vidoy: dilarang keras duplikat).
         logger.info({ ...logCtx, mb: +(reusable.bytes / 1048576).toFixed(1) }, 'skip download — file sudah ada');
+      } else if (localPath && fs.existsSync(localPath)) {
+        // File sudah diunduh pemanggil (mis. mega streaming yang tidak punya URL
+        // HTTP). Salin ke destPath lalu validasi seperti biasa — directUrl tidak
+        // dibutuhkan di jalur ini, dan ensureMp4 tidak dipanggil.
+        p.update('⬇️ siapkan file lokal');
+        try { fs.copyFileSync(localPath, destPath); }
+        catch (e) { throw new Error('gagal salin file lokal: ' + e.message); }
+        const check = isReusableVideo(destPath);
+        if (!check.ok) throw new Error('file lokal tidak layak pakai: ' + check.why);
+        logger.info({ ...logCtx, mb: +(fs.statSync(destPath).size / 1048576).toFixed(1) }, 'pakai file lokal (tanpa download ulang)');
       } else {
         if (reusable.why !== 'tidak ada') {
           logger.warn({ ...logCtx, why: reusable.why }, 'file ada tapi tidak layak pakai — unduh ulang dari nol');
@@ -316,29 +399,82 @@ async function actionAnimeEpisode(chatId, opts) {
       }
     if (needVidoy) {
       p.update('📤 upload Vidoy');
-      const res = await vidoyService.uploadSingle({
-        kind: 'anime', mediaKey: String(vidoyTitle), title: String(vidoyTitle), ep, episodeUrl, outDir,
-        onProgress: (pc) => p.update(`📤 upload Vidoy ${pc}%`),
-      });
-      if (!res.ok) throw new Error(res.error || 'Vidoy upload gagal');
-      out.vidoy = res;
-      if (res.skipped) out.skipped = true;
+      let res = null;
+      try {
+        res = await vidoyService.uploadSingle({
+          kind: 'anime', mediaKey: String(vidoyTitle), title: String(vidoyTitle), ep, episodeUrl, outDir,
+          onProgress: (pc) => p.update(`📤 upload Vidoy ${pc}%`),
+        });
+        if (!res.ok) throw new Error(res.error || 'Vidoy upload gagal');
+      } catch (vErr) {
+        // Fallback ke Vidara kalau yang gagal adalah KUOTA, bukan file rusak.
+        // Bedanya penting: 413 kuota = storage penuh, file-nya sah dan layak
+        // masuk host lain. Error lain (CDN, signature, jaringan) BUKAN alasan
+        // menyalin file ke host kedua — itu hanya menutupi satusymptom.
+        if (!canFallbackToVidara || !isQuotaExceededError(vErr)) throw vErr;
+        logger.warn({ ...logCtx, err: String(vErr.message).slice(0, 200), reset: quotaResetDate(vErr) },
+          'Vidoy quota habis — fallback ke Vidara');
+        res = null;
+      }
+      if (res) {
+        out.vidoy = res;
+        if (res.skipped) out.skipped = true;
+        // Vidara = cadangan sementara: begitu episode sah di Vidoy, file di
+        // Vidara dihapus supaya kuota Vidara tidak slowly terkuras. Urutan WAJIB
+        // server dulu baru DB: kalau record dihapus lebih dulu dan deleteVideo
+        // gagal, file jadi yatim yang tidak pernah dilacak (pola phantom record).
+        if (preVidara && preVidara.filecode) {
+          try {
+            const del = await Vdara.deleteVideo(String(preVidara.filecode).replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '');
+            if (del) {
+              await db.deleteVidaraUpload(String(vidoyTitle), Number(ep) || 0);
+              logger.info({ ...logCtx }, 'Vidara dibersihkan setelah masuk Vidoy');
+            }
+          } catch (delErr) {
+            logger.warn({ ...logCtx, err: String(delErr.message).slice(0, 160) },
+              'hapus file Vidara gagal — record tetap disimpan agar bisa diulang');
+          }
+        }
+      }
     }
-    if (needVidara) {
-      p.update('📤 upload Vidara');
-      const v = await uploadToVidaraFolder(destPath, `${title} — Ep ${ep}`);
-      out.vidara = v.filecode;
-      if (v.filecode) {
-        const domain = (await getVidaraActiveDomain()) || Vdara.VIDARA_DOMAIN || process.env.VIDARA_DOMAIN || 'vidara.so';
-        await saveVidaraUpload(String(title), Number(ep) || 0, v.filecode, domain, String(title)).catch(() => {});
+    // needVidara = target vt/v, ATAU fallback dari Vidoy kena kuota. Syarat
+    // "tidak ada di Vidoy" mencegah upload ulang: kalau Vidoy sudah punya
+    // (dan yang gagal di atas misal karena register, bukan kuota), episode itu
+    // berstatus ada di Vidoy sehingga tidak perlu disalin ke Vidara.
+    const vidaraAllowed = needVidara || (needVidoy && !out.vidoy && canFallbackToVidara);
+    if (vidaraAllowed && !out.vidoy) {
+      const alreadyInVidara = preVidara && preVidara.filecode;
+      if (alreadyInVidara) {
+        // Sudah ada di Vidara → jangan upload ulang; pakai link yang tersimpan.
+        out.vidara = String(alreadyInVidara);
+        out.vidaraLink = vidaraLinkFromRecord(alreadyInVidara);
+        logger.info({ ...logCtx }, 'Vidara dilewati — file sudah ada (tanpa upload ulang)');
+      } else {
+        p.update('📤 upload Vidara');
+        const numEp = Number(ep) || 0;
+        // Key record = vidoyTitle (suffix musim ikut). Key lama memakai title
+        // polos → Re:Zero S1 dan S3 akan menabrak di baris yang sama.
+        const v = await uploadToVidaraFolder(destPath, `${vidoyTitle} — Ep ${String(numEp).padStart(2, '0')}`);
+        out.vidara = v.filecode;
+        out.vidaraLink = v.link;
+        out.vidaraFallback = !needVidara;
+        if (v.filecode) {
+          const host = v.host || (await getVidaraActiveDomain()) || Vdara.VIDARA_DOMAIN || process.env.VIDARA_DOMAIN || 'vidara.so';
+          await saveVidaraUpload(String(vidoyTitle), numEp, v.filecode, host, String(vidoyTitle)).catch(() => {});
+          logger.info({ ...logCtx, host: v.host || '', fallback: !!out.vidaraFallback }, 'Vidara upload sukses');
+        }
       }
     }
     if (needTg) {
       p.update('📤 kirim Telegram');
       const animeProvider = sameInfo?.provider || 'anime';
+      // Link caption: Vidoy kalau ada, kalau tidak link Vidara (host dari
+      // respons API). Tanpa ini caption target vt hanya 3 baris padahal file
+      // ada di host — padahal kontrak §5 minta 4 baris begitu ada link.
+      const captionLink = (out.vidoy && out.vidoy.link) || out.vidaraLink || '';
       const caption = buildCaption({
         title, provider: animeProvider, part: Number(ep) || 0, epStart: Number(ep) || 0, epEnd: Number(ep) || 0,
-        link: out.vidoy && out.vidoy.link,
+        link: captionLink,
       });
       const vinfo = await getVideoInfo(destPath).catch(() => ({}));
       const mediaOpts = {
@@ -407,7 +543,13 @@ async function actionAnimeEpisode(chatId, opts) {
     const parts = [];
     if (out.skipped && out.vidoy) parts.push('📤 Vidoy ⏭️ sudah ada');
     if (out.tg) parts.push('📤 Telegram ✅');
-    if (out.vidara) parts.push(`📤 Vidara ✅ <code>${safeHtml(out.vidara)}</code>`);
+    // Vidara: tampilkan LINK, bukan kode — kode tidak bisa diklik dan tidak
+    // bisa dipakai ganti-judul nanti. Bedakan hasil fallback (kuota Vidoy)
+    // supaya ringkasan tidak mengarang success yang tidak terjadi.
+    if (out.vidara) {
+      const vidaraShown = out.vidaraLink || out.vidara;
+      parts.push(`${out.vidaraFallback ? '🗜 Vidara (fallback) ✅' : '📤 Vidara ✅'} <code>${safeHtml(vidaraShown)}</code>`);
+    }
     if (out.vidoy && !out.vidoy.skipped) parts.push(`📤 Vidoy ✅ <code>${safeHtml(out.vidoy.link)}</code>`);
     if (out.vidoy && out.vidoy.skipped) parts.push(`📤 link <code>${safeHtml(out.vidoy.link)}</code>`);
     if (!silent) await p.done(parts.join(' · ') || 'selesai');
@@ -451,7 +593,9 @@ function replaceLinkLine(caption, link) {
 }
 
 function targetLabel(target) {
-  const map = { tg: 'Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidoy' };
+  // WAJIB sama dengan batchTargetLabel di bot.js — test Menjaga keduanya agar
+  // tidak menyimpang (satu berubah, satu tidak = label menyesatkan di UI).
+  const map = { tg: 'Telegram', vyt: 'Vidoy + Telegram', vv: 'Vidoy', vt: 'Vidara + Telegram', v: 'Vidara' };
   return map[target] || String(target || '');
 }
 

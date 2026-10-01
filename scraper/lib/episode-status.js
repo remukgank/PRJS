@@ -9,7 +9,7 @@
 // tapi dikirim lewat jalur Vidoy tetap terlihat "belum ada" di menu.
 //   lib = ada di library · tg = ada di Telegram (pointer pesan tersimpan)
 // vidoyTitle = kunci vidoy_uploads (judul), slug = kunci library (media_parts).
-const { listPartsWithFile, listVidoyUploads, findMediaByPattern } = require('../db');
+const { listPartsWithFile, listVidoyUploads, listVidaraUploads, findMediaByPattern } = require('../db');
 const { kamenimeSourcePattern } = require('../providers/kamenime');
 const { withSeasonSuffix } = require('./caption');
 
@@ -51,13 +51,30 @@ async function episodeStatusMap(slug, vidoyTitle, extraVidoyKeys = []) {
     for (const r of results[i] || []) {
       const n = Number(r.part);
       if (!Number.isFinite(n)) continue;
-      const prev = map.get(n) || { lib: false, tg: false, link: null };
+      const prev = map.get(n) || { lib: false, tg: false, link: null, vidara: false };
       map.set(n, {
         lib: prev.lib,
         link: r.link || prev.link || null,
         // gabungan: cukup SATU baris menyimpan pointer → dihitung terkirim
         tg: prev.tg || !!(r.tg_chat_id && r.tg_message_id),
+        vidara: prev.vidara || false,
       });
+    }
+  }
+  // Vidara = host cadangan sementara (kuota Vidoy 5 GB/bulan habis di hari
+  // pertama). Record Vidara SENGAJA tidak mengubah `tg`/`link`, jadi episode
+  // yang hanya ada di Vidara tetap terlihat "perlu dikirim" — sesuai aturan
+  // user: "kalau ada Vidara, boleh download Vidoy". Yang berubah hanya label
+  // ringkasan, supaya operator tahu file sudah ada di host cadangan.
+  // Key WAJIB sama dengan yang ditulis upload (vidoyTitle ber-suffix musim),
+  // kalau tidak setiap label "Vidara saja" akan selalu kosong.
+  for (const k of keys) {
+    const rows = await listVidaraUploads(k).catch(() => []);
+    for (const r of rows || []) {
+      const n = Number(r.ep);
+      if (!Number.isFinite(n)) continue;
+      const prev = map.get(n) || { lib: false, tg: false, link: null, vidara: false };
+      map.set(n, Object.assign(prev, { vidara: true }));
     }
   }
   return map;

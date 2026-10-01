@@ -37,10 +37,19 @@ function botHandler(marker, nextMarker) {
   const j = nextMarker ? BOT.indexOf(nextMarker, i) : -1;
   return BOT.slice(i, j > 0 ? j : i + 20000);
 }
-function vidBlock(marker, len = 9000) {
+/**
+ * Potong blok PADA deklarasi fungsi berikutnya, bukan angka karakter tetap.
+ *
+ * PENTING (1 Okt 2026): `len = 9000` pernah dipakai di sini dan gagal diam-diam
+ * begitu actionAnimeEpisode tumbuh melewati 9 KB (fungsi ini kini ~13 KB setelah
+ * jalur Vidara masuk). Empat tes ikut gagal padahal perilakunya masih benar.
+ * Potong di batas fungsi → panjang fungsi boleh berubah tanpa membuat tesbuta.
+ */
+function vidBlock(marker) {
   const i = VID.indexOf(marker);
   if (i < 0) return '';
-  return VID.slice(i, i + len);
+  const j = VID.indexOf('\nfunction ', i + 1);
+  return VID.slice(i, j > 0 ? j : VID.length);
 }
 
 // ── 1) kam_all: menampilkan pilihan target ───────────────────────────────

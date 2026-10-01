@@ -332,7 +332,9 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     assert.ok(/listKamenimeEpisodes\(text\.trim\(\)\)/.test(src), 'dispatcher harus memanggil listKamenimeEpisodes');
     assert.ok(/data\.startsWith\('kam_ep:'\)/.test(src), 'butuh handler kam_ep:');
     assert.ok(/kamenimeEpisodeMap\.set\(epId, e\.url\)/.test(src), 'butuh map epId → url');
-    assert.ok(/callback_data: `kam_ep:\$\{epId\}`/.test(src), 'butuh callback_data kam_ep');
+    // 28 Sep 2026: picker menyisipkan page di akhir callback_data (lihat
+  // docs/proposals/2026-09-28-picker-halaman.md).
+  assert.ok(/callback_data: `kam_ep:\$\{epId\}:\$\{pg\}`/.test(src), 'butuh callback_data kam_ep');
     // dispatcher halaman anime harus SEBELUM isKamenimeUrl (keduanya mulai 'kamenime')
     const iPage = src.indexOf('if (isKamenimeAnimePage(text)) {');
     const iFile = src.indexOf('if (isKamenimeUrl(text)) {');
@@ -363,8 +365,10 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
     // internal dispatch (pending.handler) → harus 'kamenime' (dipakai dispatch)
     assert.ok(/handler:[^;]*isKamenimeUrl\(url\) \? 'kamenime'/.test(src),
       "pending.handler harus 'kamenime' — kalau 'hokireceh', dispatch `pending.handler === 'kamenime'` tidak akan jalan");
-    // dan harus ada branche dispatch
-    assert.ok(/pending\.handler === 'kamenime'/.test(src), 'butuh cabang dispatch pending.handler === kamenime');
+    // dan dispatch harus tetap bisa mengenali key 'kamenime' di mana pun
+    // 28 Sep 2026: tidak lagi butuh cabang `pending.handler === 'kamenime'`
+    // terpisah — blok custom title satu jalur untuk semua provider, berlabel
+    // lewat PENDING_HANDLER_LABEL. Yang wajib: key dispatch tetap 'kamenime'.
     // label tampilan → hokireceh
     assert.ok(/const provider = [^;]*isKamenimeUrl\(url\) \? 'hokireceh'/.test(src),
       "label provider harus 'hokireceh'");
@@ -441,14 +445,20 @@ const FILE_EP1 = 'https://www.kamenime.com/storage/anime/Naruto%20Shippuden/Naru
   await t('u) setelah "Ganti Judul" kamenime tetap menanyakan target', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'bot.js'), 'utf8');
     // cabang custom-title untuk kamenime TIDAK boleh langsung unduh
-    const i = src.indexOf("if (pending.handler === 'kamenime') {");
-    assert.ok(i > 0, 'butuh cabang kamenime di jalur custom title');
-    const e = src.indexOf("if (pending.handler === 'mega')", i);
+    // 28 Sep 2026: cabang per-provider DIHAPUS — blok custom title sekarang satu
+    // jalur untuk semua provider (fix target picker Ganti Judul). Yang diuji
+    // tetap sama: TIDAK boleh langsung unduh, harus menanyakan target.
+    const i = src.indexOf('// ─── Pending download: custom title input');
+    assert.ok(i > 0, 'blok custom title harus ada');
+    const e = src.indexOf("if (text === '/status')", i);
     const block = src.slice(i, e > i ? e : undefined);
-    assert.ok(!/return handleKamenimeUrl\(/.test(block),
+    assert.ok(!/return handle[A-Za-z]+Url\(/.test(block),
       'custom title TIDAK boleh langsung unduh — harus tampilkan pilihan target');
     assert.ok(/animeTargetKeyboard\(/.test(block), 'harus menanyakan target');
     assert.ok(/rememberCustomTitle\(/.test(block), 'harus menyimpan judul kustom untuk dl_go');
+    // kamenime tetap ter-cover: ada di PENDING_HANDLER_LABEL
+    assert.ok(/kamenime:\s*'Kamenime'/.test(src),
+      'kamenime harus ada di PENDING_HANDLER_LABEL');
     for (const t of ['dl_go:tg:', 'dl_go:vyt:', 'dl_go:vv:']) {
       assert.ok(block.includes(t), `butuh tombol ${t}`);
     }
