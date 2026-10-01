@@ -17,6 +17,7 @@ const { safeHtml } = require('../lib/html');
 const { shortLinkLabel, withSeasonSuffix } = require('../lib/caption');
 const V = require('../vidoy-uploader');
 const Vdara = require('../vidara-uploader');
+const Vdash = require('../vidara-dashboard');
 
 let _ctx = null;
 function initVidoy(ctx) {
@@ -231,18 +232,23 @@ async function actionVidoyAndTelegramMerge10(chatId, session) {
 }
 
 // Upload satu episode ke Vidara: file lokal → kode, rename, pindah ke folder
-// Judul+musim. Mengembalikan { code, url, host, folderId } — `host` diambil
-// dari respons API (lihat extractUploadRef) supaya caption tidak pernah
-// mempatok domain.
-async function uploadToVidaraFolder(destPath, title) {
+// JUDUL (folderTitle — tanpa suffix episode). Mengembalikan { code, url, host,
+// folderId } — `host` diambil dari respons API (lihat extractUploadRef)
+// supaya caption tidak pernah mempatok domain.
+// FIX 1 Okt 2026: `title` (per episode) TIDAK boleh dipakai untuk nama folder
+// — dulu `uploadToVidaraFolder(destPath, "<judul> — Ep 01")` bikin 1 folder
+// per episode (129 folder Dragon Ball). Folder = judul polos; nama file
+// (`renameVideo`) tetap per episode.
+async function uploadToVidaraFolder(destPath, title, folderTitle = title) {
   const ref = await Vdara.uploadFileRef(destPath);
   const filecode = ref.code;
   await Vdara.renameVideo(filecode, `${title}`).catch(() => {});
   let folderUrl = '';
   let folderId = '';
   try {
-    const folderName = Vdara.vidaraFolderName(title, 'anime');
-    const fldId = await Vdara.ensureFolder(folderName);
+    // Per judul, nested di bawah folder root "Anime" kalau dashboard bisa
+    // diakses; kalau tidak, fallback flat dengan nama yang SAMA (judul).
+    const fldId = await Vdash.getOrCreateSeriesFolder(folderTitle);
     if (fldId) {
       await Vdara.moveToFolder(filecode, fldId).catch(() => {});
       folderUrl = `${fldId}`;
@@ -472,7 +478,7 @@ async function actionAnimeEpisode(chatId, opts) {
         const numEp = Number(ep) || 0;
         // Key record = vidoyTitle (suffix musim ikut). Key lama memakai title
         // polos → Re:Zero S1 dan S3 akan menabrak di baris yang sama.
-        const v = await uploadToVidaraFolder(destPath, `${vidoyTitle} — Ep ${String(numEp).padStart(2, '0')}`);
+        const v = await uploadToVidaraFolder(destPath, `${vidoyTitle} — Ep ${String(numEp).padStart(2, '0')}`, vidoyTitle);
         out.vidara = v.filecode;
         out.vidaraLink = v.link;
         out.vidaraFallback = !needVidara;

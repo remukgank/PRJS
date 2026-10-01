@@ -23,6 +23,8 @@ Semuanya berasal dari kegagalan nyata (lihat `docs/audit/`).
 3. **Implement** hanya sesuai scope yang disetujui.
 4. **Test** — `node --check` semua `.js` yang berubah + jalankan test suite.
    Jangan pakai mock untuk hal yang bisa diuji dengan fungsi asli/DB asli.
+   **File tes taruh di folder `.tests/` repo, JANGAN di `/tmp`** (ke-wipe saat
+   restart) supaya bisa dicek ulang kapan saja (`node .tests/<nama>.js`).
 5. **LOG** di `docs/audit/YYYY-MM-DD-judul.md` (format di `.opencode/skills/audit-workflow/SKILL.md`).
 6. **Deploy → verifikasi → baru commit + push + tag.** Jangan commit sebelum
    deploy terverifikasi jalan normal. Patokan tag ada di §3a.

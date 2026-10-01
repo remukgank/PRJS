@@ -9,7 +9,7 @@ description: Use at the start of every session and whenever fixing bugs, changin
 
 0. **Awal sesi** → baca SKILL.md ini dulu; update kalau ada bagian yang usang/gak sesuai lagi (catatan salah, session summary lama → pindahkan ke docs/audit/)
 1. **Proposal fix dulu** (root cause + rencana + scope file) → tunggu user approve
-2. **Implement** hanya sesuai proposal yang disetujui → test lokal: `node --check` semua .js yang berubah + jelaskan skenario functional test (apa yang harus terjadi, apa yang harus di-observe)
+2. **Implement** hanya sesuai proposal yang disetujui → test lokal: `node --check` semua .js yang berubah + jelaskan skenario functional test (apa yang harus terjadi, apa yang harus di-observe). **File tes wajib taruh di `.tests/` repo — JANGAN di `/tmp`** (ke-wipe saat restart) supaya bisa dicek ulang kapan saja (`node .tests/<nama>.js`).
 3. **Cari potensi bug/error/ketidaksesuaian** → cross-check penggunaan API/endpoint dengan dokumentasi/response asli; cek bug kelas yang sama di call path saudara
 4. **Sumber kebenaran API = dokumentasi terbaru** https://core.telegram.org/bots/api (boleh fetch via jina.ai: `https://r.jina.ai/https://core.telegram.org/bots/api`); fitur wajib modern & profesional demi kenyamanan pengguna
 5. **Setelah selesai** → LOG perubahan (file apa saja yang kena + folder mana) di docs/audit/
