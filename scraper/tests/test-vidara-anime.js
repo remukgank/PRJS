@@ -289,7 +289,9 @@ t('17) deleteVidaraUpload ada di db.js dan di-expor', () => {
 
 t('18) caption memakai link Vidoy, atau link Vidara sebagai pengganti', () => {
   const fn = extractFunction(HANDLER_SRC, 'actionAnimeEpisode');
-  assert.ok(/const captionLink = \(out\.vidoy && out\.vidoy\.link\) \|\| out\.vidaraLink \|\| '';/.test(fn),
+  assert.ok(/const vidoyLink = \(out\.vidoy && out\.vidoy\.link\) \|\| '';/.test(fn),
+    'vidoyLink harus dari out.vidoy.link');
+  assert.ok(/const captionLink = vidoyLink \|\| out\.vidaraLink \|\| '';/.test(fn),
     'captionLink harus pakai link Vidoy dulu, lalu Vidara');
   assert.ok(/link: captionLink,/.test(fn), 'buildCaption harus menerima captionLink');
   return 'link ✓';
@@ -322,9 +324,11 @@ t('20) host Vidara diambil dari respons API, tidak dipatok di kode', () => {
   // Domain lain harus ikut terpakai (situsnya bisa ganti domain).
   const lain = V.extractUploadRef('{"filecode":"https://vidara.example/e/XYZ9"}');
   assert.strictEqual(lain.host, 'vidara.example', 'host tidak boleh dipatok');
-  assert.strictEqual(V.buildVideoLink(lain, ''), 'https://vidara.example/XYZ9', 'link dibangun dari host respons');
-  // Link dari API (/video/info) menang karena itu yang dipakai server.
-  assert.strictEqual(V.buildVideoLink(fromUrl, 'https://vidara.to/0ijmPKLZqPCMr'), 'https://vidara.to/0ijmPKLZqPCMr');
+  // Bentuk /e/ (B+ 2 Okt 2026): /{code} ditolak validator fomo-drama.
+  assert.strictEqual(V.buildVideoLink(lain, ''), 'https://vidara.example/e/XYZ9', 'link dibangun dari host respons + /e/');
+  // Link dari API (/video/info) menang karena itu yang dipakai server —
+  // /video/info membalas tanpa /e/ → diseragamkan ke bentuk embed.
+  assert.strictEqual(V.buildVideoLink(fromUrl, 'https://vidara.to/0ijmPKLZqPCMr'), 'https://vidara.to/e/0ijmPKLZqPCMr');
   // extractFilecode lama harus tetap kompatibel (dipakai drama).
   assert.strictEqual(V.extractFilecode('{"filecode":"https://vidara.to/e/0ijmPKLZqPCMr"}'), '0ijmPKLZqPCMr');
   return 'host dinamis ✓';
@@ -332,13 +336,13 @@ t('20) host Vidara diambil dari respons API, tidak dipatok di kode', () => {
 
 t('21) vidaraLinkFromRecord merekonstruksi link dari record DB', () => {
   const got = runExtracted(HANDLER_SRC, 'vidaraLinkFromRecord', [{ filecode: '0ijmPKLZqPCMr', domain: 'vidara.to' }]);
-  assert.strictEqual(got, 'https://vidara.to/0ijmPKLZqPCMr', `link salah: ${got}`);
+  assert.strictEqual(got, 'https://vidara.to/e/0ijmPKLZqPCMr', `link salah: ${got}`);
   // Domain default 'vidara.so' MEMANG ada titik → boleh dipakai sebagai fallback.
   const fb = runExtracted(HANDLER_SRC, 'vidaraLinkFromRecord', [{ filecode: 'ABC', domain: 'vidara.so' }]);
-  assert.strictEqual(fb, 'https://vidara.so/ABC', `fallback salah: ${fb}`);
+  assert.strictEqual(fb, 'https://vidara.so/e/ABC', `fallback salah: ${fb}`);
   // Host/url ikut diterima (kalau kolom berisi URL penuh).
   const full = runExtracted(HANDLER_SRC, 'vidaraLinkFromRecord', [{ filecode: 'https://vidara.to/e/ZZZ1', domain: 'vidara.to' }]);
-  assert.strictEqual(full, 'https://vidara.to/ZZZ1', `URL penuh salah: ${full}`);
+  assert.strictEqual(full, 'https://vidara.to/e/ZZZ1', `URL penuh salah: ${full}`);
   // Tanpa domain tidak boleh fabricating link.
   assert.strictEqual(runExtracted(HANDLER_SRC, 'vidaraLinkFromRecord', [{ filecode: 'ABC', domain: '' }]), '');
   assert.strictEqual(runExtracted(HANDLER_SRC, 'vidaraLinkFromRecord', [null]), '');

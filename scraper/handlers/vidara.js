@@ -248,8 +248,11 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         const info = await getVideoInfo(mergedFile).catch(() => ({}));
         // Link + server hanya kalau file benar-benar ada di host (kontrak §5).
         // Rekonstruksi dari fc + saveDomain — record baru disimpan di blok upload.
+        // Bentuk /e/ (embed): diterima validator fomo-drama tanpa penanganan
+        // khusus; /{code} ditolak → source_path kosong. Semua domain Vidara
+        // teruji menyajikan /e/ (4 URL HTTP 200, 2 Okt 2026).
         const vidaraCode = String(fc || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
-        const vidaraLink = vidaraCode ? `https://${saveDomain}/${vidaraCode}` : '';
+        const vidaraLink = vidaraCode ? `https://${saveDomain}/e/${vidaraCode}` : '';
         const options = {
           caption: [
             `➧ Judul :- <b>${session?.meta?.title || (slug ? slug.replace(/-/g, ' ') : providerLabel)}</b>`,

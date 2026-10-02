@@ -112,10 +112,27 @@ function extractUploadRef(raw) {
 // daripada URL upload (/e/<code>) supaya link yang baruupload sama persis dengan
 // link yang direkonstruksi dari record DB (vidaraLinkFromRecord) — dua bentuk
 // link berbeda untuk file yang sama bikin caption dan tabel DB tidak sinkron.
+//
+// SEMUA jalur kini bentuk /e/ (B+ · proposal fomo-drama 2 Okt 2026):
+// /{code} ditolak validator fomo-drama → source_path kosong. /e/ teruji
+// hidup di semua domain Vidara (vidara.to, iosbgaigo.com, sgoabjgio.com —
+// HTTP 200, 2 Okt 2026). /video/info membalas link TANPA /e/
+// (live-tested: "https://vidara.to/<code>") → diseragamkan di sini.
+function toEmbedUrl(url) {
+  try {
+    const u = new URL(String(url));
+    const seg = u.pathname.split('/').filter(Boolean);
+    if (seg.length === 1 && seg[0] !== 'e') u.pathname = `/e/${seg[0]}`;
+    return u.toString();
+  } catch {
+    return String(url);
+  }
+}
+
 function buildVideoLink(ref, apiLink) {
-  if (apiLink && /^https?:\/\//i.test(String(apiLink))) return String(apiLink);
-  if (ref && ref.code && ref.host) return `https://${ref.host}/${ref.code}`;
-  if (ref && ref.url) return ref.url;
+  if (apiLink && /^https?:\/\//i.test(String(apiLink))) return toEmbedUrl(apiLink);
+  if (ref && ref.code && ref.host) return `https://${ref.host}/e/${ref.code}`;
+  if (ref && ref.url) return toEmbedUrl(ref.url);
   return '';
 }
 
@@ -354,7 +371,7 @@ async function main() {
 module.exports = {
   readEnv, vidaraCall, getFolderList, createFolder, moveToFolder, renameVideo,
   uploadUrlToVidara, getUploadServer, uploadFileViaCurl, extractFilecode,
-  uploadFileRef, extractUploadRef, buildVideoLink, videoInfo, deleteVideo,
+  uploadFileRef, extractUploadRef, buildVideoLink, toEmbedUrl, videoInfo, deleteVideo,
   waitForEncoding, ensureFolder, vidaraFolderName, setDownloadsDir,
   loadGlobal, saveGlobal, loadPerDrama, savePerDrama, sanitizeDir,
   VIDARA_KEY, VIDARA_DOMAIN, VIDARA_API_BASE,

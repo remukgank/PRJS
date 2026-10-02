@@ -280,7 +280,10 @@ function vidaraLinkFromRecord(rec) {
   const host = String(rec.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
   if (!code) return '';
   if (!host || !/[.]/.test(host)) return '';
-  return `https://${host}/${code}`;
+  // Bentuk /e/ — WAJIB sama dengan buildVideoLink dan jalur upload baru:
+  // /{code} ditolak validator fomo-drama (source_path kosong), jadi batch yang
+  // sama bisa diterima sebagian (upload) dan ditolak sebagian (skip).
+  return `https://${host}/e/${code}`;
 }
 
 async function actionAnimeEpisode(chatId, opts) {
