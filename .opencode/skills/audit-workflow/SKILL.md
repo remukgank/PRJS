@@ -1,6 +1,6 @@
 ---
 name: audit-workflow
-description: Use at the start of every session and whenever fixing bugs, changing code, or committing. Enforces: read skill at session start, proposal first before implementation, wait for user approval, strict scope, node --check + functional test scenario, API/endpoint cross-check against latest Telegram Bot API docs, audit log in docs/audit/, deploy via pm2 (ask first) + verify before commit + push + version tag.
+description: Use at the start of every session and whenever fixing bugs, changing code, or committing. Enforces: read skill at session start, proposal first before implementation, wait for user approval, strict scope, node --check + functional test scenario, API/endpoint cross-check against latest Telegram Bot API docs, audit log in docs/audit/, deploy via manual background start on Replit (AGENTS §3, no pm2; ask first) + verify before commit + push + version tag.
 ---
 
 # Audit Workflow
@@ -13,15 +13,19 @@ description: Use at the start of every session and whenever fixing bugs, changin
 3. **Cari potensi bug/error/ketidaksesuaian** → cross-check penggunaan API/endpoint dengan dokumentasi/response asli; cek bug kelas yang sama di call path saudara
 4. **Sumber kebenaran API = dokumentasi terbaru** https://core.telegram.org/bots/api (boleh fetch via jina.ai: `https://r.jina.ai/https://core.telegram.org/bots/api`); fitur wajib modern & profesional demi kenyamanan pengguna
 5. **Setelah selesai** → LOG perubahan (file apa saja yang kena + folder mana) di docs/audit/
-6. **Deploy dulu, baru commit**: restart via pm2 → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
-   - **Izin restart sudah didelegasikan user (27 Sep 2026).** Bot jalan di pm2
-     (`prjs-bot`) → ** bebas restart tanpa Tanya**, ASAL:
-     - tidak ada download/upload yang sedang berjalan (cek `logs/app.log` untuk
-       `download progres` / `Kamenime download` yang < 2 menit lalu), dan
-     - **tidak** sedang di Replit (restart instance Replit = infrastruktur
-       `9router`/FlareSolverr = **tetap perlu izin**; `9router` jangan pernah kill)
-   - Start standar: `pm2 restart prjs-bot && pm2 save` (atau `pm2 start scraper/bot.js --name prjs-bot --cwd /home/runner/workspace --max-memory-restart 700M` kalau prosesnya mati)
-   - Verifikasi: `pm2 list` = online, **1** proses `bot.js`, log startup `Bot running` + `Polling started`, dan kode yang jalan = HEAD
+6. **Deploy dulu, baru commit**: restart bot sesuai AGENTS §3 (Replit =
+   **start manual background**, JANGAN pm2; jangan nyalakan Workflow Run saat
+   proses manual hidup) → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
+   - **Izin restart `scraper/bot.js` sudah didelegasikan user (27 Sep 2026).**
+      ASAL: (1) tidak ada download/upload yang sedang berjalan (cek
+      `logs/telegram-bot-manual.log`; `logs/app.log` hanya era pm2), (2) tidak
+      ada instance lain (`ps -eo pid,cmd | grep bot.js`; `9router` dkk. =
+      infrastruktur, jangan pernah kill). Restart *instance* Replit = perlu izin.
+    - Resep start/stop/monitor = **AGENTS §3** (PID via `pgrep`, log di
+      `logs/telegram-bot-manual.log`, `tail -n` jangan `tail -f`).
+    - Verifikasi: 1 proses `bot.js`, `kill -0 $(cat logs/telegram-bot-manual.pid)`,
+      log startup `Bot running` + `Polling started`, tanpa `409 Conflict`,
+      dan kode yang jalan = HEAD
    - **Tag wajib lengkap & proporsional** terhadap besar perubahan: `v<major>.<minor>.<patch>` — kecil (patch) / sedang (minor) / besar (major)
    - **Penentu utama: ada yang rusak atau tidak.** Kalau tidak ada konsumen lama
      yang harus berubah → **minor**, sesederhana quantify fiturnya. Banyaknya

@@ -53,25 +53,44 @@ bukan penentu — 34 commit tetap boleh jadi satu minor.
 Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
 `!dell` + tombol picker berwarna. Gunakan itu sebagai acuan, bukan intuisi sendiri.
 
-## 3. Proses & pm2
+## 3. Proses & start bot (Replit)
 
-- **Izin restart bot sudah didelegasikan (27 Sep 2026).** Bot jalan di pm2
-  (`prjs-bot`) → **bebas `pm2 restart prjs-bot && pm2 save` tanpa Tanya**, asal:
-  1. **tidak ada** download/upload yang sedang jalan — cek `logs/app.log` untuk
-     `download progres` / `Kamenime download` yang masih berjalan (< 2 menit lalu);
-  2. **tidak sedang di Replit** — restart *instance* Replit menyentuh
-     infrastruktur (`9router`/FlareSolverr) dan **tetap perlu izin**.
-  Yang **tetap butuh izin**: `9router` (jangan pernah kill), FlareSolverr, dan
-  proses apa pun selain `scraper/bot.js`.
-- `9router` = infrastruktur Replit (dari `start.sh`). **Jangan pernah kill.**
+- **Di Replit: JANGAN pakai pm2** (keputusan user, 2 Okt 2026). Start manual
+  **background** — foreground (`exec node scraper/bot.js` langsung) menahan
+  turn terminal dan log hanya terlihat di output command itu.
+- Resep start resmi (user):
+  ```bash
+  cd /home/runner/workspace && mkdir -p logs
+  setsid bash -lc '
+    source /run/replit/env/latest
+    exec node scraper/bot.js
+  ' > logs/telegram-bot-manual.log 2>&1 < /dev/null &
+  sleep 2
+  pgrep -f "node scraper/bot.js" | head -1 > logs/telegram-bot-manual.pid
+  ```
+  Catatan: `$!` = wrapper `setsid` (mati setelah fork) — **PID sejati wajib
+  diambil dengan `pgrep`**, bukan `echo $!` (insiden 2 Okt: PID file salah →
+  `kill` tidak mematikan bot).
+- Sebelum start/stop/restart: (1) **tidak ada** download/upload yang sedang
+  jalan, (2) **tidak ada** instance lain (`ps -eo pid,cmd | grep bot.js`).
+  Log proses manual = `logs/telegram-bot-manual.log` (**terpisah** dari
+  `logs/app.log` yang hanya era pm2).
+- Monitor: `tail -n 100 logs/telegram-bot-manual.log` — **JANGAN `tail -f`**
+  (tidak pernah selesai → menahan turn). Cek hidup:
+  `kill -0 "$(cat logs/telegram-bot-manual.pid)"`.
+  Stop: `kill "$(cat logs/telegram-bot-manual.pid)"`.
+- **Workflow Run (`.replit` = `node scraper/bot.js`) JANGAN dinyalakan** selama
+  proses manual masih hidup → pasti `409 Conflict` (insiden 2 Okt: 3
+  instance, 39× polling error). Workflow dinyalakan/dihentikan owner dari UI.
 - Hanya boleh **1** instance bot. `409 Conflict: terminated by other getUpdates
-  request` = ada instance lain (cek `ps -eo pid,etimes,cmd | grep bot.js`).
-  Jangan tambah instance baru sebelum yakin tidak ada yang jalan.
-- Start standar: `pm2 start scraper/bot.js --name prjs-bot --cwd /home/runner/workspace --max-memory-restart 700M`
-  lalu `pm2 save`.
-- Kalau instance Replit restart → daftar pm2 hilang, tapi bot bisa dijalankan
-  ulang oleh owner. **Konfirmasi dulu ke user** sebelum menyalakan.
-- Log bot yang dijalankan pm2 ada di `~/.pm2/logs/prjs-bot-*.log`.
+  request` = ada instance lain → **matikan salah satu dulu**, jangan tambah
+  instance baru sebelum yakin tidak ada yang jalan.
+- `9router` (dari `start.sh`), FlareSolverr, dan `telegram-bot-api` local
+  (port 9091) = infrastruktur Replit. **Jangan pernah kill.** Proses selain
+  `scraper/bot.js` tetap butuh izin.
+- **Izin restart `scraper/bot.js` sudah didelegasikan (27 Sep 2026)** asal dua
+  syarat di atas terpenuhi. Restart *instance* Replit menyentuh infrastruktur
+  → tetap perlu izin.
 
 ## 4. Aturan kode (pemicu regresi)
 
