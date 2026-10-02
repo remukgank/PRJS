@@ -256,7 +256,11 @@ async function uploadSingle(opts) {
       const hit = index.byTitle.get(fileName);
       if (hit) {
         const filecode = String(hit.id || '');
-        const link = await Vidoy.fetchPublicLink(filecode).catch(() => null);
+        // Fallback dashboardLink WAJIB (pola sama uploader:296): fetchPublicLink
+        // yang gagal jangan sampai menyimpan link '' ke DB (baris simpan di bawah)
+        // — episode itu kehilangan baris Link & Server di caption selamanya.
+        const link = (await Vidoy.fetchPublicLink(filecode).catch(() => null))
+          || `${Vidoy.VIDOY_BASE}/view/${filecode}`;
         logger.info({ mediaKey, kind, part: num, file: fileName, filecode },
           'Vidoy: file sudah ada di folder — skip upload');
         // Self-healing: file ini ada di Vidoy tapi DB tidak punya (proses pernah mati

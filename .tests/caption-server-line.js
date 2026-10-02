@@ -125,6 +125,22 @@ t('lib/telegram sendVideo: show_caption_above_media di SEMUA jalur (>= 2)', () =
   if (count < 2) throw new Error('hanya ' + count + ' (harus >= 2: local API + _bot.sendVideo)');
 });
 
+t('vidoy skip-from-listing: fetchPublicLink gagal → fallback dashboardLink, bukan link \'\'', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'scraper', 'services', 'vidoyService.js'), 'utf8');
+  if (/const link = await Vidoy\.fetchPublicLink\(filecode\)\.catch\(\(\) => null\);/.test(src)) {
+    throw new Error('regresi: tanpa fallback dashboardLink → link \'\' bisa tersimpan ke DB '
+      + 'dan caption episode kehilangan Link & Server permanen');
+  }
+  if (!/\|\| `\$\{Vidoy\.VIDOY_BASE\}\/view\/\$\{filecode\}`/.test(src)) {
+    throw new Error('fallback `${Vidoy.VIDOY_BASE}/view/${filecode}` hilang di vidoyService');
+  }
+  // Unit: pola dashboardLink selalu non-kosong selama filecode ada
+  const base = 'https://vski.cc';
+  const dash = (id) => id ? `${base}/view/${id}` : '';
+  if (dash('abc123') !== 'https://vski.cc/view/abc123') throw new Error('pola dashboardLink salah');
+  if (dash('') !== '') throw new Error('filecode kosong harus hasilkan link kosong');
+});
+
 // ── 4. Skenario end-to-end caption (rekonstruksi dari kasus nyata) ──────────
 t('skenario: episode vt yang di-skip → caption 5 baris dengan link rekonstruksi', () => {
   // Rekonstruksi sama persis dengan vidaraLinkFromRecord utk record DB nyata

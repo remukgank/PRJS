@@ -109,6 +109,30 @@ aktif — ep1 06:06 sudah `done`), `pm2 start scraper/bot.js --name prjs-bot
 `prjs-bot` online PID 3964, `Polling started`, 0 error, 1 instance.
 9router & FlareSolverr tidak tersentuh.
 
+## Follow-up fix (v3.6.2): fallback `dashboardLink` di skip-from-listing Vidoy
+
+Audit jalur Vidoy (permintaan user: "Vidoy gimana tidak ada bug kah?"):
+
+- Upload baru & DB aman: `up.link = fetchPublicLink || dashboardLink`
+  (uploader:296/420) — selalu non-kosong; `vidoy_uploads` **0/1698** record
+  link kosong; `Server :- VIDOY` terisi dari `out.vidoy.link`.
+- **1 celah** (belum pernah kejadian, tapi efek permanen): `vidoyService.js:259`
+  jalur skip-from-listing memakai `fetchPublicLink(...).catch(() => null)`
+  **tanpa fallback** → kalau fetch gagal, `link: ''` ikut disimpan ke DB
+  (self-healing baris 267) → caption episode itu kehilangan Link & Server
+  selamanya.
+- `replaceLinkLine` di `vidoy.js` = dead code (admin.js memakai duplikat
+  lokalnya sendiri) — sampah, bukan bug.
+
+**Fix:** fallback `` `${Vidoy.VIDOY_BASE}/view/${filecode}` `` (pola identik
+uploader:296; `VIDOY_BASE` sudah di-export uploader:595, tidak mematok domain).
+Test anti-regresi di `.tests/caption-server-line.js` (larangan pola tanpa
+fallback + unit pola dashboardLink) → **13 pass**; `test-vidoy-uploader` 164
+pass; `test-media-contract` 12 pass — 0 fail.
+
+**Deploy:** `pm2 restart prjs-bot` 06:27 → PID 4631, `Polling started`,
+0 error, 1 instance (tidak ada download aktif saat restart).
+
 ## Tag
 
 - `v3.6.0` — **minor**: kontrak caption berubah (4→5 baris + fitur baru) tapi
@@ -116,3 +140,5 @@ aktif — ep1 06:06 sudah `done`), `pm2 start scraper/bot.js --name prjs-bot
   (`!dell` + tombol baru = minor).
 - `v3.6.1` — **patch**: fix argumen `vidaraLinkFromRecord(preVidara)` (caption
   skip kehilangan baris Link & Server).
+- `v3.6.2` — **patch**: fallback `dashboardLink` di skip-from-listing Vidoy
+  (cegah `link: ''` permanen di DB).
