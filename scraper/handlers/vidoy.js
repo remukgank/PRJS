@@ -522,15 +522,23 @@ async function actionAnimeEpisode(chatId, opts) {
         : await _ctx.sendVideo(chatId, destPath, mediaOpts);
       out.tg = true;
       const msgId = sent && (sent.message_id || (sent.result && sent.result.message_id));
-      if (msgId && out.vidoy) {
+      if (msgId) {
         const num = Number(ep) || 0;
-        await db.setVidoyTelegramPointer(String(vidoyTitle), 'anime', num, chatId, msgId).catch(() => {});
-        await db.saveVidoyUpload({
-          mediaKey: String(vidoyTitle), kind: 'anime', part: num, epStart: num, epEnd: num, title: vidoyTitle,
-          folderId: out.vidoy.folderId, folderUrl: out.vidoy.folderUrl, link: out.vidoy.link,
-          dashboard: out.vidoy.dashboard, tgChatId: chatId, tgMessageId: msgId,
-          provider: animeProvider, caption,
-        }).catch(() => {});
+        // Pointer Vidara = bukti terkirim untuk episode yang file-nya dipegang
+        // Vidara (target vt): vidoy_uploads tidak punya baris, jadi tanpa ini
+        // status picker tidak pernah hijau walau pesan sudah di topic
+        // (insiden "129 perlu dikirim" · 2 Okt 2026). UPDATE 0 baris kalau
+        // record vidara tidak ada (upload gagal) → bukan error.
+        await db.setVidaraTelegramPointer(String(vidoyTitle), num, chatId, msgId).catch(() => {});
+        if (out.vidoy) {
+          await db.setVidoyTelegramPointer(String(vidoyTitle), 'anime', num, chatId, msgId).catch(() => {});
+          await db.saveVidoyUpload({
+            mediaKey: String(vidoyTitle), kind: 'anime', part: num, epStart: num, epEnd: num, title: vidoyTitle,
+            folderId: out.vidoy.folderId, folderUrl: out.vidoy.folderUrl, link: out.vidoy.link,
+            dashboard: out.vidoy.dashboard, tgChatId: chatId, tgMessageId: msgId,
+            provider: animeProvider, caption,
+          }).catch(() => {});
+        }
       }
       // ── Simpan library (kamenime saja) ────────────────────────────────────
       // handleKamenimeUrl (jalur tg) sudah menyimpan di download.js:817-824,

@@ -65,12 +65,16 @@ Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
     source /run/replit/env/latest
     exec node scraper/bot.js
   ' > logs/telegram-bot-manual.log 2>&1 < /dev/null &
-  sleep 2
-  pgrep -f "node scraper/bot.js" | head -1 > logs/telegram-bot-manual.pid
+  sleep 4
+  pgrep -f 'scraper/bot[.]js' | sort -n | tail -1 > logs/telegram-bot-manual.pid
   ```
   Catatan: `$!` = wrapper `setsid` (mati setelah fork) — **PID sejati wajib
   diambil dengan `pgrep`**, bukan `echo $!` (insiden 2 Okt: PID file salah →
-  `kill` tidak mematikan bot).
+  `kill` tidak mematikan bot). Pattern `bot[.]js` (bukan `bot.js`) supaya
+  pgrep tidak menangkap proses shell yang menjalankan perintahnya sendiri;
+  `sort -n | tail -1` mengambil node (PID terbesar), bukan wrapper yang
+  tersisa. Selalu verifikasi: `kill -0` + `ps -o cmd -p <pid>` harus
+  menunjukkan `node scraper/bot.js`.
 - Sebelum start/stop/restart: (1) **tidak ada** download/upload yang sedang
   jalan, (2) **tidak ada** instance lain (`ps -eo pid,cmd | grep bot.js`).
   Log proses manual = `logs/telegram-bot-manual.log` (**terpisah** dari
@@ -180,9 +184,16 @@ Dikunci oleh `scraper/tests/test-media-contract.js`:
   Record sudah ada → **dilewati**, tidak pernah upload ulang. Tanpa pengecualian.
 - **TELEGRAM: boleh kirim ulang.** Duplikat Telegram bukan bug dan tidak perlu
   dicegah.
-- Status "sudah ada" di picker = gabungan library (`media_parts`) **∪** Telegram
-  (`vidoy_uploads` yang pointer-nya masih tersimpan).
-  Label: `✅ N` library · `📨 N` Telegram saja · `Ep N` belum.
+- Status "sudah ada" di picker = bukti **Telegram** (🔴) **∪** library:
+  - **Bukti Telegram** = `vidoy_uploads.pointer` ∪ `vidara_uploads.pointer`
+    (`setVidaraTelegramPointer` — jalur `vt` tanpa Vidoy) ∪
+    `media_parts.file_id` (file_id pesan yang pernah terkirim). Cukup satu →
+    `tg = true`. Record host **tanpa pointer bukan bukti** terkirim.
+  - **Library** (`media_parts`) saja = ada file tapi belum tentu terkirim.
+  - Label caption: `📨 N di Telegram` · `🔼 N Vidara saja` ·
+    `📄 N perlu dikirim` · `⬜ N belum ada`.
+  - Tombol: `📨ep` biru = terkirim · `📄ep` merah = punya file/library belum
+    terkirim · `✅ep` hijau = fallback · `ep` polos = belum ada.
 
 ## 7. Database
 

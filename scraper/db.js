@@ -81,6 +81,13 @@ async function initDatabase() {
         PRIMARY KEY (drama_key, ep)
       );
     `);
+    // Pointer Telegram per episode — bukti pesan terkirim untuk jalur yang
+    // TIDAK lewat Vidoy (target vt: file di Vidara). Tanpa ini, status picker
+    // membaca vidoy_uploads saja → episode terkirim dianggap "perlu dikirim"
+    // (insiden 129 · 2 Okt 2026). Record tanpa pointer TIDAK dianggap
+    // terkirim — hanya bukti pesan yang mengubah status.
+    await pool.query(`ALTER TABLE vidara_uploads ADD COLUMN IF NOT EXISTS tg_chat_id BIGINT;`);
+    await pool.query(`ALTER TABLE vidara_uploads ADD COLUMN IF NOT EXISTS tg_message_id BIGINT;`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS vidoy_uploads (
         media_key   TEXT NOT NULL,
@@ -266,13 +273,28 @@ async function getVidaraUpload(dramaKey, ep) {
 async function listVidaraUploads(dramaKey) {
   try {
     const r = await pool.query(
-      'SELECT ep, filecode, domain FROM vidara_uploads WHERE drama_key = $1 ORDER BY ep',
+      'SELECT ep, filecode, domain, tg_chat_id, tg_message_id FROM vidara_uploads WHERE drama_key = $1 ORDER BY ep',
       [dramaKey]
     );
     return r.rows;
   } catch (err) {
     logger.error({ err: err.message, dramaKey }, 'Failed to list vidara uploads');
     return [];
+  }
+}
+
+// Tandai episode sudah terkirim ke Telegram — jalur yang file-nya dipegang
+// Vidara (bukan Vidoy), jadi vidoy_uploads tidak punya pointer untuk episode
+// ini. UPDATE saja: kalau record tidak ada, 0 baris kena (bukan error).
+async function setVidaraTelegramPointer(dramaKey, ep, chatId, messageId) {
+  try {
+    await pool.query(
+      `UPDATE vidara_uploads SET tg_chat_id = $3, tg_message_id = $4
+        WHERE drama_key = $1 AND ep = $2`,
+      [dramaKey, Number(ep) || 0, chatId, messageId]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, dramaKey, ep }, 'Failed to set vidara telegram pointer');
   }
 }
 
@@ -508,7 +530,7 @@ async function searchDrama(query) {
 async function listPartsWithFile(slug) {
   try {
     const r = await pool.query(
-      'SELECT part, file_name FROM media_parts WHERE media_slug = $1 AND file_id IS NOT NULL ORDER BY part',
+      'SELECT part, file_name, file_id FROM media_parts WHERE media_slug = $1 AND file_id IS NOT NULL ORDER BY part',
       [slug]
     );
     return r.rows;
@@ -712,6 +734,7 @@ module.exports = {
   saveVidoyUpload,
   listVidoyUploads,
   setVidoyTelegramPointer,
+  setVidaraTelegramPointer,
   clearVidoyTelegramPointer,
   getVidoyLink,
   setPartTelegramPointer,

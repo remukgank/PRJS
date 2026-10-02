@@ -46,7 +46,13 @@ async function episodeStatusMap(slug, vidoyTitle, extraVidoyKeys = []) {
   for (const k of keys) jobs.push(listVidoyUploads(k, 'anime').catch(() => []));
   const results = await Promise.all(jobs);
 
-  for (const r of results[0] || []) set(r.part, { lib: true });
+  for (const r of results[0] || []) {
+    // file_id = file_id pesan Telegram yang pernah terkirim (disimpan
+    // savePartFileId dari `sent.video.file_id`) → bukti "sudah di topic",
+    // bukan sekadar baris library. Tanpa ini episode kamenime-vt terhitung
+    // "perlu dikirim" selamanya (insiden 129 · 2 Okt 2026).
+    set(r.part, { lib: true, ...(r.file_id ? { tg: true } : {}) });
+  }
   for (let i = 1; i < results.length; i++) {
     for (const r of results[i] || []) {
       const n = Number(r.part);
@@ -62,10 +68,13 @@ async function episodeStatusMap(slug, vidoyTitle, extraVidoyKeys = []) {
     }
   }
   // Vidara = host cadangan sementara (kuota Vidoy 5 GB/bulan habis di hari
-  // pertama). Record Vidara SENGAJA tidak mengubah `tg`/`link`, jadi episode
-  // yang hanya ada di Vidara tetap terlihat "perlu dikirim" — sesuai aturan
-  // user: "kalau ada Vidara, boleh download Vidoy". Yang berubah hanya label
-  // ringkasan, supaya operator tahu file sudah ada di host cadangan.
+  // pertama). Record Vidara TANPA pointer tidak mengubah `tg` — presence di
+  // Vidara bukan bukti pesan terkirim (aturan: kalau ada Vidara, boleh
+  // download ke Vidoy). Record DENGAN pointer (`setVidaraTelegramPointer`
+  // ditulis actionAnimeEpisode setelah sukses kirim) = bukti terkirim →
+  // masuk `tg`. Pointer vidara menutup jalur yang tidak punya library
+  // (samehadaku/kuronime target vt). Yang berubah hanya label ringkasan
+  // supaya operator tahu file sudah ada di host cadangan.
   // Key WAJIB sama dengan yang ditulis upload (vidoyTitle ber-suffix musim),
   // kalau tidak setiap label "Vidara saja" akan selalu kosong.
   for (const k of keys) {
@@ -74,7 +83,12 @@ async function episodeStatusMap(slug, vidoyTitle, extraVidoyKeys = []) {
       const n = Number(r.ep);
       if (!Number.isFinite(n)) continue;
       const prev = map.get(n) || { lib: false, tg: false, link: null, vidara: false };
-      map.set(n, Object.assign(prev, { vidara: true }));
+      map.set(n, {
+        lib: prev.lib,
+        link: prev.link,
+        tg: prev.tg || !!(r.tg_chat_id && r.tg_message_id),
+        vidara: true,
+      });
     }
   }
   return map;
