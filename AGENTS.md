@@ -92,9 +92,16 @@ Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
 - `9router` (dari `start.sh`), FlareSolverr, dan `telegram-bot-api` local
   (port 9091) = infrastruktur Replit. **Jangan pernah kill.** Proses selain
   `scraper/bot.js` tetap butuh izin.
-- **Izin restart `scraper/bot.js` sudah didelegasikan (27 Sep 2026)** asal dua
-  syarat di atas terpenuhi. Restart *instance* Replit menyentuh infrastruktur
-  → tetap perlu izin.
+- **Start/restart/stop bot = owner yang jalankan (keputusan 2 Okt 2026).**
+  Agent **tidak** men-start sendiri tanpa diminta — tugas agent: **monitor &
+  lapor** (`tail -n 100 logs/telegram-bot-manual.log`): bot mati, `409
+  Conflict`, error berulang. Kalau diminta start → resep di atas + dua syarat
+  wajib (tidak ada download, tidak ada instance lain).
+- **Instance Replit restart = proses manual ikut mati** (insiden 11:01 —
+  pid2 bootstrap baru, entrypoint `.replit` auto-start sendiri). Kalau log
+  berhenti mendadak / `kill -0` gagal → kemungkinan instance restart →
+  **lapor owner**, jangan diam-diam start sendiri.
+- Restart *instance* Replit menyentuh infrastruktur → tetap perlu izin.
 
 ## 4. Aturan kode (pemicu regresi)
 

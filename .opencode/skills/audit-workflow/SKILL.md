@@ -16,11 +16,10 @@ description: Use at the start of every session and whenever fixing bugs, changin
 6. **Deploy dulu, baru commit**: restart bot sesuai AGENTS §3 (Replit =
    **start manual background**, JANGAN pm2; jangan nyalakan Workflow Run saat
    proses manual hidup) → verifikasi jalan normal → **baru** commit + push + **add tag versi** baru
-   - **Izin restart `scraper/bot.js` sudah didelegasikan user (27 Sep 2026).**
-      ASAL: (1) tidak ada download/upload yang sedang berjalan (cek
-      `logs/telegram-bot-manual.log`; `logs/app.log` hanya era pm2), (2) tidak
-      ada instance lain (`ps -eo pid,cmd | grep bot.js`; `9router` dkk. =
-      infrastruktur, jangan pernah kill). Restart *instance* Replit = perlu izin.
+   - **Start/restart/stop bot = owner yang jalankan (2 Okt 2026)** — agent
+      cukup **monitor & lapor**; start hanya kalau diminta (syarat & resep di
+      AGENTS §3: tidak ada download, tidak ada instance lain, `9router` dkk. =
+      infrastruktur jangan pernah kill). Restart *instance* Replit = perlu izin.
     - Resep start/stop/monitor = **AGENTS §3** (PID via `pgrep`, log di
       `logs/telegram-bot-manual.log`, `tail -n` jangan `tail -f`).
     - Verifikasi: 1 proses `bot.js`, `kill -0 $(cat logs/telegram-bot-manual.pid)`,
