@@ -75,8 +75,9 @@ t('skip Vidara memakai preVidara (objek record), BUKAN alreadyInVidara (string f
     throw new Error('regresi insiden ep1 2 Okt 06:06: alreadyInVidara = string filecode → '
       + 'vidaraLinkFromRecord balik \'\' → caption tanpa Link & Server');
   }
-  if (!/vidaraLinkFromRecord\(preVidara\)/.test(src)) {
-    throw new Error('jalur skip tidak lagi memanggil vidaraLinkFromRecord(preVidara)');
+  // preVidara harus tetap argumen PERTAMA — argumen ke-2 (activeDomain) boleh ada.
+  if (!/vidaraLinkFromRecord\(preVidara[,)]/.test(src)) {
+    throw new Error('jalur skip tidak lagi memanggil vidaraLinkFromRecord(preVidara, …)');
   }
   // Rekonstruksi runtime: string filecode vs objek record
   const pre = { filecode: 'IIV7UjteaSEbx', domain: 'vidara.to' };

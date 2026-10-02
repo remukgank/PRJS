@@ -274,10 +274,15 @@ async function uploadToVidaraFolder(destPath, title, folderTitle = title) {
 
 // Rekonstruksi link publik dari record DB (dipakai saat episode dilewati:
 // file sudah ada di Vidara, jadi tidak ada respons API baru).
-function vidaraLinkFromRecord(rec) {
+// activeDomain = setting admin (UI "🌐 Domain Vidara") → diprioritaskan atas
+// domain record (kontrak UI: "Domain akan dipakai untuk generate link embed").
+// Record DB tidak diubah — tetap bukti domain saat upload (bukti Telegram ∪
+// library tidak terpengaruh).
+function vidaraLinkFromRecord(rec, activeDomain = '') {
   if (!rec) return '';
   const code = String(rec.filecode || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
-  const host = String(rec.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  const host = String(activeDomain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
+    || String(rec.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
   if (!code) return '';
   if (!host || !/[.]/.test(host)) return '';
   // Bentuk /e/ — WAJIB sama dengan buildVideoLink dan jalur upload baru:
@@ -373,7 +378,7 @@ async function actionAnimeEpisode(chatId, opts) {
       // Vidara-only: file sudah ada di sana, tidak ada pekerjaan lain.
       logger.info({ chatId, target, ep, title: vidoyTitle }, 'skip — episode sudah ada di Vidara');
       out.vidara = String(preVidara.filecode || '');
-      out.vidaraLink = vidaraLinkFromRecord(preVidara);
+      out.vidaraLink = vidaraLinkFromRecord(preVidara, (await getVidaraActiveDomain()) || '');
       out.skipped = true;
       return silent
         ? out
@@ -477,7 +482,7 @@ async function actionAnimeEpisode(chatId, opts) {
         // filecode → vidaraLinkFromRecord menerima string dan selalu balik ''
         // (caption jadi 3 baris tanpa Link/Server — insiden ep1 2 Okt 06:06).
         out.vidara = String(alreadyInVidara);
-        out.vidaraLink = vidaraLinkFromRecord(preVidara);
+        out.vidaraLink = vidaraLinkFromRecord(preVidara, (await getVidaraActiveDomain()) || '');
         logger.info({ ...logCtx }, 'Vidara dilewati — file sudah ada (tanpa upload ulang)');
       } else {
         p.update('📤 upload Vidara');
@@ -485,13 +490,18 @@ async function actionAnimeEpisode(chatId, opts) {
         // Key record = vidoyTitle (suffix musim ikut). Key lama memakai title
         // polos → Re:Zero S1 dan S3 akan menabrak di baris yang sama.
         const v = await uploadToVidaraFolder(destPath, `${vidoyTitle} — Ep ${String(numEp).padStart(2, '0')}`, vidoyTitle);
+        // Domain embed = setting admin (UI "🌐 Domain Vidara"), respons API
+        // hanya fallback — kontrak UI: link selalu https://<domain>/e/<code>.
+        const activeDomain = (await getVidaraActiveDomain()) || '';
         out.vidara = v.filecode;
-        out.vidaraLink = v.link;
+        out.vidaraLink = activeDomain && v.filecode
+          ? Vdara.buildVideoLink({ code: v.filecode, host: activeDomain })
+          : v.link;
         out.vidaraFallback = !needVidara;
         if (v.filecode) {
-          const host = v.host || (await getVidaraActiveDomain()) || Vdara.VIDARA_DOMAIN || process.env.VIDARA_DOMAIN || 'vidara.so';
+          const host = activeDomain || v.host || Vdara.VIDARA_DOMAIN || process.env.VIDARA_DOMAIN || 'vidara.so';
           await saveVidaraUpload(String(vidoyTitle), numEp, v.filecode, host, String(vidoyTitle)).catch(() => {});
-          logger.info({ ...logCtx, host: v.host || '', fallback: !!out.vidaraFallback }, 'Vidara upload sukses');
+          logger.info({ ...logCtx, host: v.host || '', activeDomain, fallback: !!out.vidaraFallback }, 'Vidara upload sukses');
         }
       }
     }
