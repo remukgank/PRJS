@@ -142,10 +142,16 @@ Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
 Dikunci oleh `scraper/tests/test-media-contract.js`:
 
 - Setiap video **wajib** dikirim dengan `supports_streaming: true`.
-- Format caption **tetap** 4 baris:
-  - drama: `➧ Judul` / `➧ Part/Episode :- 1 (Ep 1–10)` / `➧ Provider` / `➧ Link`
-  - anime: `➧ Judul` / `➧ Episode :- 5` / `➧ Provider` / `➧ Link`
+- Setiap video **wajib** dikirim dengan `show_caption_above_media: true`
+  (caption tampil di atas media — fitur modern, ditambahkan 2 Okt 2026).
+- Format caption: 4 baris **+ `Server` = 5 baris** saat link & host tersedia
+  (3 baris kalau tidak ada link sama sekali):
+  - drama: `➧ Judul` / `➧ Part/Episode :- 1 (Ep 1–10)` / `➧ Provider` / `➧ Link` / `➧ Server`
+  - anime: `➧ Judul` / `➧ Episode :- 5` / `➧ Provider` / `➧ Link` / `➧ Server`
   - label link = domain **asli** URL.
+  - `Server :- VIDOY|VIDARA` = host yang **benar-benar memegang file episode
+    itu**; hanya tampil bersama Link (upload gagal → tanpa Link & tanpa Server).
+  - caption tanpa host (download manual) → tanpa baris Link & Server.
 - Caption tidak boleh pernah memuat `undefined`.
 - Anime dikirim lewat `sendAnimeMedia` → topic **Anime** (bukan General).
 

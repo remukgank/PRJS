@@ -4,7 +4,8 @@
 //
 // Dua hal yang user minta berkali-kali dan tidak boleh berubah:
 //   1. Video WAJIB dikirim dengan supports_streaming (Telegram tidak stream kalau tidak)
-//   2. Format caption WAJIB persis seperti di bawah (4 baris, urutan & label tetap)
+//   2. Format caption WAJIB persis seperti di bawah (4 baris + Link/Server
+//      kalau ada — 5 baris saat link & server tersedia, urutan & label tetap)
 //
 // Test ini sengaja berada di file terpisah supaya jelas: kalau ada yang mengubah
 // streaming atau format caption, test ini GAGAL dengan pesan yang menunjuk
@@ -32,26 +33,34 @@ const listJs = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((d)
 });
 
 // ── 1. FORMAT CAPTION: persis, karakter demi karakter ───────────────────────
-t('KONTRAK: caption anime (episode tunggal) persis', () => {
+t('KONTRAK: caption anime (episode tunggal) persis 5 baris + Server', () => {
   eq(
-    V.buildCaption({ title: 'Naruto Kecil', provider: 'samehadaku', part: 5, epStart: 5, epEnd: 5, link: 'https://vski.cc/e/abc' }),
+    V.buildCaption({ title: 'Naruto Kecil', provider: 'samehadaku', part: 5, epStart: 5, epEnd: 5, link: 'https://vski.cc/e/abc', server: 'VIDOY' }),
     '➧ Judul :- <b>Naruto Kecil</b>\n'
     + '➧ Episode :- 5\n'
     + '➧ Provider :- samehadaku\n'
-    + '➧ Link :- <a href="https://vski.cc/e/abc">vski.cc/e/abc</a>',
+    + '➧ Link :- <a href="https://vski.cc/e/abc">vski.cc/e/abc</a>\n'
+    + '➧ Server :- VIDOY',
     'format caption anime berubah'
   );
 });
 
-t('KONTRAK: caption drama (gabung 10) persis', () => {
+t('KONTRAK: caption drama (gabung 10) persis 5 baris + Server', () => {
   eq(
-    V.buildCaption({ title: 'Terobsesi Padanya Siang dan Malam', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/ru9a4av12kd9' }),
+    V.buildCaption({ title: 'Terobsesi Padanya Siang dan Malam', provider: 'dramawave', part: 1, epStart: 1, epEnd: 10, link: 'https://vski.cc/e/ru9a4av12kd9', server: 'VIDARA' }),
     '➧ Judul :- <b>Terobsesi Padanya Siang dan Malam</b>\n'
     + '➧ Part/Episode :- 1 (Ep 1–10)\n'
     + '➧ Provider :- dramawave\n'
-    + '➧ Link :- <a href="https://vski.cc/e/ru9a4av12kd9">vski.cc/e/ru9a4av12kd9</a>',
+    + '➧ Link :- <a href="https://vski.cc/e/ru9a4av12kd9">vski.cc/e/ru9a4av12kd9</a>\n'
+    + '➧ Server :- VIDARA',
     'format caption drama berubah'
   );
+});
+
+t('KONTRAK: caption tanpa server tetap 4 baris (Link saja)', () => {
+  const c = V.buildCaption({ title: 'X', provider: 'p', part: 1, epStart: 1, epEnd: 1, link: 'https://vski.cc/e/a' });
+  if (c.split('\n').length !== 4) throw new Error('harus 4 baris tanpa server: ' + c);
+  if (c.includes('➧ Server')) throw new Error('baris Server muncul tanpa server: ' + c);
 });
 
 t('KONTRAK: caption drama part terakhir tetap "Part/Episode"', () => {
@@ -166,6 +175,15 @@ t('KONTRAK: lib/telegram meneruskan supports_streaming ke API', () => {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'telegram.js'), 'utf8');
   if (!/const \{ caption, supports_streaming/.test(src)) throw new Error('supports_streaming tidak diteruskan di lib/telegram');
   if ((src.match(/supports_streaming,/g) || []).length < 2) throw new Error('field tidak dikirim di semua jalur API');
+});
+
+t('KONTRAK: sendVideo menampilkan caption di atas media (show_caption_above_media)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'lib', 'telegram.js'), 'utf8');
+  const count = (src.match(/show_caption_above_media: true/g) || []).length;
+  if (count < 2) {
+    throw new Error('show_caption_above_media harus dikirim di SEMUA jalur sendVideo '
+      + '(local API & _bot.sendVideo) — ketemu ' + count + ' (harus >= 2)');
+  }
 });
 
 console.log(`\n${pass} pass, ${fail} fail`);

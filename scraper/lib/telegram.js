@@ -229,6 +229,7 @@ async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
           video: toLocalFileRef(filePath),
           caption: cap,
           parse_mode,
+          show_caption_above_media: true,
           supports_streaming,
           ...(message_thread_id && { message_thread_id }),
           ...(duration && { duration }),
@@ -238,6 +239,7 @@ async function sendVideo(chatId, filePath, opts = {}, cacheInfo = null) {
       : _bot.sendVideo(chatId, filePath, {
           caption: cap,
           parse_mode,
+          show_caption_above_media: true,
           supports_streaming,
           ...(message_thread_id && { message_thread_id }),
           ...(duration && { duration }),

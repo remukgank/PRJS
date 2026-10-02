@@ -165,7 +165,7 @@ async function actionVidoyAndTelegramMerge10(chatId, session) {
   try {
     fs.mkdirSync(workDir, { recursive: true });
     const sendTelegram = async (item) => {
-      const caption = buildCaption({ title, provider: providerLabel, part: item.part, epStart: item.epStart, epEnd: item.epEnd, link: item.link });
+      const caption = buildCaption({ title, provider: providerLabel, part: item.part, epStart: item.epStart, epEnd: item.epEnd, link: item.link, server: item.link ? 'VIDOY' : '' });
       const vinfo = await getVideoInfo(item.filePath).catch(() => ({}));
       try {
         const mediaOpts = {
@@ -495,10 +495,14 @@ async function actionAnimeEpisode(chatId, opts) {
       // Link caption: Vidoy kalau ada, kalau tidak link Vidara (host dari
       // respons API). Tanpa ini caption target vt hanya 3 baris padahal file
       // ada di host — padahal kontrak §5 minta 4 baris begitu ada link.
-      const captionLink = (out.vidoy && out.vidoy.link) || out.vidaraLink || '';
+      const vidoyLink = (out.vidoy && out.vidoy.link) || '';
+      const captionLink = vidoyLink || out.vidaraLink || '';
+      // Server = host yang benar-benar memegang file episode ini. Hanya tampil
+      // kalau ada link (server tanpa link menyesatkan — file mungkin gagal upload).
+      const captionServer = vidoyLink ? 'VIDOY' : (captionLink ? 'VIDARA' : '');
       const caption = buildCaption({
         title, provider: animeProvider, part: Number(ep) || 0, epStart: Number(ep) || 0, epEnd: Number(ep) || 0,
-        link: captionLink,
+        link: captionLink, server: captionServer,
       });
       const vinfo = await getVideoInfo(destPath).catch(() => ({}));
       const mediaOpts = {
@@ -606,12 +610,13 @@ function partEpisodeLabel(part, epStart, epEnd) {
     : `Part/Episode :- Ep ${epStart}\u2013${epEnd}`;
 }
 
-function buildCaption({ title, provider, part, epStart, epEnd, link }) {
+function buildCaption({ title, provider, part, epStart, epEnd, link, server }) {
   return [
     `➧ Judul :- <b>${safeHtml(title || '\u2014')}</b>`,
     `➧ ${partEpisodeLabel(part, epStart, epEnd)}`,
     `➧ Provider :- ${safeHtml(provider || '\u2014')}`,
     ...(link ? [`➧ Link :- <a href="${safeHtml(link)}">${safeHtml(shortLinkLabel(link))}</a>`] : []),
+    ...(server ? [`➧ Server :- ${safeHtml(server)}`] : []),
   ].join('\n');
 }
 

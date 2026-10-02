@@ -7,6 +7,7 @@ const { getVideoUrlReelFren } = require('../providers/reelfren');
 const { getVidaraActiveDomain, saveVidaraUpload } = require('../db');
 const { ensureMp4, uploadDramaBatchesVidara, ffmpegConcat, providerDownSig, pushStreak, providerDownSerialMsg } = require('../services/vidaraService');
 const { fileSizeMb, getVideoInfo } = require('../downloader');
+const { shortLinkLabel } = require('../lib/caption');
 const V = require('../vidara-uploader');
 
 // ctx: { bot, logger, config: { MAX_UPLOAD_MB }, vidaraBusy, sendVideo, Progress, RichProgress, downloadAndSend }
@@ -229,13 +230,15 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
 
         // 3. Upload ke Vidara
         rp.updateLabel(partLabel, 'upload', 'Vidara...');
+        let fc = '';
         try {
-          const fc = await V.uploadFileViaCurl(mergedFile);
+          fc = await V.uploadFileViaCurl(mergedFile);
           vidFiles[`${pad(epStart)}-${pad(epEnd)}`] = fc;
           vidDone++;
           // Simpan ke DB vidara_uploads (untuk web + ganti-link)
           for (let ep = epStart; ep <= epEnd; ep++) saveVidaraUpload(dramaKey, ep, fc, saveDomain, title).catch(() => {});
         } catch (e) {
+          fc = '';
           vidFail++;
           logger.error({ chatId, part: partLabel, err: e.message }, 'Vidara upload fail');
         }
@@ -243,11 +246,17 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
         // 4. Kirim ke Telegram (file yang SAMA)
         rp.updateLabel(partLabel, 'send', 'Telegram...');
         const info = await getVideoInfo(mergedFile).catch(() => ({}));
+        // Link + server hanya kalau file benar-benar ada di host (kontrak §5).
+        // Rekonstruksi dari fc + saveDomain — record baru disimpan di blok upload.
+        const vidaraCode = String(fc || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
+        const vidaraLink = vidaraCode ? `https://${saveDomain}/${vidaraCode}` : '';
         const options = {
           caption: [
             `➧ Judul :- <b>${session?.meta?.title || (slug ? slug.replace(/-/g, ' ') : providerLabel)}</b>`,
             `➧ Episode/Part :- <b>${partLabel}</b>`,
             `➧ Provider :- <tg-spoiler>${providerLabel}</tg-spoiler>`,
+            ...(vidaraLink ? [`➧ Link :- <a href="${vidaraLink}">${shortLinkLabel(vidaraLink)}</a>`] : []),
+            ...(vidaraLink ? [`➧ Server :- VIDARA`] : []),
           ].join('\n'),
           parse_mode: 'HTML',
           supports_streaming: true,
