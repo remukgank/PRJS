@@ -75,8 +75,44 @@ ketiganya **tidak meng-upload ke host mana pun** → tanpa baris Link & Server
    `editMessageCaption` — tapi butuh `message_id` yang belum tersimpan
    (proposal A/B pointer TG masih menunggu keputusan user).
 
+## Follow-up fix (v3.6.1): skip Vidara kirim string ke `vidaraLinkFromRecord`
+
+Setelah deploy v3.6.0, user kirim ulang ep1 target `vt` (06:06:44 log) dan
+menerima caption **3 baris tanpa Link & Server** — padahal `Vidara dilewati`
+muncul (record ada).
+
+**Root cause** (`vidoy.js:474`):
+
+```js
+const alreadyInVidara = preVidara && preVidara.filecode; // → STRING "IIV7UjteaSEbx"
+out.vidaraLink = vidaraLinkFromRecord(alreadyInVidara);   // ❌ terima string
+// rec.filecode → undefined → code='' → return '' → captionLink='' → 3 baris
+```
+
+Baris 373 (jalur `!needTg`) sudah benar memakai `preVidara` (objek). Rekonstruksi
+runtime: `recode(preVidara)` = `https://vidara.to/IIV7UjteaSEbx` ✓ vs
+`recode("IIV7UjteaSEbx")` = `''` ✗.
+
+**Pelajaran (sesuai AGENTS §4):** verifikasi tadi menguji *fungsi*
+(`vidaraLinkFromRecord` dgn objek literal = benar) tapi bukan *pemanggilannya* —
+argumen runtime bisa berbeda dari yang disangka.
+
+**Fix:** argumen → `preVidara` + komentar penanda insiden + test anti-regresi di
+`.tests/caption-server-line.js` (larangan source `vidaraLinkFromRecord(
+alreadyInVidara)` + rekonstruksi string-vs-objek). Test: `.tests` 12 pass,
+`test-media-contract` 12 pass, `test-vidoy-uploader` 164 pass — 0 fail.
+
+**Deploy:** daemon pm2 ternyata kehilangan daftar (`dump.pm2` kosong — bot
+06:05 jalan di luar pm2). Dibereskan: kill bot lama (tidak ada download
+aktif — ep1 06:06 sudah `done`), `pm2 start scraper/bot.js --name prjs-bot
+--cwd /home/runner/workspace --max-memory-restart 700M` + `pm2 save` →
+`prjs-bot` online PID 3964, `Polling started`, 0 error, 1 instance.
+9router & FlareSolverr tidak tersentuh.
+
 ## Tag
 
-`v3.6.0` — **minor**: kontrak caption berubah (4→5 baris + fitur baru) tapi
-tidak ada konsumen/integrasi lama yang rusak; mengikuti preseden `v3.1.0`
-(`!dell` + tombol baru = minor).
+- `v3.6.0` — **minor**: kontrak caption berubah (4→5 baris + fitur baru) tapi
+  tidak ada konsumen/integrasi lama yang rusak; mengikuti preseden `v3.1.0`
+  (`!dell` + tombol baru = minor).
+- `v3.6.1` — **patch**: fix argumen `vidaraLinkFromRecord(preVidara)` (caption
+  skip kehilangan baris Link & Server).

@@ -470,8 +470,11 @@ async function actionAnimeEpisode(chatId, opts) {
       const alreadyInVidara = preVidara && preVidara.filecode;
       if (alreadyInVidara) {
         // Sudah ada di Vidara → jangan upload ulang; pakai link yang tersimpan.
+        // WAJIB kirim preVidara (objek record): alreadyInVidara hanya string
+        // filecode → vidaraLinkFromRecord menerima string dan selalu balik ''
+        // (caption jadi 3 baris tanpa Link/Server — insiden ep1 2 Okt 06:06).
         out.vidara = String(alreadyInVidara);
-        out.vidaraLink = vidaraLinkFromRecord(alreadyInVidara);
+        out.vidaraLink = vidaraLinkFromRecord(preVidara);
         logger.info({ ...logCtx }, 'Vidara dilewati — file sudah ada (tanpa upload ulang)');
       } else {
         p.update('📤 upload Vidara');

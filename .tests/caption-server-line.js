@@ -69,6 +69,27 @@ t('actionAnimeEpisode: server = VIDOY kalau link Vidoy, VIDARA kalau link Vidara
   }
 });
 
+t('skip Vidara memakai preVidara (objek record), BUKAN alreadyInVidara (string filecode)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'scraper', 'handlers', 'vidoy.js'), 'utf8');
+  if (/vidaraLinkFromRecord\(alreadyInVidara\)/.test(src)) {
+    throw new Error('regresi insiden ep1 2 Okt 06:06: alreadyInVidara = string filecode → '
+      + 'vidaraLinkFromRecord balik \'\' → caption tanpa Link & Server');
+  }
+  if (!/vidaraLinkFromRecord\(preVidara\)/.test(src)) {
+    throw new Error('jalur skip tidak lagi memanggil vidaraLinkFromRecord(preVidara)');
+  }
+  // Rekonstruksi runtime: string filecode vs objek record
+  const pre = { filecode: 'IIV7UjteaSEbx', domain: 'vidara.to' };
+  const asString = pre && pre.filecode;
+  const recode = (r) => {
+    const code = String(r.filecode || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
+    const host = String(r.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    return code && host ? `https://${host}/${code}` : '';
+  };
+  eq(recode(pre), 'https://vidara.to/IIV7UjteaSEbx', 'dengan objek record harus non-kosong');
+  eq(recode(asString), '', 'dengan string filecode KOSONG — itu sebabnya argumen wajib objek');
+});
+
 t('drama merge10 (vidoy.js): server VIDOY hanya kalau item.link ada', () => {
   const src = fs.readFileSync(path.join(ROOT, 'scraper', 'handlers', 'vidoy.js'), 'utf8');
   if (!/server: item\.link \? 'VIDOY' : ''/.test(src)) {
