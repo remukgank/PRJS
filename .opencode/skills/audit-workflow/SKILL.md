@@ -20,6 +20,9 @@ description: Use at the start of every session and whenever fixing bugs, changin
       cukup **monitor & lapor**; start hanya kalau diminta (syarat & resep di
       AGENTS §3: tidak ada download, tidak ada instance lain, `9router` dkk. =
       infrastruktur jangan pernah kill). Restart *instance* Replit = perlu izin.
+   - **DILARANG kill/restart proses bot milik owner tanpa persetujuan eksplisit
+      owner** — kalau 409/duplikat: lapor + beri perintah kill untuk owner
+      jalankan sendiri (AGENTS §3).
     - Resep start/stop/monitor = **AGENTS §3** (PID via `pgrep`, log di
       `logs/telegram-bot-manual.log`, `tail -n` jangan `tail -f`).
     - Verifikasi: 1 proses `bot.js`, `kill -0 $(cat logs/telegram-bot-manual.pid)`,

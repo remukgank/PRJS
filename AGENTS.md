@@ -97,6 +97,11 @@ Teladan dari repo: `v3.0.0 → v3.1.0` (minor) sudah memuat fitur baru
   lapor** (`tail -n 100 logs/telegram-bot-manual.log`): bot mati, `409
   Conflict`, error berulang. Kalau diminta start → resep di atas + dua syarat
   wajib (tidak ada download, tidak ada instance lain).
+- **DILARANG matikan/restart proses bot yang dijalankan owner tanpa
+  persetujuan eksplisit owner.** Kalau ada 409 (dua instance): **lapor saja**
+  + tunjukkan perintah kill untuk owner jalankan — agent jangan kill sendiri.
+  (Pelanggaran 2 Okt: agent kill instance run-owner saat deploy → owner
+  marah: "lo dilarang matikan tanpa persetujuanku".)
 - **Instance Replit restart = proses manual ikut mati** (insiden 11:01 —
   pid2 bootstrap baru, entrypoint `.replit` auto-start sendiri). Kalau log
   berhenti mendadak / `kill -0` gagal → kemungkinan instance restart →
