@@ -70,7 +70,7 @@ const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadalu
 const kamenimeEpisodesCache = new Map(); // animeUrl → { eps, title, ts }
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, listVidaraUploads, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -1159,17 +1159,53 @@ function episodeButton(st, ep, fallbackDone) {
   return { text: `${ep}`, style: null };
 }
 
-async function animeDoneMap(mediaKey) {
+// Status per episode utk keputusan skip batch. Union 3 sumber bukti (AGENTS §6):
+//   vidoy_uploads.pointer  — link Vidoy + sudah terkirim
+//   vidara_uploads.pointer — record file Vidara + sudah terkirim
+//   media_parts.file_id    — pesan pernah terkirim (butuh slug, opsional)
+// BUG 3 Okt: versi lama HANYA baca vidoy_uploads → batch target vt/v (Vidara)
+// tidak pernah skip → 144 episode di-download + dikirim ulang (record & pointer
+// vidara tidak pernah dilihat).
+async function animeDoneMap(mediaKey, slug = null) {
   const map = new Map();
-  const rows = await listVidoyUploads(String(mediaKey), 'anime').catch(() => []);
-  for (const r of rows || []) {
-    if (!r || r.part === null || r.part === undefined) continue;
-    map.set(Number(r.part), {
-      link: r.link || null,
-      hasTg: !!(r.tg_chat_id && r.tg_message_id),
+  function set(ep, patch) {
+    if (ep === null || ep === undefined) return;
+    const cur = map.get(Number(ep)) || { link: null, vidara: false, hasTg: false };
+    map.set(Number(ep), {
+      link: patch.link !== undefined ? patch.link : cur.link,
+      vidara: patch.vidara !== undefined ? patch.vidara : cur.vidara,
+      hasTg: cur.hasTg || !!patch.hasTg,
     });
   }
+  const vidoyRows = await listVidoyUploads(String(mediaKey), 'anime').catch(() => []);
+  for (const r of vidoyRows || []) {
+    if (r.part === null || r.part === undefined) continue;
+    set(r.part, { link: r.link || null, hasTg: !!(r.tg_chat_id && r.tg_message_id) });
+  }
+  const vidaraRows = await listVidaraUploads(String(mediaKey)).catch(() => []);
+  for (const r of vidaraRows || []) {
+    set(r.ep, { vidara: !!r.filecode, hasTg: !!(r.tg_chat_id && r.tg_message_id) });
+  }
+  if (slug) {
+    const parts = await listPartsWithFile(slug).catch(() => []);
+    for (const r of parts || []) {
+      if (r.file_id) set(r.part, { hasTg: true });
+    }
+  }
   return map;
+}
+
+// Syarat skip batch per target — "sudah lengkap" = TIDAK ADA KERJA tersisa
+// (upload Vidara/Vidoy dilarang duplikat; download hanya perlu kalau masih ada
+// yang harus dikirim ke Telegram):
+//   v   → file record vidara sudah ada          → tanpa upload & tanpa kirim
+//   vt  → record vidara + bukti TG               → tanpa download/kerja
+//   vyt/vv/tg → link vidoy + bukti TG            → perilaku lama (tidak berubah)
+function episodeBatchDone(st, target) {
+  if (!st) return false;
+  if (target === 'v') return !!st.vidara;
+  if (target === 'vt') return !!st.vidara && !!st.hasTg;
+  return !!(st.link && st.hasTg);
 }
 
 // Parse callback tombol "Download Semua".
@@ -3766,7 +3802,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
           const kmKey = `Ep ${e.ep}`;
           if (!isKmFix) {
             const st = kmDone.get(Number(e.ep));
-            if (st && st.link && st.hasTg) { kmRp.updateEpisode(kmKey, 'skip', '⏭️ sudah lengkap'); kmSkipped++; continue; }
+            if (episodeBatchDone(st, kmTarget)) { kmRp.updateEpisode(kmKey, 'skip', '⏭️ sudah lengkap'); kmSkipped++; continue; }
           }
           try {
             let kmRes;
@@ -3988,7 +4024,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         return;
       }
       // Status per episode (Vidoy + Telegram) → default: yang sudah lengkap DILEWATI.
-      const doneMap = await animeDoneMap(title);
+      const doneMap = await animeDoneMap(title, slug);
       if (isFix) {
         viable = viable.filter((e) => {
           const st = doneMap.get(Number(e.ep));
@@ -4008,7 +4044,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
         const st = doneMap.get(Number(e.ep));
-        if (st && st.link && st.hasTg) {
+        if (episodeBatchDone(st, target)) {
           rp.updateEpisode(key, 'skip', '⏭️ sudah lengkap');
           skippedDone++;
           continue;
@@ -4529,7 +4565,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
         await bot.editMessageText('⚠️ Tidak ada episode dengan server didukung (gofile/pixeldrain).', { chat_id: chatId, message_id: msgId }).catch(() => {});
         return;
       }
-      const doneMap = await animeDoneMap(title);
+      const doneMap = await animeDoneMap(title, slug);
       if (isFix) {
         viable = viable.filter((e) => {
           const st = doneMap.get(Number(e.ep));
@@ -4560,7 +4596,7 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
       for (const e of viable) {
         const key = `Ep ${e.ep}`;
         const st = doneMap.get(Number(e.ep));
-        if (st && st.link && st.hasTg) {
+        if (episodeBatchDone(st, target)) {
           rp.updateEpisode(key, 'skip', '⏭️ sudah lengkap');
           skippedDone++;
           continue;

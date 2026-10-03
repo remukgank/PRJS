@@ -1479,34 +1479,28 @@ t('KRITIS: episode sudah lengkap (Vidoy + Telegram) DILEWATI, tidak diunduh ulan
   const calls = (BOT.match(/await animeDoneMap\(/g) || []).length;
   if (calls < 2) throw new Error('animeDoneMap harus dipakai di 2 runner, ditemukan: ' + calls);
   if (!/function animeDoneMap/.test(BOT)) throw new Error('animeDoneMap tidak ada');
-  // kondisi skip: link + hasTg
-  const cond = (BOT.match(/if \(st && st\.link && st\.hasTg\)/g) || []).length;
-  if (cond < 2) throw new Error('kondisi skip "sudah lengkap" harus di 2 runner: ' + cond);
+  // kondisi skip per-target (episodeBatchDone) — 3 runner batch (sam/kur/kam)
+  const cond = (BOT.match(/episodeBatchDone\(st,/g) || []).length;
+  if (cond < 3) throw new Error('kondisi skip per-target harus dipakai di 3 runner, ditemukan: ' + cond);
+  if (!/function episodeBatchDone/.test(BOT)) throw new Error('episodeBatchDone tidak ada');
+  if (/if \(st && st\.link && st\.hasTg\)/.test(BOT)) throw new Error('syarat lama (tanpa record vidara) masih ada');
   if (!/⏭️ sudah lengkap/.test(BOT)) throw new Error('tanda status "sudah lengkap" tidak ada');
   if (!/let ok = 0, fail = 0, skippedDone = 0;/.test(BOT)) throw new Error('skippedDone tidak dihitung');
 });
 
 t('KRITIS: animeDoneMap menandai link+pointer sebagai "sudah ada"', () => {
   const BOT = require('fs').readFileSync(require.resolve('../bot'), 'utf8');
+  // Runner file ini SYNC (promise tidak di-await) → runtime-nya diuji jujur di
+  // .tests/batch-skip-vt.js (DB asli + mock terkontrol, runner async).
+  // Di sini cukup guard struktur: union ketiga sumber (§6) + injeksi params.
   const i = BOT.indexOf('async function animeDoneMap');
-  const code = BOT.slice(i, BOT.indexOf('\n}', i) + 2);
-  const f = new Function('db', code + '\nreturn animeDoneMap;')({
-    listVidoyUploads: async () => ([
-      { part: 1, link: 'https://x/e/a', tg_chat_id: -100, tg_message_id: 5 },
-      { part: 2, link: 'https://x/e/b', tg_chat_id: null, tg_message_id: null },
-      { part: 3, link: null, tg_chat_id: -100, tg_message_id: 7 },
-      { part: 4, link: 'https://x/e/d', tg_chat_id: -100, tg_message_id: null },
-    ]),
-  });
-  return f('Naruto Kecil').then((map) => {
-    assert.strictEqual(map.get(1).link, 'https://x/e/a');
-    assert.strictEqual(map.get(1).hasTg, true, 'Ep 1 link+pointer → sudah lengkap');
-    assert.strictEqual(map.get(2).hasTg, false, 'Ep 2 link tanpa pointer → perlu dikirim');
-    assert.strictEqual(map.get(3).hasTg, true);
-    assert.strictEqual(map.get(3).link, null, 'Ep 3 tanpa link → bukan duplikat');
-    assert.strictEqual(map.get(4).hasTg, false, 'pointer separuh (chat ada, msg null) → belum lengkap');
-    assert.strictEqual(map.size, 4);
-  });
+  if (i < 0) throw new Error('animeDoneMap tidak ada');
+  const head = BOT.slice(i, BOT.indexOf('\n}', i) + 2);
+  if (!/listVidoyUploads\(/.test(head)) throw new Error('animeDoneMap tidak baca vidoy_uploads');
+  if (!/listVidaraUploads\(/.test(head)) throw new Error('animeDoneMap tidak baca vidara_uploads (akar bug 3 Okt)');
+  if (!/listPartsWithFile\(/.test(head)) throw new Error('animeDoneMap tidak baca media_parts.file_id (§6)');
+  if (!/mediaKey, slug = null/.test(head)) throw new Error('slug param hilang');
+  if (!BOT.includes('listVidaraUploads')) throw new Error('import listVidaraUploads hilang');
 });
 
 t('KRITIS: mode "Lengkapi yang hilang" hanya menyaring episode tanpa pesan Telegram', () => {
