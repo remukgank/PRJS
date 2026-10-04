@@ -40,13 +40,37 @@ function isKamenimeUrl(url) {
   } catch { return false; }
 }
 
+/**
+ * Decode numeric HTML entity (decimal maupun heksadesimal).
+ *
+ * BUG: pola lama hanya kena 2 digit (`&#39;`), padahal kamenime menulis
+ * 3 digit (`&#039;`) untuk apostrof. Akibatnya `&#039;` lolos mentah ke URL,
+ * server balas 404, dan `&` diperlakukan URL sebagai pemisah query sehingga
+ * `fileNameFromUrl` memotong nama file di tengah.
+ * Bukti 28 Sep 2026 (A Gatherer's Adventure in Isekai, 12 episode gagal):
+ *   src mentah  : /storage/anime/A Gatherer&#039;s .../...-episode-1.mp4
+ *   setelah fix : /storage/anime/A Gatherer's .../...-episode-1.mp4
+ *   HTTP 404 → HTTP 200, 108.733.977 byte
+ * Pola umum juga menutup `&#8217;` (apostrof tipografis) yang punya codepoint
+ * unicode, dan `&#x27;` (hex) yang dipakai sebagian template.
+ */
+function decodeNumericEntity(s) {
+  return String(s).replace(/&#(x[0-9a-f]+|[0-9]+);/gi, (_m, num) => {
+    const cp = num[0].toLowerCase() === 'x' ? parseInt(num.slice(1), 16) : parseInt(num, 10);
+    if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) return _m; // di luar BMP -> biarkan
+    try { return String.fromCodePoint(cp); } catch { return _m; }
+  });
+}
+
 function decodeHtmlEntities(s) {
-  return String(s)
+  return decodeNumericEntity(s)
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
     .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>');
+    .replace(/&gt;/gi, '>')
+    // Alias numeric tanpa nama named entity (tetap untuk belt-and-suspenders:
+    // kalau decodeNumericEntity dihapus, baris ini masih menutup kasus 039).
+    .replace(/&#0*39;/g, "'");
 }
 
 /**
