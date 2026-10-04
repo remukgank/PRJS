@@ -20,16 +20,23 @@ function buildAnimeSender(senders, resolveThread) {
     } catch (err) {
       logger.warn({ err: err.message }, 'Resolve thread anime gagal — fallback ke chat asal');
     }
-    const base = threadId ? { ...opts, message_thread_id: threadId } : { ...opts };
+    // parse_mode WAJIB diset di sini (router), bukan di tiap pemanggil.
+    // Caption dibangun oleh buildCaption() sebagai HTML (`➧ Judul :- <b>…</b>`).
+    // Tanpa parse_mode, Telegram menampilkan tag HTML-nya sebagai teks biasa —
+    // itu yang membuat `<b>` bocor di jalur Telegram-saja, sementara jalur
+    // Vidoy (vidoy.js) aman karena menyertakan parse_mode eksplisit.
+    // Set SEKALI di router supaya 10 call site handlers/download.js ikut benar.
+    const base = { ...opts, parse_mode: opts.parse_mode || 'HTML' };
+    const withThread = threadId ? { ...base, message_thread_id: threadId } : base;
     const threadOnly = threadId ? { message_thread_id: threadId } : {};
     const ext = String(filePath || '').split('.').pop().toLowerCase();
     let result;
     if (AUDIO_EXTS.has(ext)) {
-      result = await sendAudio(chatId, filePath, { caption: base.caption, ...threadOnly }, cacheInfo);
+      result = await sendAudio(chatId, filePath, { caption: withThread.caption, parse_mode: withThread.parse_mode, ...threadOnly }, cacheInfo);
     } else if (VIDEO_EXTS.has(ext)) {
-      result = await sendVideo(chatId, filePath, { ...base, supports_streaming: true }, cacheInfo);
+      result = await sendVideo(chatId, filePath, { ...withThread, supports_streaming: true }, cacheInfo);
     } else {
-      result = await sendDocument(chatId, filePath, { caption: base.caption, ...threadOnly }, cacheInfo);
+      result = await sendDocument(chatId, filePath, { caption: withThread.caption, parse_mode: withThread.parse_mode, ...threadOnly }, cacheInfo);
     }
     if (threadId) logger.info({ threadId }, 'File anime terkirim ke topic grup');
     return result;

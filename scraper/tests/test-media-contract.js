@@ -151,8 +151,18 @@ t('KONTRAK: semua call site kirim video memakai supports_streaming', () => {
 
 t('KONTRAK: lib/animeTopic memaksa supports_streaming', () => {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'animeTopic.js'), 'utf8');
-  if (!/\{ \.\.\.base, supports_streaming: true \}/.test(src)) {
+  // Perilaku yang dikunci: branch video WAJIB override supports_streaming jadi
+  // true apa pun yang pemanggil kirim. Nama variabel bebas berubah (base →
+  // withThread saat parse_mode masuk ke router) — yang diuji adalah
+  // overrides-nya, bukan nama identifier-nya.
+  const videoBranch = /await sendVideo\(chatId, filePath, \{([^}]*)\}/.exec(src);
+  if (!videoBranch) throw new Error('branch sendVideo tidak ditemukan di animeTopic.js');
+  if (!/supports_streaming:\s*true/.test(videoBranch[1])) {
     throw new Error('animeTopic tidak lagi memaksa supports_streaming — video anime tidak stream');
+  }
+  // parse_mode juga wajib di router (bug `<b>` bocor di jalur TG-saja).
+  if (!/parse_mode:\s*opts\.parse_mode\s*\|\|\s*'HTML'/.test(src)) {
+    throw new Error('animeTopic tidak menyetel parse_mode default HTML — caption HTML akan bocor mentah');
   }
 });
 
