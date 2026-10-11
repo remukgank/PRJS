@@ -70,7 +70,7 @@ const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadalu
 const kamenimeEpisodesCache = new Map(); // animeUrl → { eps, title, ts }
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, listVidaraUploads, getVidaraActiveDomain, setVidaraActiveDomain, getVidaraActiveAccount, setVidaraActiveAccount, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, listVidaraUploads, getVidaraActiveDomain, setVidaraActiveDomain, getVidaraActiveAccount, setVidaraActiveAccount, getVidaraDailyCount, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -5291,25 +5291,67 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
   // Pilih akun aktif secara manual. TIDAK ada rotasi otomatis: semua operasi
   // (upload, folder nesting, link, delete) memakai akun aktif sampai diganti
   // di sini — supaya 1 judul (full episode) selalu 1 akun.
-  if (act === 'vidara_account') {
-    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+  //
+  // Kuota harian per akun: server Vidara TIDAK punya endpoint quota (terbukti
+  // 404 di API v1 & dashboard, 11 Okt 2026) — "N/200" dihitung dari file unik
+  // yang benar-benar masuk (counter di db, di-inkrement otomatis oleh
+  // saveVidaraUpload). Reset sinkron dengan server: key counter per tanggal UTC.
+  const VIDARA_DAILY_LIMIT = 200;
+  function vidaraResetWib(ms) {
+    try {
+      return new Date(ms).toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' }) + ' WIB';
+    } catch { return '00:00 UTC'; }
+  }
+  async function vidaraAccountMenuView() {
     const VdaraAcc = require('./vidara-uploader');
     const curIdx = VdaraAcc.getActiveAccount();
     const total = VdaraAcc.accountCount();
+    const now = Date.now();
+    const lines = [
+      '👤 <b>Akun Vidara</b> — upload selalu pakai akun aktif',
+      '<i>(1 judul full = 1 akun, tanpa rotasi otomatis)</i>',
+      '',
+    ];
     const rows = [];
     for (let i = 0; i < total; i++) {
+      const used = await getVidaraDailyCount(i);
+      const flag = Number(await getSetting(`vidara_limit_reset_at:${i}`)) || 0;
+      const limited = flag > now;
+      const status = limited
+        ? `🔴 limit kena · reset ${vidaraResetWib(flag)}`
+        : `🟢 sisa ${Math.max(0, VIDARA_DAILY_LIMIT - used)}`;
+      lines.push(`▸ <b>Akun ${i + 1}</b> (${safeHtml(VdaraAcc.accountLabel(i))})${i === curIdx ? ' · <b>aktif</b>' : ''}`);
+      lines.push(`  📤 hari ini ${used}/${VIDARA_DAILY_LIMIT} · ${status}`);
+      lines.push('');
       rows.push([BTN.btn(
         `👤 Akun ${i + 1} (${VdaraAcc.accountLabel(i)})${i === curIdx ? ' ✅' : ''}`,
         `act:vidara_acc:${i}`,
-        i === curIdx ? 'success' : undefined
+        i === curIdx ? 'success' : (limited ? 'danger' : undefined)
       )]);
     }
+    rows.push([BTN.btn('🔄 Refresh kuota', 'act:vidara_refresh')]);
+    lines.push('<i>Ganti akun lalu jalankan batch lagi — episode yang sudah ada akan dilewati.</i>');
+    return { text: lines.join('\n'), keyboard: BTN.kb(rows) };
+  }
+  if (act === 'vidara_account') {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
     await bot.answerCallbackQuery(query.id);
-    return bot.sendMessage(
-      chatId,
-      `👤 <b>Akun Vidara</b> (multi-username, password sama)\n\nAkun aktif: <b>Akun ${curIdx + 1} (${safeHtml(VdaraAcc.accountLabel(curIdx))})</b>\n\nUpload selalu memakai akun aktif — tanpa rotasi otomatis, supaya 1 judul (full episode) tetap 1 akun. Kalau limit harian habis, ganti akun di sini lalu jalankan batch lagi (episode yang sudah ada akan dilewati).\n\n<b>Pilih akun aktif:</b>`,
-      { parse_mode: 'HTML', reply_markup: BTN.kb(rows) }
-    );
+    const view = await vidaraAccountMenuView();
+    return bot.sendMessage(chatId, view.text, { parse_mode: 'HTML', reply_markup: view.keyboard });
+  }
+
+  if (act === 'vidara_refresh') {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+    await bot.answerCallbackQuery(query.id, { text: '🔄 Kuota diperbarui' });
+    const view = await vidaraAccountMenuView();
+    // Edit di tempat (menu tidak membanjiri chat); gagal edit → pesan baru.
+    if (query.message) {
+      return bot.editMessageText(view.text, {
+        chat_id: chatId, message_id: query.message.message_id,
+        parse_mode: 'HTML', reply_markup: view.keyboard,
+      }).catch(() => bot.sendMessage(chatId, view.text, { parse_mode: 'HTML', reply_markup: view.keyboard }));
+    }
+    return bot.sendMessage(chatId, view.text, { parse_mode: 'HTML', reply_markup: view.keyboard });
   }
 
   if (act.startsWith('vidara_acc:')) {
@@ -5323,11 +5365,15 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     try { require('./vidara-dashboard').resetSession(); } catch {}
     logger.info({ vidaraActiveAccount: accIdx, chatId }, 'Akun aktif Vidara diganti via menu');
     await bot.answerCallbackQuery(query.id, { text: `✅ Akun aktif: Akun ${accIdx + 1}` });
-    return bot.sendMessage(
-      chatId,
-      `✅ <b>Akun aktif diganti</b>\nSekarang upload/folder/link Vidara memakai: <b>Akun ${accIdx + 1} (${safeHtml(VdaraAcc.accountLabel(accIdx))})</b>\n\n<i>Episode yang sudah ter-upload tidak berubah — hanya upload berikutnya yang memakai akun ini.</i>`,
-      { parse_mode: 'HTML' }
-    );
+    // Menu langsung mencerminkan pilihan (✅ pindah) — edit di tempat.
+    if (query.message) {
+      const view = await vidaraAccountMenuView();
+      await bot.editMessageText(view.text, {
+        chat_id: chatId, message_id: query.message.message_id,
+        parse_mode: 'HTML', reply_markup: view.keyboard,
+      }).catch(() => {});
+    }
+    return;
   }
 
   if (act === 'dup_yes') {

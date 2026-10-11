@@ -248,15 +248,55 @@ async function setSetting(key, value) {
 
 async function saveVidaraUpload(dramaKey, ep, filecode, domain = 'vidara.so', title = null, account = 0) {
   try {
-    await pool.query(
+    const r = await pool.query(
       `INSERT INTO vidara_uploads (drama_key, ep, filecode, domain, title, account)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (drama_key, ep) DO UPDATE SET
-         filecode = $3, domain = $4, title = $5, account = $6, uploaded_at = NOW()`,
+         filecode = $3, domain = $4, title = $5, account = $6, uploaded_at = NOW()
+       RETURNING (xmax = 0) AS inserted`,
       [dramaKey, ep, filecode, domain, title, Number(account) || 0]
     );
+    // Counter harian per akun (menu 👤 Akun Vidara): Vidara TIDAK punya endpoint
+    // quota (terbukti 404 di API v1 & dashboard, 11 Okt) — "N/200 hari ini"
+    // dihitung dari file unik yang benar-benar masuk. Hanya baris BARU yang
+    // dihitung (xmax=0) — overwrite re-upload tidak menggandakan hitungan.
+    if (r.rows[0]?.inserted) {
+      await addVidaraDailyCount(Number(account) || 0).catch(() => {});
+    }
   } catch (err) {
     logger.error({ err: err.message, dramaKey, ep }, 'Failed to save vidara upload');
+  }
+}
+
+// ─── Vidara daily counter per akun ───────────────────────────────────────────
+// Key: vidara_daily_count:<idx>:<YYYY-MM-DD UTC>. Tanggal UTC ganti = key
+// beda → reset otomatis tanpa cron, sinkron dengan reset kuota server (00:00 UTC).
+
+function vidaraDailyCountKey(accountIdx, dayUtc) {
+  return `vidara_daily_count:${Number(accountIdx) || 0}:${dayUtc}`;
+}
+
+function utcTodayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function getVidaraDailyCount(accountIdx) {
+  const v = await getSetting(vidaraDailyCountKey(accountIdx, utcTodayStr()));
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Inkrement atomik (race aman walau batch sekarang sequential).
+async function addVidaraDailyCount(accountIdx) {
+  const key = vidaraDailyCountKey(accountIdx, utcTodayStr());
+  try {
+    await pool.query(
+      `INSERT INTO bot_settings (key, value) VALUES ($1, '1')
+       ON CONFLICT (key) DO UPDATE SET value = (bot_settings.value::int + 1)::text`,
+      [key]
+    );
+  } catch (err) {
+    logger.error({ err: err.message, key }, 'Failed to add vidara daily count');
   }
 }
 
@@ -768,6 +808,10 @@ module.exports = {
   setVidaraActiveDomain,
   getVidaraActiveAccount,
   setVidaraActiveAccount,
+  vidaraDailyCountKey,
+  utcTodayStr,
+  getVidaraDailyCount,
+  addVidaraDailyCount,
   buildVidaraBase,
   searchDrama,
   listPartsWithFile,
