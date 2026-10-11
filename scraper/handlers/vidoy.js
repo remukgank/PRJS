@@ -377,7 +377,13 @@ async function actionAnimeEpisode(chatId, opts) {
     const rows = await db.listVidoyUploads(String(vidoyTitle), 'anime').catch(() => []);
     preVidoy = (rows || []).find((r) => Number(r.part) === numEp) || null;
     const hasTg = !!(preVidoy && preVidoy.tg_chat_id && preVidoy.tg_message_id);
-    if (preVidoy && (!needTg || hasTg)) {
+    // Backfill: target `🗜 Vidara` (v) = permintaan eksplisit user (11 Okt) — episode
+    // yang sudah ada di Vidoy TAPI belum punya record Vidara tetap diproses supaya
+    // koleksi Vidara lengkap (bukan hanya sisanya). Hanya untuk target v: `vt`
+    // tetap di-skip (mencegah kirim ulang TG), dan record Vidara yang sudah ada
+    // tetap tidak di-upload ulang (dedupe per-akun tetap berlaku).
+    const backfillVidara = target === 'v' && !preVidara;
+    if (preVidoy && !backfillVidara && (!needTg || hasTg)) {
       logger.info({ chatId, target, ep, title: vidoyTitle }, 'skip — episode sudah ada di Vidoy');
       out.vidoy = { link: preVidoy.link || '', skipped: true };
       out.skipped = true;

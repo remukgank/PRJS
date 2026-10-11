@@ -160,13 +160,25 @@ t('8) Vidoy menang: record Vidoy = skip, tidak ada upload ke Vidara', () => {
   return 'skip total ✓';
 });
 
+t('8b) backfill Vidara: target v + belum punya record Vidara → episode di Vidoy TETAP diproses', () => {
+  const fn = extractFunction(HANDLER_SRC, 'actionAnimeEpisode');
+  assert.ok(fn.includes("const backfillVidara = target === 'v' && !preVidara;"),
+    'flag backfillVidara (khusus target v, hanya saat record Vidara belum ada) hilang');
+  assert.ok(fn.includes('if (preVidoy && !backfillVidara && (!needTg || hasTg)) {'),
+    'guard skip harus memakai !backfillVidara — tanpa itu, koleksi Vidara\n     tidak akan pernah lengkap (episode yang sudah di Vidoy selamanya bolong)');
+  const m = fn.match(/backfillVidara = target === '([^']+)' && !preVidara/);
+  assert.ok(m && m[1] === 'v',
+    'backfill harus KHUSUS target v — vt/vyt tetap kena guard (mencegah\n     kirim ulang TG massal untuk episode yang sudah punya pesan)');
+  return 'backfill khusus v ✓';
+});
+
 t('9) record Vidara tidak memblokir target Vidoy (hanya mencegah upload ulang)', () => {
   const fn = extractFunction(HANDLER_SRC, 'actionAnimeEpisode');
   // Seluruh pre-check (kedua penjaga) harus berada DI DALAM blok needVidara:
   // target vyt/vv tidak boleh pernah berhenti hanya karena ada record Vidara.
   const iNeed = fn.indexOf('if (needVidara) {');
   const iGuardVidara = fn.indexOf('if (!preVidoy && preVidara && !needTg) {');
-  const iGuardVidoy = fn.indexOf('if (preVidoy && (!needTg || hasTg)) {');
+  const iGuardVidoy = fn.indexOf('if (preVidoy && !backfillVidara && (!needTg || hasTg)) {');
   assert.ok(iNeed > 0, 'blok if (needVidara) hilang');
   assert.ok(iGuardVidara > iNeed && iGuardVidoy > iNeed,
     'kedua penjaga harus DI DALAM if (needVidara) — kalau tidak, Vidara bisa\n     memblokir target Vidoy (melanggar aturan: ada Vidara tetap boleh ke Vidoy)');
