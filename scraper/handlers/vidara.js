@@ -84,7 +84,7 @@ async function actionVidaraPerEp(chatId, session) {
         filecodes[epStr] = fc;
         done++;
         // Simpan ke DB vidara_uploads (untuk web + ganti-link)
-        saveVidaraUpload(dramaKey, Number(epStr) || 0, fc, saveDomain, title).catch(() => {});
+        saveVidaraUpload(dramaKey, Number(epStr) || 0, fc, saveDomain, title, V.getActiveAccount()).catch(() => {});
       } catch (e) {
         fail++;
         logger.error({ chatId, ep: epStr, err: e.message }, 'Vidara per-ep fail');
@@ -129,7 +129,7 @@ async function actionVidaraMerge10(chatId, session) {
       for (const [label, fc] of Object.entries(result.files)) {
         const [s, e] = String(label).split('-').map((x) => parseInt(x, 10));
         if (!Number.isNaN(s) && !Number.isNaN(e)) {
-          for (let ep = s; ep <= e; ep++) saveVidaraUpload(dramaKey, ep, fc, saveDomain, title).catch(() => {});
+          for (let ep = s; ep <= e; ep++) saveVidaraUpload(dramaKey, ep, fc, saveDomain, title, V.getActiveAccount()).catch(() => {});
         }
       }
     }
@@ -236,7 +236,7 @@ async function actionVidaraAndTelegramMerge10(chatId, session) {
           vidFiles[`${pad(epStart)}-${pad(epEnd)}`] = fc;
           vidDone++;
           // Simpan ke DB vidara_uploads (untuk web + ganti-link)
-          for (let ep = epStart; ep <= epEnd; ep++) saveVidaraUpload(dramaKey, ep, fc, saveDomain, title).catch(() => {});
+          for (let ep = epStart; ep <= epEnd; ep++) saveVidaraUpload(dramaKey, ep, fc, saveDomain, title, V.getActiveAccount()).catch(() => {});
         } catch (e) {
           fc = '';
           vidFail++;

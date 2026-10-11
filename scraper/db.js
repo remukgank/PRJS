@@ -88,6 +88,9 @@ async function initDatabase() {
     // terkirim — hanya bukti pesan yang mengubah status.
     await pool.query(`ALTER TABLE vidara_uploads ADD COLUMN IF NOT EXISTS tg_chat_id BIGINT;`);
     await pool.query(`ALTER TABLE vidara_uploads ADD COLUMN IF NOT EXISTS tg_message_id BIGINT;`);
+    // Multi-akun Vidara (11 Okt 2026): 0-based index akun yang memegang file
+    // ini — supaya delete/refresh tahu API key akun mana yang dipakai.
+    await pool.query(`ALTER TABLE vidara_uploads ADD COLUMN IF NOT EXISTS account INTEGER DEFAULT 0;`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS vidoy_uploads (
         media_key   TEXT NOT NULL,
@@ -243,14 +246,14 @@ async function setSetting(key, value) {
 
 // ─── Vidara links + domain rotation (landing) ────────────────────────────────
 
-async function saveVidaraUpload(dramaKey, ep, filecode, domain = 'vidara.so', title = null) {
+async function saveVidaraUpload(dramaKey, ep, filecode, domain = 'vidara.so', title = null, account = 0) {
   try {
     await pool.query(
-      `INSERT INTO vidara_uploads (drama_key, ep, filecode, domain, title)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO vidara_uploads (drama_key, ep, filecode, domain, title, account)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (drama_key, ep) DO UPDATE SET
-         filecode = $3, domain = $4, title = $5, uploaded_at = NOW()`,
-      [dramaKey, ep, filecode, domain, title]
+         filecode = $3, domain = $4, title = $5, account = $6, uploaded_at = NOW()`,
+      [dramaKey, ep, filecode, domain, title, Number(account) || 0]
     );
   } catch (err) {
     logger.error({ err: err.message, dramaKey, ep }, 'Failed to save vidara upload');
@@ -260,7 +263,7 @@ async function saveVidaraUpload(dramaKey, ep, filecode, domain = 'vidara.so', ti
 async function getVidaraUpload(dramaKey, ep) {
   try {
     const r = await pool.query(
-      'SELECT filecode, domain, title FROM vidara_uploads WHERE drama_key = $1 AND ep = $2',
+      'SELECT filecode, domain, title, account FROM vidara_uploads WHERE drama_key = $1 AND ep = $2',
       [dramaKey, ep]
     );
     return r.rows[0] || null;
@@ -273,7 +276,7 @@ async function getVidaraUpload(dramaKey, ep) {
 async function listVidaraUploads(dramaKey) {
   try {
     const r = await pool.query(
-      'SELECT ep, filecode, domain, tg_chat_id, tg_message_id FROM vidara_uploads WHERE drama_key = $1 ORDER BY ep',
+      'SELECT ep, filecode, domain, tg_chat_id, tg_message_id, account FROM vidara_uploads WHERE drama_key = $1 ORDER BY ep',
       [dramaKey]
     );
     return r.rows;
@@ -502,6 +505,19 @@ async function getVidaraActiveDomain() {
 
 async function setVidaraActiveDomain(domain) {
   await setSetting('vidara_active_domain', domain);
+}
+
+// ─── Multi-akun Vidara (11 Okt 2026) ────────────────────────────────────────
+// Index akun aktif (0-based) yang dipilih via menu admin "👤 Akun Vidara".
+// Default 0 (akun pertama). Tidak ada rotasi otomatis.
+async function getVidaraActiveAccount() {
+  const raw = await getSetting('vidara_active_account');
+  const n = Number(raw);
+  return Number.isFinite(n) && raw !== null && raw !== '' ? Math.max(0, Math.trunc(n)) : 0;
+}
+
+async function setVidaraActiveAccount(idx) {
+  await setSetting('vidara_active_account', String(Math.max(0, Math.trunc(Number(idx)) || 0)));
 }
 
 function buildVidaraBase(domain) {
@@ -750,6 +766,8 @@ module.exports = {
   setVidaraDomains,
   getVidaraActiveDomain,
   setVidaraActiveDomain,
+  getVidaraActiveAccount,
+  setVidaraActiveAccount,
   buildVidaraBase,
   searchDrama,
   listPartsWithFile,

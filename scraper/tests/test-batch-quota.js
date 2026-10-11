@@ -161,13 +161,17 @@ t('bot.js memakai quotaStopInfo di ketiga loop, tidak ada headline hardcode', ()
 
 t('handlers/vidoy.js: flag limit — dicatat saat kena, dicek SEBELUM download', () => {
   const V = require('fs').readFileSync(require.resolve('../handlers/vidoy'), 'utf8');
-  const iSet = V.indexOf("setSetting('vidara_limit_reset_at'");
+  const iSet = V.indexOf("setSetting(vidaraLimitFlagKey()");
   assert.ok(iSet > 0, 'setSetting flag hilang — batch berikutnya akan mengunduh lagi');
   assert.ok(V.indexOf('vidaraDailyLimitError(err.message)') > 0,
     'set flag harus memakai vidaraDailyLimitError (bukan isQuotaExceededError umum)');
 
-  const iCheck = V.indexOf("getSetting('vidara_limit_reset_at')");
+  const iCheck = V.indexOf("getSetting(vidaraLimitFlagKey())");
   assert.ok(iCheck > 0, 'pre-check flag hilang');
+  // Flag harus per-akun (multi-akun 11 Okt 2026) — limit 200/hari berlaku
+  // per akun, flag global memblokir akun lain yang masih punya kuota.
+  assert.ok(V.indexOf('vidaraLimitFlagKey()') > 0 && /vidara_limit_reset_at:\$\{/.test(V),
+    'flag limit harus per-akun (`vidara_limit_reset_at:<idx>`), bukan global');
   // Anchor: penanda PALING AWAL unduhan dimulai. Pakai `p.update('⬇️
   // download')`, bukan `ensureMp4` — titik itu muncul belakangan, sehingga
   // flag yang dipindah ke tengah jalur download tetap lolos cek (terbukti saat
@@ -177,7 +181,9 @@ t('handlers/vidoy.js: flag limit — dicatat saat kena, dicek SEBELUM download',
   assert.ok(iCheck < iDownload,
     'flag dicek SETELAH unduhan — tetap membuang 1 file penuh sebelum gagal');
   // Sekali kena, episode berikutnya harus berhenti tanpa menyentuh unduhan.
-  assert.ok(V.slice(iCheck, iCheck + 600).includes('return silent'),
+  // Jendela 1200 char: pesan saran ganti-akun (multi-akun 11 Okt) memanjangkan
+  // blok pre-check, tapi urutannya tetap sama (check → return silent).
+  assert.ok(V.slice(iCheck, iCheck + 1200).includes('return silent'),
     'pre-check harus mengembalikan error, bukan lanjut upload');
   return 'set saat kena ✓ cek sebelum download ✓';
 });

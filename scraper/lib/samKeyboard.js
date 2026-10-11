@@ -19,18 +19,30 @@ function paginate({ total, page = 0, pageSize = 20 }) {
 // page: disisipkan di AKHIR callback_data (setiap tombol generated dari picker
 // membawa halaman asal) supaya "Kembali" tidak selalu melompat ke page 0.
 // Format lama tanpa page tetap valid — lihat pickPageFromData di bot.js.
-function buildPicker(eps, { urlId, page = 0, pageSize = 20, done = new Set(), mkEp, prefix = 'sam' } = {}) {
+// hosted (opsional, 11 Okt 2026): Set<Number ep> yang SUDAH punya link host
+// (Vidoy/Vidara). Tombol "Download Semua" sebelumnya dihitung dari status
+// Telegram saja → judul yang sudah 100% terkirim tapi belum punya link host
+// (kasus backfill: Super Dragon Ball Heroes — 55 terkirim TG, 0 record Vidara)
+// mendapat tombol MATI "✅ Semua episode sudah ada" padahal backfill host masih
+// bisa dikerjakan via pilihan target. Dengan `hosted`, tombol tetap hidup
+// selama masih ada episode yang belum punya link host.
+function buildPicker(eps, { urlId, page = 0, pageSize = 20, done = new Set(), hosted = null, mkEp, prefix = 'sam' } = {}) {
   const { page: p, totalPages, first, last } = paginate({ total: eps.length, page, pageSize });
   const slice = eps.slice(p * pageSize, (p + 1) * pageSize);
   const doneCount = eps.filter((e) => done.has(Number(e.ep))).length;
+  // Episode yang masih punya KERJA nyata: belum terkirim TG ATAU belum punya
+  // link host. Tanpa `hosted` (undefined/null) → perilaku lama: hanya cek TG.
+  const actionable = hosted
+    ? eps.filter((e) => !done.has(Number(e.ep)) || !hosted.has(Number(e.ep))).length
+    : eps.length - doneCount;
   const missing = eps.length - doneCount;
   const keyboard = [];
-  // Aksi utama layar ini (primary). Kalau semua episode sudah ada, tombolnya
-  // mati (disabled) — bukan disembunyikan, supaya user paham statusnya.
-  const allDone = missing <= 0;
+  // Aksi utama layar ini (primary). Tombol mati HANYA kalau benar-benar tidak
+  // ada kerja tersisa (sudah terkirim DAN sudah punya link host).
+  const allDone = actionable <= 0;
   keyboard.push([allDone
     ? BTN.btnOff(`✅ Semua episode sudah ada`)   // bukan "di library": done = library ∪ Telegram
-    : BTN.btn(`⬇️ Download Semua (${missing})`, `${prefix}_all:${urlId}:${p}`, 'primary')]);
+    : BTN.btn(`⬇️ Download Semua (${Math.max(actionable, missing)})`, `${prefix}_all:${urlId}:${p}`, 'primary')]);
   for (let i = 0; i < slice.length; i += 5) {
     keyboard.push(slice.slice(i, i + 5).map((e) => mkEp(e, p)));
   }

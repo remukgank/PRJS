@@ -278,6 +278,13 @@ async function uploadToVidaraFolder(destPath, title, folderTitle = title) {
 // domain record (kontrak UI: "Domain akan dipakai untuk generate link embed").
 // Record DB tidak diubah — tetap bukti domain saat upload (bukti Telegram ∪
 // library tidak terpengaruh).
+// Flag "limit harian kena" harus PER AKUN (multi-akun Vidara, 11 Okt 2026):
+// limit 200/hari berlaku per akun, jadi akun 2 yang belum tentu kena tidak
+// boleh diblokir oleh flag milik akun 1 (dan sebaliknya).
+function vidaraLimitFlagKey() {
+  return `vidara_limit_reset_at:${Vdara.getActiveAccount()}`;
+}
+
 function vidaraLinkFromRecord(rec, activeDomain = '') {
   if (!rec) return '';
   const code = String(rec.filecode || '').replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '';
@@ -326,14 +333,18 @@ async function actionAnimeEpisode(chatId, opts) {
   // limit kena, lalu berhenti SEBELUM download episode berikutnya.
   // Flag disimpan sebagai epoch ms sampai 00:00 UTC berikutnya.
   if (needVidara) {
-    const until = Number(await getSetting('vidara_limit_reset_at').catch(() => 0)) || 0;
+    const until = Number(await getSetting(vidaraLimitFlagKey()).catch(() => 0)) || 0;
     if (until > Date.now()) {
       const resetAt = `${new Date(until).toISOString().slice(11, 16)} UTC`;
       const msg = `Vidara limit harian penuh (200 file/hari) — reset ${resetAt}`;
       logger.warn({ chatId, target, ep, resetAt }, 'skip — limit harian Vidara belum reset');
+      // Multi-akun: kalau ada akun lain, sarankan ganti via menu (kuota per akun).
+      const accHint = Vdara.accountCount() > 1
+        ? `\n💡 Akun lain masih punya kuota — ganti via 👤 <b>Akun Vidara</b> (Admin Panel) lalu jalankan batch lagi.`
+        : '';
       return silent
         ? { vidoy: null, vidara: null, tg: false, error: msg }
-        : _ctx.bot.sendMessage(chatId, `⚠️ <b>${safeHtml(msg)}</b>\nJalankan lagi setelah reset; episode yang sudah ada tidak akan diulang.`);
+        : _ctx.bot.sendMessage(chatId, `⚠️ <b>${safeHtml(msg)}</b>\nJalankan lagi setelah reset; episode yang sudah ada tidak akan diulang.${accHint}`);
     }
   }
   const busyKey = String(chatId);
@@ -457,7 +468,9 @@ async function actionAnimeEpisode(chatId, opts) {
         // gagal, file jadi yatim yang tidak pernah dilacak (pola phantom record).
         if (preVidara && preVidara.filecode) {
           try {
-            const del = await Vdara.deleteVideo(String(preVidara.filecode).replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '');
+            // Kolom account = akun PEMILIK file — delete harus memakai API key
+            // akun itu, bukan akun aktif (bisa beda setelah ganti via menu).
+            const del = await Vdara.deleteVideo(String(preVidara.filecode).replace(/^https?:\/\//i, '').split('/').filter(Boolean).pop() || '', Number(preVidara.account) || 0);
             if (del) {
               await db.deleteVidaraUpload(String(vidoyTitle), Number(ep) || 0);
               logger.info({ ...logCtx }, 'Vidara dibersihkan setelah masuk Vidoy');
@@ -500,7 +513,7 @@ async function actionAnimeEpisode(chatId, opts) {
         out.vidaraFallback = !needVidara;
         if (v.filecode) {
           const host = activeDomain || v.host || Vdara.VIDARA_DOMAIN || process.env.VIDARA_DOMAIN || 'vidara.so';
-          await saveVidaraUpload(String(vidoyTitle), numEp, v.filecode, host, String(vidoyTitle)).catch(() => {});
+          await saveVidaraUpload(String(vidoyTitle), numEp, v.filecode, host, String(vidoyTitle), Vdara.getActiveAccount()).catch(() => {});
           logger.info({ ...logCtx, host: v.host || '', activeDomain, fallback: !!out.vidaraFallback }, 'Vidara upload sukses');
         }
       }
@@ -614,7 +627,7 @@ async function actionAnimeEpisode(chatId, opts) {
     // file unduhan penuh. Flag dibaca di pre-check (lihat atas fungsi ini).
     if (vidaraDailyLimitError(err.message)) {
       const until = nextUtcMidnightMs();
-      await setSetting('vidara_limit_reset_at', String(until)).catch(() => {});
+      await setSetting(vidaraLimitFlagKey(), String(until)).catch(() => {});
       logger.warn({ chatId, ep, target, resetAt: new Date(until).toISOString() }, 'limit harian Vidara dicatat');
     }
     if (!silent) await p.fail(`Error: ${safeHtml(String(err.message).slice(0, 120))}`);

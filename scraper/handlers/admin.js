@@ -34,7 +34,7 @@ function adminPanelKeyboard(libSimpanOn = false, aiEndpoint = null, aiModel = nu
     [BTN.nav(`🤖 AI Endpoint: ${epEmoji} ${epShort}`, 'act:ai_endpoint')],
     [BTN.nav(`🔑 AI Key: ${keyEmoji} ${keyLabel}`, 'act:ai_key')],
     [BTN.nav(`🧠 AI Model: ${modelEmoji} ${modelLabel}`, 'act:ai_model')],
-    [BTN.nav('🌐 Domain Vidara', 'act:vidara_domain')],
+    [BTN.nav('🌐 Domain Vidara', 'act:vidara_domain'), BTN.nav('👤 Akun Vidara', 'act:vidara_account')],
     [BTN.nav('🗂 Vidoy Links', 'act:vidoy_links')],
     [BTN.btn('📚 Cari Drama/Anime', 'act:lib_search', 'primary')],
     [BTN.nav('📊 Status Server', 'act:status')],

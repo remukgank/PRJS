@@ -28,15 +28,65 @@ function readEnv(name) {
   }
   return '';
 }
-const VIDARA_KEY = readEnv('VIDARA_API') || readEnv('VIDARA_API_KEY');
+// ─── Multi-akun (11 Okt 2026) ───────────────────────────────────────────────
+// VIDARA_USERNAME boleh multi (dipisah koma) dan VIDARA_API/VIDARA_API_KEY
+// juga daftar koma urut sejajar; VIDARA_PASSWORD tunggal untuk semua akun.
+// Akun aktif = index 0-based, disimpan di bot_settings (vidara_active_account)
+// lalu dicerminkan ke state module lewat setActiveAccount(). TIDAK ada rotasi
+// otomatis: semua operasi memakai akun aktif, ganti hanya via menu admin
+// "👤 Akun Vidara" — supaya 1 judul (full episode) tidak terpecah antar akun.
+function splitAccountList(v) {
+  return String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+const VIDARA_USERNAMES = splitAccountList(readEnv('VIDARA_USERNAME'));
+const VIDARA_PASSWORD = readEnv('VIDARA_PASSWORD') || '';
+const VIDARA_KEY_LIST = (() => {
+  const raw = readEnv('VIDARA_API') || readEnv('VIDARA_API_KEY');
+  const list = splitAccountList(raw);
+  return list.length ? list : raw ? [raw] : [];
+})();
+// Back-compat: guard "config ada?" (`!!VIDARA_KEY`) tetap memakai key pertama.
+const VIDARA_KEY = VIDARA_KEY_LIST[0] || '';
+let ACTIVE_ACCOUNT = 0;
+
+function accountCount() {
+  return Math.max(1, VIDARA_KEY_LIST.length, VIDARA_USERNAMES.length);
+}
+function getActiveAccount() {
+  return ACTIVE_ACCOUNT;
+}
+function setActiveAccount(i) {
+  const n = Number(i);
+  ACTIVE_ACCOUNT = Number.isFinite(n) ? Math.max(0, Math.min(Math.trunc(n), accountCount() - 1)) : 0;
+}
+function apiKeyFor(i) {
+  const idx = Number(i);
+  if (Number.isFinite(idx) && VIDARA_KEY_LIST[idx]) return VIDARA_KEY_LIST[idx];
+  return VIDARA_KEY_LIST[0] || '';
+}
+function activeApiKey() {
+  return apiKeyFor(ACTIVE_ACCOUNT);
+}
+function usernameFor(i) {
+  const idx = Number(i);
+  if (Number.isFinite(idx) && VIDARA_USERNAMES[idx]) return VIDARA_USERNAMES[idx];
+  return VIDARA_USERNAMES[0] || '';
+}
+function activeUsername() {
+  return usernameFor(ACTIVE_ACCOUNT) || '';
+}
+function accountLabel(i) {
+  return usernameFor(i) || `Akun ${Number(i) + 1}`;
+}
 const VIDARA_DOMAIN = readEnv('VIDARA_DOMAIN') || 'vidara.so';
 const VIDARA_API_BASE = readEnv('VIDARA_API_BASE') || `https://api.${VIDARA_DOMAIN}/v1`;
 const VIDARA_UPLOAD_TIMEOUT_MS = Number(readEnv('VIDARA_UPLOAD_TIMEOUT_MS') || 0) || 600000;
 
 // ─── Vidara API ─────────────────────────────────────────────────────────────
 
-async function vidaraCall(endpoint, params = {}) {
-  const url = `${VIDARA_API_BASE}${endpoint}?api_key=${VIDARA_KEY}&${new URLSearchParams(params)}`;
+async function vidaraCall(endpoint, params = {}, opts = {}) {
+  const key = opts.apiKey || activeApiKey();
+  const url = `${VIDARA_API_BASE}${endpoint}?api_key=${key}&${new URLSearchParams(params)}`;
   const res = await axios.get(url, { timeout: 600000 });
   return res.data;
 }
@@ -143,9 +193,15 @@ async function videoInfo(filecode) {
 
 // Hapus file di server. WAJIB sukses dulu baru record DB dihapus (lihat
 // deleteVidaraUpload di db.js) — kalau dibalik, file yatim tak terlacak.
-async function deleteVideo(filecode) {
+// Multi-akun (11 Okt 2026): `accountIdx` = index akun PEMILIK record (kolom
+// vidara_uploads.account). File lama milik akun 1 tidak bisa dihapus dengan
+// API key akun 2 → delete harus memakai key akun pemilik, bukan akun aktif.
+async function deleteVideo(filecode, accountIdx = null) {
   if (!filecode) return false;
-  const data = await vidaraCall('/video/delete', { filecode });
+  const ownerKey = (accountIdx === null || accountIdx === undefined)
+    ? activeApiKey()
+    : apiKeyFor(accountIdx);
+  const data = await vidaraCall('/video/delete', { filecode }, { apiKey: ownerKey });
   return data?.result?.deleted === true || data?.status === 200;
 }
 
@@ -159,7 +215,7 @@ async function uploadFileRef(filePath, onProgress = null) {
   const server = await getUploadServer();
   if (!server) throw new Error('upload_server tidak didapat');
   return new Promise((resolve, reject) => {
-    const args = ['-sS', '-L', '-F', `api_key=${VIDARA_KEY}`, '-F', `file=@"${filePath}"`, server];
+    const args = ['-sS', '-L', '-F', `api_key=${activeApiKey()}`, '-F', `file=@"${filePath}"`, server];
     const child = execFile('curl', args, { maxBuffer: 32 * 1024 * 1024, timeout: VIDARA_UPLOAD_TIMEOUT_MS }, (err, stdout) => {
       if (err && !stdout) return reject(new Error(`Vidara curl error: ${err.message}`));
       const ref = extractUploadRef(stdout);
@@ -376,6 +432,10 @@ module.exports = {
   loadGlobal, saveGlobal, loadPerDrama, savePerDrama, sanitizeDir,
   VIDARA_KEY, VIDARA_DOMAIN, VIDARA_API_BASE,
   VIDARA_UPLOAD_TIMEOUT_MS,
+  // Multi-akun (11 Okt 2026)
+  VIDARA_USERNAMES, VIDARA_PASSWORD, VIDARA_KEY_LIST,
+  accountCount, getActiveAccount, setActiveAccount,
+  apiKeyFor, activeApiKey, usernameFor, activeUsername, accountLabel,
 };
 Object.defineProperty(module.exports, 'DOWNLOADS', { get: () => DOWNLOADS, enumerable: true });
 Object.defineProperty(module.exports, 'GLOBAL_TRACK', { get: () => GLOBAL_TRACK, enumerable: true });

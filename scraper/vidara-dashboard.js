@@ -56,8 +56,10 @@ async function dashFetch(path, opts = {}, cookies = {}) {
 // jatuh ke fallback flat, bukan error).
 async function login() {
   try {
-    const user = process.env.VIDARA_USERNAME;
-    const pass = process.env.VIDARA_PASSWORD;
+    // Akun mengikuti akun aktif (menu "👤 Akun Vidara") — username dipilih
+    // per index, password tunggal untuk semua akun (multi-username).
+    const user = Vdara.activeUsername() || process.env.VIDARA_USERNAME;
+    const pass = Vdara.VIDARA_PASSWORD || process.env.VIDARA_PASSWORD;
     if (!user || !pass) return null;
     const cookies = {};
     const page = await dashFetch('/login', {}, cookies);
@@ -140,6 +142,9 @@ async function getOrCreateSeriesFolder(judul) {
 }
 
 // Dipakai tes untuk memaksa login baru
-function resetSession() { session = null; }
+// Reset session login (dipanggil saat ganti akun aktif supaya login ulang
+// dengan akun baru) — folderCache ikut di-reset karena fld_id lama milik
+// akun sebelumnya tidak berlaku di akun baru.
+function resetSession() { session = null; folderCache.clear(); }
 
 module.exports = { getOrCreateSeriesFolder, createNestedFolder, login, resetSession, ROOT_FOLDER, DASHBOARD_BASE };

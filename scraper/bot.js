@@ -70,7 +70,7 @@ const kuronimeEpisodeMap = new Map(); // hash pendek → episodeUrl (anti-kadalu
 const kamenimeEpisodesCache = new Map(); // animeUrl → { eps, title, ts }
 const { getShareInfo, downloadShare, sanitize } = require('./providers/ucdrive');
 const { parseReelFrenUrl, getVideoUrlReelFren, getAllEpisodesReelFren } = require('./providers/reelfren');
-const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, listVidaraUploads, getVidaraActiveDomain, setVidaraActiveDomain, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
+const { pool, initDatabase, savePartFileId, getSetting, setSetting, saveLiveChatRoute, getLiveChatRoute, searchDrama, listPartsWithFile, getPartFileId, resolveDeeplink, upsertMedia, deletePart, deleteMedia, findMediaByName, listAllLibrary, getMediaBySlug, findMediaByPattern, findVidoyRecords, deleteVidoyRecord, saveVidaraUpload, listVidaraUploads, getVidaraActiveDomain, setVidaraActiveDomain, getVidaraActiveAccount, setVidaraActiveAccount, listRecentVidoyUploads, listVidoyUploads, setPartTelegramPointer, listPartTelegramPointers, listVidoyTelegramPointers, clearVidoyTelegramPointer, clearVidoyTelegramPointers } = require('./db');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -990,6 +990,16 @@ async function waitForFlareSolverr(maxRetries = 30) {
   setInterval(checkDiskSpace, 600000);
 
   await initDatabase();
+
+  // Multi-akun Vidara (11 Okt 2026): aktifkan akun terakhir yang dipilih via
+  // menu admin supaya upload/folder/link konsisten 1 akun sampai diganti manual.
+  try {
+    const _vidaraAcc = await getVidaraActiveAccount();
+    require('./vidara-uploader').setActiveAccount(_vidaraAcc);
+    logger.info({ vidaraActiveAccount: _vidaraAcc }, 'Vidara active account loaded');
+  } catch (e) {
+    logger.warn({ err: e.message }, 'Gagal load akun aktif Vidara (fallback akun 1)');
+  }
 
   process.on('SIGINT', async () => {
     logger.info('SIGINT received, shutting down...');
@@ -2095,12 +2105,18 @@ async function buildKamenimeEpisodePicker(eps, animeUrl, page = 0, titleOverride
   } catch (err) {
     logger.warn({ err: err.message }, 'kamenime picker done-state gagal, tampil tanpa centang');
   }
+  // hosted = sudah punya link host (Vidoy/Vidara) — dipakai buildPicker supaya
+  // tombol "Download Semua" tidak mati saat episode sudah terkirim TG tapi
+  // belum punya link host (backfill host masih bisa dikerjakan).
+  const hosted = new Set();
+  for (const [ep, st] of statusMap) if (st.link || st.vidara) hosted.add(ep);
   const total = eps.length;
   const { keyboard, meta } = buildPicker(eps, {
     urlId: cacheUrl(animeUrl),
     page,
     pageSize: SAM_PAGE_EP,
     done,
+    hosted,
     // PENTING: prefix WAJIB 'kam'. Default buildPicker adalah 'sam', dan itu
     // membuat tombol "Download Semua" + navigasi picker kamenime mengirim
     // sam_all:/sam_page: → dijalankan sebagai perintah SAMEHADAKU dengan URL
@@ -2149,12 +2165,17 @@ async function buildSamehadakuEpisodePicker(eps, animeUrl, page = 0) {
   } catch (err) {
     logger.warn({ err: err.message }, 'episode picker done-state gagal, tampil tanpa centang');
   }
+  // hosted = sudah punya link host (Vidoy/Vidara) — tombol "Download Semua"
+  // tetap hidup kalau masih ada episode tanpa link host (lihat samKeyboard).
+  const hosted = new Set();
+  for (const [ep, st] of statusMap) if (st.link || st.vidara) hosted.add(ep);
   const total = eps.length;
   const { keyboard, meta } = buildPicker(eps, {
     urlId: cacheUrl(animeUrl),
     page,
     pageSize: SAM_PAGE_EP,
     done,
+    hosted,
     mkEp: (e, pg = 0) => {
       const epId = hashUrl(e.url).slice(0, 8);
       samehadakuEpisodeMap.set(epId, e.url); // hash → url (anti-kadaluarsa)
@@ -2207,12 +2228,17 @@ async function buildKuronimeEpisodePicker(eps, animeUrl, page = 0) {
   } catch (err) {
     logger.warn({ err: err.message }, 'kuronime picker done-state gagal, tampil tanpa centang');
   }
+  // hosted = sudah punya link host (Vidoy/Vidara) — tombol "Download Semua"
+  // tetap hidup kalau masih ada episode tanpa link host (lihat samKeyboard).
+  const hosted = new Set();
+  for (const [ep, st] of statusMap) if (st.link || st.vidara) hosted.add(ep);
   const total = eps.length;
   const { keyboard, meta } = buildPicker(eps, {
     urlId: cacheUrl(animeUrl),
     page,
     pageSize: SAM_PAGE_EP,
     done,
+    hosted,
     prefix: 'kur',
     mkEp: (e, pg = 0) => {
       const epId = hashUrl(e.url).slice(0, 8);
@@ -5257,6 +5283,49 @@ bot.on('callback_query', safeHandler('callback')(async (query) => {
     return bot.sendMessage(
       chatId,
       `🌐 <b>Domain Vidara</b> (untuk embed link)\n\nSaat ini: ${cur}\n\nKirim domain baru, contoh:\n<code>vidara.to</code>\n<code>vidmatrixa.com</code>\n\nDomain akan dipakai untuk generate link embed: <code>https://&lt;domain&gt;/e/&lt;filecode&gt;</code>\n\nKetik <code>hapus</code> untuk reset ke default, atau /cancel untuk batal.`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  // ── Multi-akun Vidara (11 Okt 2026) ──────────────────────────────────────
+  // Pilih akun aktif secara manual. TIDAK ada rotasi otomatis: semua operasi
+  // (upload, folder nesting, link, delete) memakai akun aktif sampai diganti
+  // di sini — supaya 1 judul (full episode) selalu 1 akun.
+  if (act === 'vidara_account') {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+    const VdaraAcc = require('./vidara-uploader');
+    const curIdx = VdaraAcc.getActiveAccount();
+    const total = VdaraAcc.accountCount();
+    const rows = [];
+    for (let i = 0; i < total; i++) {
+      rows.push([BTN.btn(
+        `👤 Akun ${i + 1} (${VdaraAcc.accountLabel(i)})${i === curIdx ? ' ✅' : ''}`,
+        `act:vidara_acc:${i}`,
+        i === curIdx ? 'success' : undefined
+      )]);
+    }
+    await bot.answerCallbackQuery(query.id);
+    return bot.sendMessage(
+      chatId,
+      `👤 <b>Akun Vidara</b> (multi-username, password sama)\n\nAkun aktif: <b>Akun ${curIdx + 1} (${safeHtml(VdaraAcc.accountLabel(curIdx))})</b>\n\nUpload selalu memakai akun aktif — tanpa rotasi otomatis, supaya 1 judul (full episode) tetap 1 akun. Kalau limit harian habis, ganti akun di sini lalu jalankan batch lagi (episode yang sudah ada akan dilewati).\n\n<b>Pilih akun aktif:</b>`,
+      { parse_mode: 'HTML', reply_markup: BTN.kb(rows) }
+    );
+  }
+
+  if (act.startsWith('vidara_acc:')) {
+    if (!isAdmin(query.from.id)) return bot.answerCallbackQuery(query.id, { text: '⚠️ Hanya admin' });
+    const accIdx = Number(act.slice('vidara_acc:'.length)) || 0;
+    const VdaraAcc = require('./vidara-uploader');
+    VdaraAcc.setActiveAccount(accIdx);
+    await setVidaraActiveAccount(accIdx);
+    // Session dashboard + cache folder milik akun lama tidak berlaku di akun
+    // baru — reset supaya login ulang dengan username akun yang dipilih.
+    try { require('./vidara-dashboard').resetSession(); } catch {}
+    logger.info({ vidaraActiveAccount: accIdx, chatId }, 'Akun aktif Vidara diganti via menu');
+    await bot.answerCallbackQuery(query.id, { text: `✅ Akun aktif: Akun ${accIdx + 1}` });
+    return bot.sendMessage(
+      chatId,
+      `✅ <b>Akun aktif diganti</b>\nSekarang upload/folder/link Vidara memakai: <b>Akun ${accIdx + 1} (${safeHtml(VdaraAcc.accountLabel(accIdx))})</b>\n\n<i>Episode yang sudah ter-upload tidak berubah — hanya upload berikutnya yang memakai akun ini.</i>`,
       { parse_mode: 'HTML' }
     );
   }
