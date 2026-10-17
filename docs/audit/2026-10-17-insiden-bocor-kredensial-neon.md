@@ -42,16 +42,40 @@ Scan menyeluruh repo (HEAD + backup):
 ## Verification
 
 - `git ls-tree -r origin/main | grep -c '^fomo-drama.bak'` → **0**
-- Sisa jejak: commit `a69d94c8455…` di riwayat + branch `gitsafe-backup/main`
-  → butuh purge (`git filter-repo --path fomo-drama.bak-20261011 --invert-paths`
-  + force-push semua ref & tag) — menunggu persetujuan owner (force-push ke repo
-  publik mengubah seluruh SHA).
+
+## Tahap B — purge riwayat (17 Okt 2026, disetujui owner)
+
+Metode resmi `git-filter-repo` di **fresh clone** (`/tmp/opencode/prjs-purge`),
+bukan `--force` di repo kerja:
+
+```bash
+git clone https://github.com/remukgank/PRJS.git prjs-purge
+uvx --from git-filter-repo git-filter-repo \
+  --path fomo-drama.bak-20261011 --invert-paths
+git remote add origin https://github.com/remukgank/PRJS.git   # filter-repo menghapus origin
+git push --force origin main && git push --force origin --tags
+```
+
+Hasil:
+- 296 commit diparse; commit `a69d94c8455…` (satu-satunya yang memuat 157 file
+  backup) hilang → `HEAD` 294 commit
+- `git log --all -- fomo-drama.bak-20261011` → kosong di clone & remote
+- `git ls-remote origin | grep -c a69d94c` → **0** (tidak ada ref menuju commit lama)
+- Backup refs lokal: `/tmp/opencode/prjs-backup/pre-purge-20261017-0614.bundle` (2,2 MB)
+- **Perubahan SHA (konsekuensi force-push)**: `main` `496de8f…` → `1119303…`,
+  tag `v3.8.1` `fdc120d…` → `7f0f956…`. Tag yang lahir **sebelum** 17 Okt 04:23
+  tetap sama (`v3.6.10`, `v3.6.11`, `v3.7.0`, `v3.7.1`, `v3.8.0`) karena tidak
+ iku rewrite.
+- Branch `gitsafe-backup/main` ternyata **tidak ada** di remote (hanya ref lokal
+  stale) → tidak ada yang perlu di-push untuk branch itu.
+- Repo kerja disinkronkan: `git fetch origin && git reset --hard origin/main`
+  (untracked seperti `./fomo-drama`, `logs/` tidak tersentuh).
 
 ## Tindakan owner (WAJIB)
 
-1. Neon Console → reset password untuk **kedua endpoint** di atas.
-2. Update connection string di semua konsumennya (layanan/fomo-drama — bukan bot
-   PRJS).
-3. Password lama dianggap bocor: repo publik sejak 04:23 UTC, rotation adalah
-   satu-satunya fix yang menutup risiko; purge history hanya mengurangi jejak
-   (crawler/cache bisa sudah menyalin).
+1. Neon Console → **hapus project / endpoint** tersebut bila memang tidak dipakai
+   (dikonfirmasi: bot PRJS memakai host `helium`, bukan Neon; 0 koneksi lokal ke
+   `:5432`). Bila ternyata masih ada konsumen, **reset password** kedua endpoint.
+2. Kredensial lama tetap dianggap bocor: repo publik sejak 04:23 UTC — penghapusan
+   project/rotasi adalah penutup risiko; purge history (Tahap B) hanya mengurangi
+   jejak (crawler/cache bisa sudah menyalin sebelum ini).
